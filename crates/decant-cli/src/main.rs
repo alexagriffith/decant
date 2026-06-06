@@ -45,6 +45,16 @@ pub enum Commands {
     Show(commands::session::ShowArgs),
     /// Full-text search across all sessions.
     Search(commands::search::SearchArgs),
+    /// Usage & cost rollups (overall, or --by tool|model|project|day).
+    Stats(commands::stats::StatsArgs),
+    /// Tool usage (built-in vs MCP): `tool ls` / `tool stats`.
+    #[command(subcommand)]
+    Tool(commands::tool::ToolCmd),
+    /// MCP server usage: `mcp ls` / `mcp stats`.
+    #[command(subcommand)]
+    Mcp(commands::mcp::McpCmd),
+    /// Export a session (or --all) to Markdown or JSON.
+    Export(commands::export::ExportArgs),
 }
 
 impl Cli {
@@ -73,5 +83,9 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
         Commands::Ls(args) => commands::session::run_ls(cli, args),
         Commands::Show(args) => commands::session::run_show(cli, args),
         Commands::Search(args) => commands::search::run(cli, args),
+        Commands::Stats(args) => commands::stats::run(cli, args),
+        Commands::Tool(cmd) => commands::tool::run(cli, cmd),
+        Commands::Mcp(cmd) => commands::mcp::run(cli, cmd),
+        Commands::Export(args) => commands::export::run(cli, args),
     }
 }

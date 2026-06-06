@@ -105,3 +105,82 @@ fn search_finds_text() {
         .success()
         .stdout(predicate::str::contains("\"session_id\""));
 }
+
+#[test]
+fn stats_overall_and_by_tool() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, claude_dir, codex_dir) = write_fixture_tree(dir.path());
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).arg("sync")
+        .env("DECANT_CLAUDE_DIR", &claude_dir).env("DECANT_CODEX_DIR", &codex_dir)
+        .assert().success();
+
+    Command::cargo_bin("decant").unwrap()
+        .args(["--json", "--db"]).arg(&db).arg("stats")
+        .assert().success()
+        .stdout(predicate::str::contains("\"sessions\""));
+
+    Command::cargo_bin("decant").unwrap()
+        .args(["--json", "--db"]).arg(&db).args(["stats", "--by", "tool"])
+        .assert().success()
+        .stdout(predicate::str::contains("claude_code"));
+
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).args(["stats", "--by", "bogus"])
+        .assert().code(2);
+}
+
+#[test]
+fn tool_stats_lists_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, claude_dir, codex_dir) = write_fixture_tree(dir.path());
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).arg("sync")
+        .env("DECANT_CLAUDE_DIR", &claude_dir).env("DECANT_CODEX_DIR", &codex_dir)
+        .assert().success();
+
+    Command::cargo_bin("decant").unwrap()
+        .args(["--json", "--db"]).arg(&db).args(["tool", "stats"])
+        .assert().success()
+        .stdout(predicate::str::contains("Read"))
+        .stdout(predicate::str::contains("\"calls\""));
+}
+
+#[test]
+fn mcp_stats_runs_and_is_json_array() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, claude_dir, codex_dir) = write_fixture_tree(dir.path());
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).arg("sync")
+        .env("DECANT_CLAUDE_DIR", &claude_dir).env("DECANT_CODEX_DIR", &codex_dir)
+        .assert().success();
+
+    // Fixture has no MCP calls -> empty JSON array, still exit 0.
+    Command::cargo_bin("decant").unwrap()
+        .args(["--json", "--db"]).arg(&db).args(["mcp", "stats"])
+        .assert().success()
+        .stdout(predicate::str::contains("[]"));
+}
+
+#[test]
+fn export_session_to_markdown_stdout_and_all_to_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, claude_dir, codex_dir) = write_fixture_tree(dir.path());
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).arg("sync")
+        .env("DECANT_CLAUDE_DIR", &claude_dir).env("DECANT_CODEX_DIR", &codex_dir)
+        .assert().success();
+
+    // single session -> markdown to stdout
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).args(["export", "1"])
+        .assert().success()
+        .stdout(predicate::str::contains("# Fix the failing auth test"));
+
+    // --all -> files in a dir
+    let outdir = dir.path().join("export");
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).args(["export", "--all", "--out"]).arg(&outdir)
+        .assert().success();
+    assert!(outdir.join("1.md").exists());
+}
