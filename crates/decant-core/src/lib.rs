@@ -3,12 +3,14 @@
 pub mod config;
 pub mod cost;
 pub mod db;
+pub mod export;
 pub mod error;
 pub mod ingest;
 pub mod model;
 pub mod query;
 pub mod schema;
 pub mod sources;
+pub mod stats;
 pub mod tools;
 
 pub use error::{Error, Result};
