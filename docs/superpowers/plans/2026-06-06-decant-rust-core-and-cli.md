@@ -221,8 +221,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("t.db");
         let conn = open(&path).unwrap();
+        // Read-only check (no `= WAL`): this passes only if configure() set WAL.
         let mode: String = conn
-            .query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
             .unwrap();
         assert_eq!(mode.to_lowercase(), "wal");
     }
@@ -258,7 +259,7 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 ```
 
-Note: `WAL` is set inside the test via `PRAGMA journal_mode = WAL` (which returns the mode). `configure()` sets it for real connections too — add it there in Step 4.
+Note: the test reads `PRAGMA journal_mode` (read-only), so it fails until `configure()` actually sets WAL in Step 4. Setting WAL uses the `PRAGMA journal_mode = WAL` form (which returns the new mode).
 
 - [ ] **Step 3: Wire modules + run test to verify it fails**
 
@@ -347,11 +348,14 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         |r| r.get(0),
     )?;
     if current < 1 {
-        conn.execute_batch(SCHEMA_V1)?;
-        conn.execute(
+        // Atomic: apply schema + record version together; rolls back on any error.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(SCHEMA_V1)?;
+        tx.execute(
             "INSERT INTO schema_migrations(version, applied_at) VALUES (1, datetime('now'))",
             [],
         )?;
+        tx.commit()?;
     }
     Ok(())
 }
