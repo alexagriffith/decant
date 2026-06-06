@@ -5,9 +5,13 @@ use crate::Result;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 
-/// Insert (or replace) one parsed session inside an open transaction.
-/// Deletes any prior rows for the same (tool, source_session_id) first, so this
-/// is idempotent. FTS is maintained by triggers.
+/// Insert (or replace) one parsed session.
+///
+/// The caller MUST run this inside a transaction (e.g. `conn.unchecked_transaction()`
+/// or a per-file `Transaction`) so the delete-then-insert and all child writes are
+/// atomic — a mid-write failure must roll back the whole session, never leave partial
+/// rows. Deletes any prior rows for the same (tool, source_session_id) first, so
+/// re-ingest is idempotent. FTS is maintained by triggers.
 pub fn upsert_session(conn: &Connection, parsed: &ParsedSession, source_path: &str, mtime: i64, size: i64, hash: &str) -> Result<i64> {
     let s = &parsed.session;
 
@@ -125,7 +129,7 @@ pub fn upsert_session(conn: &Connection, parsed: &ParsedSession, source_path: &s
 }
 
 fn basename(path: &str) -> String {
-    path.rsplit('/').next().unwrap_or(path).to_string()
+    path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_string()
 }
 
 #[cfg(test)]
@@ -142,7 +146,10 @@ mod tests {
         let conn = db::open_in_memory().unwrap();
         schema::migrate(&conn).unwrap();
         let parsed = sources::claude::parse_session("sess-claude-1", &claude_fixture());
-        let sid = upsert_session(&conn, &parsed, "/x/sample.jsonl", 1, 2, "h").unwrap();
+        // upsert_session must run inside a transaction (atomic session write).
+        let tx = conn.unchecked_transaction().unwrap();
+        let sid = upsert_session(&tx, &parsed, "/x/sample.jsonl", 1, 2, "h").unwrap();
+        tx.commit().unwrap();
         assert!(sid > 0);
 
         let (msgs, blocks, calls, mcount, tin): (i64, i64, i64, i64, i64) = conn
