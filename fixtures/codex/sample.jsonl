@@ -1,0 +1,7 @@
+{"type":"session_meta","timestamp":"2026-05-02T09:00:00.000Z","payload":{"id":"sess-codex-1","cwd":"/Users/dev/proj","originator":"codex_cli_rs","cli_version":"0.116.0","source":"cli","model_provider":"openai"}}
+{"type":"turn_context","timestamp":"2026-05-02T09:00:01.000Z","payload":{"cwd":"/Users/dev/proj","model":"gpt-5.4","effort":"high","approval_policy":"on-request"}}
+{"type":"response_item","timestamp":"2026-05-02T09:00:02.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"List the open TODOs"}]}}
+{"type":"response_item","timestamp":"2026-05-02T09:00:05.000Z","payload":{"type":"function_call","name":"exec_command","call_id":"call_1","arguments":"{\"command\":\"rg TODO\"}"}}
+{"type":"response_item","timestamp":"2026-05-02T09:00:06.000Z","payload":{"type":"function_call_output","call_id":"call_1","output":"src/a.rs: // TODO refactor"}}
+{"type":"event_msg","timestamp":"2026-05-02T09:00:07.000Z","payload":{"type":"token_count","input_tokens":900,"output_tokens":150,"cached_input_tokens":400}}
+{"type":"response_item","timestamp":"2026-05-02T09:00:08.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Found one TODO in src/a.rs"}]}}
