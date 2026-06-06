@@ -1,6 +1,6 @@
 use crate::Cli;
 use clap::Args;
-use decant_core::{config::Config, db, query};
+use decant_core::{config::Config, db, query, schema};
 
 #[derive(Args, Debug)]
 pub struct SearchArgs {
@@ -14,6 +14,7 @@ pub struct SearchArgs {
 pub fn run(cli: &Cli, args: &SearchArgs) -> anyhow::Result<i32> {
     let config = Config::resolve(cli.db.clone(), None, None);
     let conn = db::open(&config.db_path)?;
+    schema::migrate(&conn)?;
     let hits = query::search(&conn, &args.query, args.limit)?;
     let out = cli.output();
     match out.format {

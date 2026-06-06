@@ -1,7 +1,7 @@
 use crate::Cli;
 use clap::{Args, Subcommand};
 use decant_core::query::ListFilter;
-use decant_core::{config::Config, db, query};
+use decant_core::{config::Config, db, query, schema};
 
 #[derive(Subcommand, Debug)]
 pub enum SessionCmd {
@@ -37,6 +37,7 @@ pub fn run(cli: &Cli, cmd: &SessionCmd) -> anyhow::Result<i32> {
 pub fn run_ls(cli: &Cli, args: &LsArgs) -> anyhow::Result<i32> {
     let config = Config::resolve(cli.db.clone(), None, None);
     let conn = db::open(&config.db_path)?;
+    schema::migrate(&conn)?;
     let filter = ListFilter { tool: args.tool.clone(), limit: args.limit };
     let sessions = query::list_sessions(&conn, &filter)?;
     let out = cli.output();
@@ -74,6 +75,7 @@ pub fn run_ls(cli: &Cli, args: &LsArgs) -> anyhow::Result<i32> {
 pub fn run_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<i32> {
     let config = Config::resolve(cli.db.clone(), None, None);
     let conn = db::open(&config.db_path)?;
+    schema::migrate(&conn)?;
     let detail = match query::get_session(&conn, args.id)? {
         Some(d) => d,
         None => {
