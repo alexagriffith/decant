@@ -1,9 +1,12 @@
+use crate::config::Config;
 use crate::cost::{default_pricing, estimate_cost};
 use crate::model::*;
+use crate::sources;
 use crate::tools::classify_tool;
 use crate::Result;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// Insert (or replace) one parsed session.
 ///
@@ -132,17 +135,13 @@ fn basename(path: &str) -> String {
     path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_string()
 }
 
-use crate::config::Config;
-use crate::sources;
-use std::collections::HashMap as Map;
-use std::path::{Path, PathBuf};
-
 #[derive(Debug, Default)]
 pub struct SyncReport {
     pub scanned: usize,
     pub ingested: usize,
     pub skipped: usize,
     pub issues: usize,
+    pub failed: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -177,8 +176,8 @@ fn collect(root: &Path, tool: Tool, archived: bool, want: impl Fn(&str) -> bool,
 }
 
 /// Load Codex session-index titles (id -> thread_name), if present.
-fn codex_titles(config: &Config) -> Map<String, String> {
-    let mut titles = Map::new();
+fn codex_titles(config: &Config) -> HashMap<String, String> {
+    let mut titles = HashMap::new();
     let path = config.codex_dir.join("session_index.jsonl");
     if let Ok(content) = std::fs::read_to_string(&path) {
         for line in content.lines() {
@@ -197,14 +196,16 @@ fn codex_titles(config: &Config) -> Map<String, String> {
 
 struct Prepared {
     file: SourceFile,
-    content: String,
+    line_count: i64,
     mtime: i64,
     size: i64,
     hash: String,
 }
 
 /// Full sync: discover, skip unchanged, parse in parallel, write each file in its
-/// own transaction. Idempotent.
+/// own transaction. Idempotent. Files that fail to read in the parallel phase are
+/// counted in `SyncReport.failed` (non-fatal). Returns `Err` on the first file that
+/// fails to write; files already committed in earlier iterations remain in the DB.
 pub fn sync(conn: &mut Connection, config: &Config) -> Result<SyncReport> {
     use rayon::prelude::*;
 
@@ -229,21 +230,24 @@ pub fn sync(conn: &mut Connection, config: &Config) -> Result<SyncReport> {
         }
     }
 
-    // Read + hash + parse in parallel.
-    let prepared: Vec<(Prepared, ParsedSession)> = to_read
+    // Read + hash + parse in parallel. `None` = a file we failed to read.
+    let results: Vec<Option<(Prepared, ParsedSession)>> = to_read
         .par_iter()
-        .filter_map(|f| {
+        .map(|f| {
             let content = std::fs::read_to_string(&f.path).ok()?;
             let meta = std::fs::metadata(&f.path).ok()?;
             let hash = blake3::hash(content.as_bytes()).to_hex().to_string();
+            let line_count = content.lines().count() as i64;
             let stem = f.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
             let parsed = match f.tool {
                 Tool::ClaudeCode => sources::claude::parse_session(&stem, &content),
                 Tool::Codex => sources::codex::parse_session(&stem, &content, &titles),
             };
-            Some((Prepared { file: f.clone(), content, mtime: mtime_secs(&meta), size: meta.len() as i64, hash }, parsed))
+            Some((Prepared { file: f.clone(), line_count, mtime: mtime_secs(&meta), size: meta.len() as i64, hash }, parsed))
         })
         .collect();
+    report.failed = results.iter().filter(|r| r.is_none()).count();
+    let prepared: Vec<(Prepared, ParsedSession)> = results.into_iter().flatten().collect();
 
     // Write each file in its own transaction (per-file atomicity: one bad file
     // rolls back only itself; SQLite is single-writer so writes are serialized).
@@ -251,7 +255,12 @@ pub fn sync(conn: &mut Connection, config: &Config) -> Result<SyncReport> {
         parsed.session.is_archived = prep.file.archived;
         let path_str = prep.file.path.to_string_lossy().to_string();
         let tx = conn.transaction()?;
+        // Release any FK reference from ingest_source -> session so upsert_session
+        // can safely DELETE the old session row without a constraint violation.
+        tx.execute("UPDATE ingest_source SET session_id = NULL WHERE path = ?1", params![path_str])?;
         let session_id = upsert_session(&tx, &parsed, &path_str, prep.mtime, prep.size, &prep.hash)?;
+        // Clear any prior issues for this path so re-ingest doesn't accumulate them.
+        tx.execute("DELETE FROM ingest_issue WHERE source_path = ?1", params![path_str])?;
         for issue in &parsed.issues {
             tx.execute(
                 "INSERT INTO ingest_issue(source_path, line_no, error, raw_line, created_at)
@@ -265,7 +274,7 @@ pub fn sync(conn: &mut Connection, config: &Config) -> Result<SyncReport> {
             "INSERT INTO ingest_source(path, tool, size, mtime, hash, session_id, line_count, status, last_ingested_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,datetime('now'))
              ON CONFLICT(path) DO UPDATE SET size=?3, mtime=?4, hash=?5, session_id=?6, line_count=?7, status=?8, last_ingested_at=datetime('now')",
-            params![path_str, prep.file.tool.as_str(), prep.size, prep.mtime, prep.hash, session_id, prep.content.lines().count() as i64, status],
+            params![path_str, prep.file.tool.as_str(), prep.size, prep.mtime, prep.hash, session_id, prep.line_count, status],
         )?;
         tx.commit()?;
         report.ingested += 1;
@@ -359,6 +368,8 @@ mod tests {
         let r1 = sync(&mut conn, &config).unwrap();
         assert_eq!(r1.ingested, 1);
         assert_eq!(r1.issues, 1);
+        let issues1: i64 = conn.query_row("SELECT COUNT(*) FROM ingest_issue", [], |r| r.get(0)).unwrap();
+        assert_eq!(issues1, 1);
 
         let sessions: i64 = conn.query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0)).unwrap();
         assert_eq!(sessions, 1);
@@ -369,5 +380,16 @@ mod tests {
         assert_eq!(r2.skipped, 1);
         let sessions2: i64 = conn.query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0)).unwrap();
         assert_eq!(sessions2, 1);
+
+        // Modify the file (different bad line) -> re-ingest; issues must NOT accumulate.
+        let mut claude3 = claude_fixture();
+        claude3.push_str("\nanother bad line {\n");
+        write(&config.claude_dir.join("proj/sess.jsonl"), &claude3);
+        let r3 = sync(&mut conn, &config).unwrap();
+        assert_eq!(r3.ingested, 1, "changed file re-ingests");
+        let issues3: i64 = conn.query_row("SELECT COUNT(*) FROM ingest_issue", [], |r| r.get(0)).unwrap();
+        assert_eq!(issues3, 1, "issues must not accumulate across re-ingests");
+        let sessions3: i64 = conn.query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0)).unwrap();
+        assert_eq!(sessions3, 1);
     }
 }
