@@ -31,20 +31,21 @@ pub fn run(cli: &Cli, cmd: &McpCmd) -> anyhow::Result<i32> {
         _ => {
             if rows.is_empty() {
                 eprintln!("no MCP tool calls recorded");
+            } else {
+                use comfy_table::{presets::UTF8_FULL, Table};
+                let mut table = Table::new();
+                table.load_preset(UTF8_FULL);
+                table.set_header(["SERVER", "TOOLS", "CALLS", "ERRORS"]);
+                for r in &rows {
+                    table.add_row([
+                        r.mcp_server.clone(),
+                        r.tools.to_string(),
+                        r.calls.to_string(),
+                        r.errors.to_string(),
+                    ]);
+                }
+                println!("{table}");
             }
-            use comfy_table::{presets::UTF8_FULL, Table};
-            let mut table = Table::new();
-            table.load_preset(UTF8_FULL);
-            table.set_header(["SERVER", "TOOLS", "CALLS", "ERRORS"]);
-            for r in &rows {
-                table.add_row([
-                    r.mcp_server.clone(),
-                    r.tools.to_string(),
-                    r.calls.to_string(),
-                    r.errors.to_string(),
-                ]);
-            }
-            println!("{table}");
         }
     }
     Ok(0)

@@ -13,8 +13,12 @@ pub struct Price {
 /// Unknown models estimate to 0.0 (surfaced as "unknown" in the UI).
 pub fn default_pricing() -> HashMap<&'static str, Price> {
     let mut m = HashMap::new();
-    // Claude (Anthropic) — representative published rates.
-    m.insert("claude-opus-4-7", Price { input_per_mtok: 15.0, output_per_mtok: 75.0, cache_read_per_mtok: 1.5, cache_write_per_mtok: 18.75 });
+    // Claude (Anthropic) — representative published rates (estimates; edit the
+    // model_pricing table to refine). The opus family shares the opus-tier estimate.
+    let opus = Price { input_per_mtok: 15.0, output_per_mtok: 75.0, cache_read_per_mtok: 1.5, cache_write_per_mtok: 18.75 };
+    m.insert("claude-opus-4-8", opus);
+    m.insert("claude-opus-4-7", opus);
+    m.insert("claude-opus-4-6", opus);
     m.insert("claude-sonnet-4-6", Price { input_per_mtok: 3.0, output_per_mtok: 15.0, cache_read_per_mtok: 0.3, cache_write_per_mtok: 3.75 });
     m.insert("claude-haiku-4-5", Price { input_per_mtok: 1.0, output_per_mtok: 5.0, cache_read_per_mtok: 0.1, cache_write_per_mtok: 1.25 });
     m

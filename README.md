@@ -17,6 +17,10 @@ cargo build --release
 ./target/release/decant session ls           # list sessions (newest first)
 ./target/release/decant search "auth bug"    # full-text search across all sessions
 ./target/release/decant show 1               # read a full transcript
+./target/release/decant stats                # usage & cost rollup (--by tool|model|project|day)
+./target/release/decant mcp stats            # MCP server leaderboard (calls, tools, errors)
+./target/release/decant tool stats           # tool usage: built-in vs MCP, with error counts
+./target/release/decant export 1 > s1.md     # export a transcript (Markdown, or --json)
 ./target/release/decant session ls --json    # machine-readable output (stable DTO contract)
 ```
 

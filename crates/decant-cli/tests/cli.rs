@@ -184,3 +184,23 @@ fn export_session_to_markdown_stdout_and_all_to_dir() {
         .assert().success();
     assert!(outdir.join("1.md").exists());
 }
+
+#[test]
+fn export_error_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, claude_dir, codex_dir) = write_fixture_tree(dir.path());
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).arg("sync")
+        .env("DECANT_CLAUDE_DIR", &claude_dir).env("DECANT_CODEX_DIR", &codex_dir)
+        .assert().success();
+
+    // --all without --out -> usage error, exit 2
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).args(["export", "--all"]).assert().code(2);
+    // no id and no --all -> usage error, exit 2
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).arg("export").assert().code(2);
+    // unknown id -> not found, exit 1
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).args(["export", "99999"]).assert().code(1);
+}
