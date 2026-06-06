@@ -4,6 +4,7 @@ pub mod config;
 pub mod cost;
 pub mod db;
 pub mod error;
+pub mod ingest;
 pub mod model;
 pub mod schema;
 pub mod sources;
