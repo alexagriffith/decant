@@ -33,11 +33,12 @@ pub fn parse_session(fallback_id: &str, content: &str, titles: &HashMap<String, 
         match typ {
             "session_meta" => {
                 if let Some(s) = payload.get("id").and_then(Value::as_str) { id = s.to_string(); }
-                cwd = payload.get("cwd").and_then(Value::as_str).map(String::from);
-                cli_version = payload.get("cli_version").and_then(Value::as_str).map(String::from);
+                cwd = payload.get("cwd").and_then(Value::as_str).map(String::from).or(cwd);
+                cli_version = payload.get("cli_version").and_then(Value::as_str).map(String::from).or(cli_version);
                 raw_meta = payload.clone();
             }
             "turn_context" => {
+                // A session may switch models mid-run; keep the most recent turn's model.
                 if let Some(m) = payload.get("model").and_then(Value::as_str) { model = Some(m.to_string()); }
                 if cwd.is_none() { cwd = payload.get("cwd").and_then(Value::as_str).map(String::from); }
             }
