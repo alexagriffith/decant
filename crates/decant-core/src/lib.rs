@@ -4,6 +4,7 @@ pub mod db;
 pub mod error;
 pub mod model;
 pub mod schema;
+pub mod tools;
 
 pub use error::{Error, Result};
 
