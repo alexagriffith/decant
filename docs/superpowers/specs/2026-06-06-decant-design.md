@@ -34,6 +34,8 @@ clean, shared store.
   triggering a sync. Any such state is deferred to v2 and, if added, lives in separate
   `app_*` tables to preserve the schema seam.
 - No real-time/continuous watcher. Sync is on-demand and idempotent.
+- No telemetry / analytics phone-home. If ever added, it would be strictly opt-in and
+  documented (privacy by default).
 
 ## 2. Architecture
 
@@ -79,6 +81,15 @@ Two artifacts, with **the SQLite file as the contract** between them.
    `~/.local/share/decant/decant.db`, overridable via `DECANT_DB` / `--db` so both halves
    agree.
 
+6. **UI-agnostic core (macOS-app-ready).** All logic lives in `decant-core` behind a
+   clean, UI-agnostic API that returns typed, serde-serializable DTOs (no printing, no
+   CLI/IO policy in core). The CLI, the Phoenix app, and a **future native macOS app** are
+   all thin clients over two stable contracts: the `decant-core` API and the SQLite
+   schema. The CLI's `--json` output *is* those DTOs, so the machine-readable contract is
+   shared across surfaces. A macOS app can bind `decant-core` directly via **UniFFI**
+   (generated Swift bindings) or, like Phoenix, read the SQLite DB and shell out to
+   `decant` — no rewrite, single source of truth.
+
 ### Repo layout (polyglot monorepo)
 
 ```
@@ -91,6 +102,8 @@ decant/
 │   │       ├── db.rs           # rusqlite connection, WAL pragmas
 │   │       ├── schema.rs       # SQLite DDL + migrations (owns schema)
 │   │       ├── model.rs        # normalized domain types
+│   │       ├── api.rs          # UI-agnostic facade: ingest + query, returns serde DTOs
+│   │       ├── query.rs        # read queries powering list/search/stats/tools
 │   │       ├── ingest.rs       # discover, idempotent upsert, parallel parse
 │   │       ├── cost.rs         # model pricing → estimated cost
 │   │       ├── tools.rs        # tool/MCP classification + pairing
@@ -373,20 +386,98 @@ Parallel parse, serialized write.
 Flags: `--full` (force re-parse), `--dry-run`, `--verbose`, `--db`, `--claude-dir`,
 `--codex-dir`.
 
-## 7. CLI surface (`decant`)
+## 7. CLI design & surface (`decant`)
 
-Useful on its own, no web app required.
+The CLI is a first-class product surface — the goal is to be as useful and discoverable as
+the Docker CLI while following the Command Line Interface Guidelines (clig.dev) rather than
+reinventing conventions. Built on `clap` (derive API) for parsing, help, typo suggestions,
+and completion generation.
+
+### Design principles (grounded in research; see §14 References)
+
+- **Human-first, but fully scriptable.** Rich human output by default; everything that
+  produces data also speaks JSON. (clig.dev: human-first design; have machine-readable
+  output where it doesn't hurt usability.)
+- **Noun-verb management commands for discoverability + short aliases for speed.** This is
+  Docker's best idea (`docker container ls`). We adopt it but *avoid* Docker's documented
+  inconsistencies: the **same verbs apply across every noun** (`ls`, `show`, …), no
+  misleading Unix analogies, and flags are accepted in any position. (Docker management
+  commands; qntm "diatribe"; clig.dev: be consistent across subcommands, `noun verb`.)
+- **stdout = data, stderr = everything else** (logs, progress, prompts, errors), so pipes
+  stay clean. (clig.dev.)
+- **`-q/--quiet` prints bare IDs** for piping into other commands (Docker `-q`); `--json`
+  emits the core API DTOs verbatim.
+- **Help that teaches.** Every command: a verb-phrase description, **realistic
+  copy-pasteable examples** (no foo/bar), documented exit codes, common flags first.
+  (clig.dev "lead with examples"; Atlassian/Forge: examples are the most-read section.)
+- **Errors are actionable.** State what went wrong *and* how to fix it; "did you mean…?"
+  for typos (clap); suggest the next command; link to docs; never dump full usage on every
+  error. (clig.dev; Atlassian principle 5/7; Thoughtworks.)
+- **Color with intention; respect the terminal.** Honor `NO_COLOR` and `--no-color`;
+  detect TTY — no ANSI or spinners when output is piped/redirected. (clig.dev; NO_COLOR
+  convention.)
+- **Safe by default.** Confirm destructive actions (`db vacuum`, bulk overwrite) with a
+  prompt; `--yes` to skip; never *require* a prompt — honor `--no-input` for automation.
+  (clig.dev; Thoughtworks "prompt if you can, never mandate".)
+- **Semantic exit codes**, documented per command: `0` success, `2` usage error, **`3`
+  completed-with-ingest-issues** (a policy signal CI can branch on), other non-zero for
+  hard failures; SIGINT → `130` with the in-flight transaction rolled back. (clig.dev
+  compliance.)
+- **Config precedence: flags > env (`DECANT_*`) > config file > defaults**, with XDG paths
+  (`~/.config/decant/config.toml`). (clig.dev.)
+- A **clig.dev conformance test** walks the command tree in CI and fails the build if any
+  command lacks a description, examples, documented exit codes, or (for data commands)
+  `--json` — modeled on the published automated-compliance approach.
+
+### Command structure
+
+**Management commands** (discoverable, consistent verbs):
 
 | Command | Purpose |
 |---|---|
-| `sync` | ingest / refresh (above) |
-| `list` | sessions table; filter `--tool/--project/--since/--until/--model`, sortable |
-| `search <q>` | FTS across blocks → session + snippet hits; `--tool` filter |
-| `show <id>` | render a full transcript to terminal (`--format md\|json`) |
-| `stats` | usage/cost rollups; `--by tool\|project\|model\|day\|tool-kind\|server` |
-| `tools` | tool / MCP-server usage; `--server`, `--errors-only` |
-| `export <id\|--all>` | write Markdown/JSON (`--out`, `--format md\|json`) |
-| `db <migrate\|info\|vacuum>` | schema + maintenance |
+| `decant session ls` | list sessions; filter `--tool/--project/--since/--until/--model/--mcp`, sortable |
+| `decant session show <id>` | render a full transcript (`--format text\|md\|json`) |
+| `decant session export <id\|--all>` | write Markdown/JSON (`--out`, `--format md\|json`) |
+| `decant project ls` / `project show <path\|id>` | projects and their session rollups |
+| `decant mcp ls` / `mcp stats` | MCP servers used; calls, tools-per-server, error rates |
+| `decant tool ls` / `tool stats` | tool usage (builtin vs MCP); `--errors-only` |
+| `decant db migrate\|info\|vacuum` | schema + maintenance |
+| `decant completion bash\|zsh\|fish` | generate shell completions |
+
+**Top-level convenience verbs** (speed; aliases to the most common ops, Docker-style):
+`decant sync`, `decant search <q>`, `decant ls` (→ `session ls`), `decant show <id>`
+(→ `session show`), `decant export` (→ `session export`), `decant stats`
+(overview rollups; `--by tool\|project\|model\|day\|tool-kind\|server`).
+
+### Global flags (persistent on every command)
+
+`--db <path>` / `DECANT_DB`; `--json` (or `--format table\|json\|md`); `-q/--quiet`;
+`-v/--verbose` (repeatable, `-vv`); `--no-color` (+ `NO_COLOR`); `--no-input`; `--yes`;
+`-h/--help`; `-V/--version`.
+
+### Output & streams
+
+Human-readable table when stdout is a TTY; `--json` emits **the same serde DTOs the
+`decant-core` API returns** — one stable machine contract shared by scripts, Phoenix, and a
+future macOS app. `-q` prints bare IDs for piping. Data → stdout; progress/spinners/logs/
+errors → stderr; spinners and color only when the relevant stream is a TTY.
+
+### Additional requirements (validated by deep research)
+
+- **First-run & empty state.** `decant init` writes an XDG config interactively
+  (`decant init --no-input` for CI); when the DB is empty/missing, commands print a
+  friendly next step ("run `decant sync`") instead of a blank result.
+- **Pagination for large listings.** `session ls` / `search` support `--page-size` and
+  `--max-items` with deterministic ordering; page to `$PAGER` when stdout is a TTY, raw
+  when piped (`--no-paginate` to force off).
+- **Dynamic completion.** Completion resolves live values where useful (e.g. session IDs
+  for `session show <TAB>`), not just static subcommand names.
+- **One TTY check at startup** feeds every prompt/progress/color decision;
+  `DECANT_LOG_LEVEL` mirrors `-v/--verbose`; never rely on color alone — always pair it
+  with a text/symbol marker (accessibility).
+- **`decant version`** prints semver + commit + build metadata, with `--json` for tooling.
+- **`--dry-run`** on every mutating command (`sync`, `export`, `db vacuum`) reports planned
+  actions and a success/fail summary without touching state.
 
 ## 8. Phoenix LiveView web app
 
@@ -445,7 +536,9 @@ owns DDL); Ecto schemas map `project`/`session`/`message`/`block`/`tool_call` fo
 1. Rust core: `db` + `schema` + migrations.
 2. Claude & Codex parsers (TDD with fixtures) + `model`.
 3. Ingest pipeline (idempotent, parallel) + `cost` + `tools` classification/pairing.
-4. CLI commands (`sync`, `list`, `search`, `show`, `stats`, `tools`, `export`, `db`).
+4. CLI: clap command tree (noun-verb management commands + convenience aliases), global
+   flags, JSON/quiet output, errors + semantic exit codes, shell completions, and a
+   clig.dev conformance test.
 5. Phoenix scaffold + Ecto read models against a synced DB.
 6. LiveViews: sessions index → reader → search → analytics → tools → sync button.
 7. Tests, README, `justfile`.
@@ -458,3 +551,29 @@ owns DDL); Ecto schemas map `project`/`session`/`message`/`block`/`tool_call` fo
   nicety later; v1 groups by cwd.
 - Web-app-owned state (saved searches, settings), bulk export, and a Rustler-NIF
   integration path are v2 considerations.
+- A native **macOS app** is a planned future surface; v1 must not preclude it — hence the
+  UI-agnostic `decant-core` API and the UniFFI/Swift-bindings path. Man pages and a
+  Homebrew tap are also future work.
+
+## 14. References (CLI / DevX research)
+
+- Command Line Interface Guidelines — https://clig.dev (philosophy + concrete guidelines;
+  source: github.com/cli-guidelines/cli-guidelines).
+- "Applying clig.dev to a Go CLI — With an Automated Compliance Test" (dev.to) — the
+  conformance-test approach, semantic exit codes, `SilenceUsage`, NO_COLOR/TTY, "did you
+  mean?".
+- Docker CLI management commands & two-tier model (Wasil Zafar, "Docker CLI Mastery";
+  turbogeek.co.uk) — discoverable noun grouping + legacy shorthand for speed; `--format`.
+- qntm, "A subjective diatribe about Docker's poor use of analogies" and ionel's codelog,
+  "Dealing with Docker" — what to *avoid*: inconsistent verbs, misleading analogies,
+  inflexible flag parsing, poor per-option help.
+- Thoughtworks, "Elevate developer experiences with CLI design guidelines"; Atlassian,
+  "10 design principles for delightful CLIs"; Heroku CLI Style Guide — flags over args,
+  prompt-but-never-mandate, actionable errors, progress, suggest next step.
+- Microsoft, "Command-line design guidance for System.CommandLine" — naming/kebab-case,
+  noun areas vs verb actions, `--verbosity` levels, treat the CLI like a stable API.
+- Exa deep-research synthesis (exa-research-pro) additionally drew on: Lucas F. Costa,
+  "UX patterns for CLI tools"; Evil Martians, "CLI UX best practices: progress displays";
+  NO_COLOR (no-color.org); XDG Base Directory Specification; AWS CLI pagination guide;
+  NN/g error-message guidelines; Better CLI exit codes; Nix, Azure, and Fuchsia CLI
+  guidelines; Stripe / kubectl / gh CLI docs.
