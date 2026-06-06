@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive"] }
+clap_complete = "4.6.5"
 comfy-table = "7.2.2"
 decant-core = { path = "../decant-core" }
 serde = { version = "1.0.228", features = ["derive"] }

@@ -1,5 +1,8 @@
+pub mod completion;
+pub mod db;
 pub mod export;
 pub mod mcp;
+pub mod project;
 pub mod search;
 pub mod session;
 pub mod stats;

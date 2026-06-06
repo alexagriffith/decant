@@ -185,6 +185,42 @@ pub fn get_session(conn: &Connection, id: i64) -> Result<Option<SessionDetail>> 
     Ok(Some(SessionDetail { summary, messages }))
 }
 
+#[derive(Debug, Serialize)]
+pub struct ProjectSummary {
+    pub id: i64,
+    pub path: String,
+    pub name: Option<String>,
+    pub sessions: i64,
+    pub estimated_cost_usd: f64,
+    pub last_seen_at: Option<String>,
+}
+
+pub fn list_projects(conn: &Connection) -> Result<Vec<ProjectSummary>> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.path, p.name,
+                COUNT(s.id) AS sessions,
+                COALESCE(SUM(s.estimated_cost_usd), 0.0) AS cost,
+                MAX(s.ended_at) AS last_seen
+         FROM project p
+         LEFT JOIN session s ON s.project_id = p.id
+         GROUP BY p.id, p.path, p.name
+         ORDER BY sessions DESC",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(ProjectSummary {
+                id: r.get(0)?,
+                path: r.get(1)?,
+                name: r.get(2)?,
+                sessions: r.get(3)?,
+                estimated_cost_usd: r.get(4)?,
+                last_seen_at: r.get(5)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +250,14 @@ mod tests {
         let hits = search(&conn, "auth", 10).unwrap();
         assert!(!hits.is_empty());
         assert_eq!(hits[0].tool, "claude_code");
+    }
+
+    #[test]
+    fn list_projects_rolls_up() {
+        let conn = seeded();
+        let projects = list_projects(&conn).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].sessions, 1);
+        assert_eq!(projects[0].path, "/Users/dev/proj");
     }
 }

@@ -204,3 +204,51 @@ fn export_error_paths() {
     Command::cargo_bin("decant").unwrap()
         .args(["--db"]).arg(&db).args(["export", "99999"]).assert().code(1);
 }
+
+#[test]
+fn invalid_format_is_rejected() {
+    Command::cargo_bin("decant").unwrap()
+        .args(["--format", "bogus", "session", "ls"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn completion_bash_generates_script() {
+    Command::cargo_bin("decant").unwrap()
+        .args(["completion", "bash"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("decant"));
+}
+
+#[test]
+fn db_info_reports_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, claude_dir, codex_dir) = write_fixture_tree(dir.path());
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).arg("sync")
+        .env("DECANT_CLAUDE_DIR", &claude_dir).env("DECANT_CODEX_DIR", &codex_dir)
+        .assert().success();
+
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).args(["db", "info"])
+        .assert().success()
+        .stdout(predicate::str::contains("schema:     v1"))
+        .stdout(predicate::str::contains("sessions:   1"));
+}
+
+#[test]
+fn project_ls_shows_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, claude_dir, codex_dir) = write_fixture_tree(dir.path());
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).arg("sync")
+        .env("DECANT_CLAUDE_DIR", &claude_dir).env("DECANT_CODEX_DIR", &codex_dir)
+        .assert().success();
+
+    Command::cargo_bin("decant").unwrap()
+        .args(["--json", "--db"]).arg(&db).args(["project", "ls"])
+        .assert().success()
+        .stdout(predicate::str::contains("/Users/dev/proj"));
+}

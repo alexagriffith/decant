@@ -16,9 +16,9 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
-    /// Output format: table | json | md.
-    #[arg(long, global = true)]
-    pub format: Option<String>,
+    /// Output format.
+    #[arg(long, global = true, value_enum)]
+    pub format: Option<output::Format>,
 
     /// Suppress non-essential output (and print bare IDs where applicable).
     #[arg(short, long, global = true)]
@@ -55,11 +55,51 @@ pub enum Commands {
     Mcp(commands::mcp::McpCmd),
     /// Export a session (or --all) to Markdown or JSON.
     Export(commands::export::ExportArgs),
+    /// Generate a shell completion script (bash|zsh|fish|...).
+    Completion(commands::completion::CompletionArgs),
+    /// Database maintenance: `db info` / `db vacuum` / `db migrate`.
+    #[command(subcommand)]
+    Db(commands::db::DbCmd),
+    /// Projects (workspaces): `project ls`.
+    #[command(subcommand)]
+    Project(commands::project::ProjectCmd),
 }
 
 impl Cli {
     pub fn output(&self) -> output::OutputCtx {
-        output::OutputCtx::new(self.json, self.format.as_deref(), self.no_color, self.quiet)
+        output::OutputCtx::new(self.json, self.format, self.no_color, self.quiet)
+    }
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Every (sub)command must carry help text (`about`).
+    fn assert_has_help(cmd: &clap::Command) {
+        for sub in cmd.get_subcommands() {
+            assert!(
+                sub.get_about().is_some(),
+                "command `{}` is missing help/about text",
+                sub.get_name()
+            );
+            assert_has_help(sub);
+        }
+    }
+
+    #[test]
+    fn every_command_has_help() {
+        assert_has_help(&Cli::command());
+    }
+
+    #[test]
+    fn global_flags_present() {
+        let cmd = Cli::command();
+        let ids: Vec<String> = cmd.get_arguments().map(|a| a.get_id().as_str().to_string()).collect();
+        for flag in ["db", "json", "format", "quiet", "no_color"] {
+            assert!(ids.contains(&flag.to_string()), "missing global flag --{flag}");
+        }
     }
 }
 
@@ -87,5 +127,8 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
         Commands::Tool(cmd) => commands::tool::run(cli, cmd),
         Commands::Mcp(cmd) => commands::mcp::run(cli, cmd),
         Commands::Export(args) => commands::export::run(cli, args),
+        Commands::Completion(args) => commands::completion::run(cli, args),
+        Commands::Db(cmd) => commands::db::run(cli, cmd),
+        Commands::Project(cmd) => commands::project::run(cli, cmd),
     }
 }
