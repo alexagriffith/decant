@@ -1,0 +1,12 @@
+[package]
+name = "decant-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "decant"
+path = "src/main.rs"
+
+[dependencies]
+decant-core = { path = "../decant-core" }
