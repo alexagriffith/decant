@@ -1,6 +1,11 @@
 use crate::model::*;
 use serde_json::Value;
 
+const KNOWN_META: &[&str] = &[
+    "summary", "ai-title", "last-prompt", "permission-mode",
+    "attachment", "file-history-snapshot", "queue-operation",
+];
+
 /// Parse one Claude Code session file's contents (one session per file).
 pub fn parse_session(source_session_id: &str, content: &str) -> ParsedSession {
     let mut messages: Vec<NormalizedMessage> = Vec::new();
@@ -13,11 +18,6 @@ pub fn parse_session(source_session_id: &str, content: &str) -> ParsedSession {
     let mut title: Option<String> = None;
     let mut totals = TokenUsage::default();
     let mut seq: i64 = 0;
-
-    const KNOWN_META: &[&str] = &[
-        "summary", "ai-title", "last-prompt", "permission-mode",
-        "attachment", "file-history-snapshot", "queue-operation",
-    ];
 
     for (i, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
@@ -79,7 +79,7 @@ pub fn parse_session(source_session_id: &str, content: &str) -> ParsedSession {
         title,
         cwd,
         git_branch,
-        model: dominant_model(&messages),
+        model: primary_model(&messages),
         cli_version,
         started_at,
         ended_at,
@@ -99,8 +99,10 @@ fn first_text(msg: &NormalizedMessage) -> Option<String> {
     msg.blocks.iter().find(|b| b.block_type == BlockType::Text).and_then(|b| b.text.clone())
 }
 
-fn dominant_model(messages: &[NormalizedMessage]) -> Option<String> {
-    messages.iter().filter_map(|m| m.model.clone()).next()
+/// First non-null assistant model seen. Most sessions use a single model;
+/// true most-frequent selection is deferred to a later plan.
+fn primary_model(messages: &[NormalizedMessage]) -> Option<String> {
+    messages.iter().find_map(|m| m.model.clone())
 }
 
 fn simple_message(v: &Value, role: Role, seq: i64) -> NormalizedMessage {
@@ -120,21 +122,27 @@ fn simple_message(v: &Value, role: Role, seq: i64) -> NormalizedMessage {
 
 fn parse_user(v: &Value, seq: i64) -> NormalizedMessage {
     let mut blocks = Vec::new();
-    let mut role = Role::User;
+    let mut has_text = false;
+    let mut has_tool_result = false;
     let content = v.get("message").and_then(|m| m.get("content"));
     match content {
         Some(Value::String(s)) => {
+            has_text = true;
             blocks.push(text_block(0, s));
         }
         Some(Value::Array(items)) => {
             for (ord, item) in items.iter().enumerate() {
+                let ord = ord as i64;
                 let bt = item.get("type").and_then(Value::as_str).unwrap_or("");
                 match bt {
-                    "text" => blocks.push(text_block(ord as i64, item.get("text").and_then(Value::as_str).unwrap_or(""))),
+                    "text" => {
+                        has_text = true;
+                        blocks.push(text_block(ord, item.get("text").and_then(Value::as_str).unwrap_or("")));
+                    }
                     "tool_result" => {
-                        role = Role::Tool;
+                        has_tool_result = true;
                         blocks.push(NormalizedBlock {
-                            ordinal: ord as i64,
+                            ordinal: ord,
                             block_type: BlockType::ToolResult,
                             text: None,
                             tool_name: None,
@@ -144,12 +152,14 @@ fn parse_user(v: &Value, seq: i64) -> NormalizedMessage {
                             is_error: item.get("is_error").and_then(Value::as_bool),
                         });
                     }
-                    _ => blocks.push(other_block(ord as i64, item)),
+                    _ => blocks.push(other_block(ord, item)),
                 }
             }
         }
         _ => {}
     }
+    // Role is Tool only when the turn is purely tool results (no human text).
+    let role = if has_tool_result && !has_text { Role::Tool } else { Role::User };
     NormalizedMessage {
         seq,
         source_uuid: v.get("uuid").and_then(Value::as_str).map(String::from),
@@ -237,6 +247,14 @@ fn other_block(ordinal: i64, item: &Value) -> NormalizedBlock {
 fn stringify_content(c: Option<&Value>) -> String {
     match c {
         Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|it| match it.get("text").and_then(Value::as_str) {
+                Some(t) => t.to_string(),
+                None => it.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
         Some(other) => other.to_string(),
         None => String::new(),
     }
