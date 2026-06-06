@@ -19,6 +19,24 @@ pub struct SessionSummary {
     pub is_archived: bool,
 }
 
+fn map_session_summary(r: &rusqlite::Row) -> rusqlite::Result<SessionSummary> {
+    Ok(SessionSummary {
+        id: r.get(0)?,
+        tool: r.get(1)?,
+        source_session_id: r.get(2)?,
+        title: r.get(3)?,
+        project_path: r.get(4)?,
+        model: r.get(5)?,
+        started_at: r.get(6)?,
+        ended_at: r.get(7)?,
+        message_count: r.get(8)?,
+        total_input_tokens: r.get(9)?,
+        total_output_tokens: r.get(10)?,
+        estimated_cost_usd: r.get(11)?,
+        is_archived: r.get::<_, i64>(12)? != 0,
+    })
+}
+
 #[derive(Debug, Default)]
 pub struct ListFilter {
     pub tool: Option<String>,
@@ -39,27 +57,10 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
     sql.push_str(&limit.to_string());
 
     let mut stmt = conn.prepare(&sql)?;
-    let map = |r: &rusqlite::Row| {
-        Ok(SessionSummary {
-            id: r.get(0)?,
-            tool: r.get(1)?,
-            source_session_id: r.get(2)?,
-            title: r.get(3)?,
-            project_path: r.get(4)?,
-            model: r.get(5)?,
-            started_at: r.get(6)?,
-            ended_at: r.get(7)?,
-            message_count: r.get(8)?,
-            total_input_tokens: r.get(9)?,
-            total_output_tokens: r.get(10)?,
-            estimated_cost_usd: r.get(11)?,
-            is_archived: r.get::<_, i64>(12)? != 0,
-        })
-    };
     let rows = if let Some(tool) = &filter.tool {
-        stmt.query_map(params![tool], map)?.collect::<std::result::Result<Vec<_>, _>>()?
+        stmt.query_map(params![tool], map_session_summary)?.collect::<std::result::Result<Vec<_>, _>>()?
     } else {
-        stmt.query_map([], map)?.collect::<std::result::Result<Vec<_>, _>>()?
+        stmt.query_map([], map_session_summary)?.collect::<std::result::Result<Vec<_>, _>>()?
     };
     Ok(rows)
 }
@@ -125,46 +126,61 @@ pub struct SessionDetail {
 }
 
 pub fn get_session(conn: &Connection, id: i64) -> Result<Option<SessionDetail>> {
-    let summaries = {
+    let summary = {
         let mut stmt = conn.prepare(
             "SELECT s.id, s.tool, s.source_session_id, s.title, p.path, s.model, s.started_at, s.ended_at,
                     s.message_count, s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd, s.is_archived
              FROM session s LEFT JOIN project p ON p.id = s.project_id WHERE s.id = ?1",
         )?;
-        let rows = stmt.query_map(params![id], |r| {
-            Ok(SessionSummary {
-                id: r.get(0)?, tool: r.get(1)?, source_session_id: r.get(2)?, title: r.get(3)?,
-                project_path: r.get(4)?, model: r.get(5)?, started_at: r.get(6)?, ended_at: r.get(7)?,
-                message_count: r.get(8)?, total_input_tokens: r.get(9)?, total_output_tokens: r.get(10)?,
-                estimated_cost_usd: r.get(11)?, is_archived: r.get::<_, i64>(12)? != 0,
-            })
+        let mut rows = stmt.query_map(params![id], map_session_summary)?;
+        match rows.next() {
+            Some(r) => r?,
+            None => return Ok(None),
+        }
+    };
+
+    // Single query: messages LEFT JOIN their blocks, ordered. Grouped in Rust.
+    let mut stmt = conn.prepare(
+        "SELECT m.id, m.role, m.timestamp, m.model,
+                b.type, b.text, b.tool_name, b.tool_input, b.tool_result
+         FROM message m
+         LEFT JOIN block b ON b.message_id = m.id
+         WHERE m.session_id = ?1
+         ORDER BY m.seq, b.ordinal",
+    )?;
+    let rows = stmt
+        .query_map(params![id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
+                r.get::<_, Option<String>>(6)?,
+                r.get::<_, Option<String>>(7)?,
+                r.get::<_, Option<String>>(8)?,
+            ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-        rows
-    };
-    let Some(summary) = summaries.into_iter().next() else { return Ok(None) };
 
-    let mut stmt = conn.prepare(
-        "SELECT m.id, m.role, m.timestamp, m.model FROM message m WHERE m.session_id = ?1 ORDER BY m.seq",
-    )?;
-    let msg_rows = stmt
-        .query_map(params![id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?)))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-
-    let mut messages = Vec::new();
-    for (mid, role, ts, model) in msg_rows {
-        let mut bstmt = conn.prepare(
-            "SELECT type, text, tool_name, tool_input, tool_result FROM block WHERE message_id = ?1 ORDER BY ordinal",
-        )?;
-        let blocks = bstmt
-            .query_map(params![mid], |r| {
-                Ok(BlockView {
-                    block_type: r.get(0)?, text: r.get(1)?, tool_name: r.get(2)?,
-                    tool_input: r.get(3)?, tool_result: r.get(4)?,
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        messages.push(MessageView { role: role.unwrap_or_default(), timestamp: ts, model, blocks });
+    let mut messages: Vec<MessageView> = Vec::new();
+    let mut current_mid: Option<i64> = None;
+    for (mid, role, ts, model, btype, text, tool_name, tool_input, tool_result) in rows {
+        if current_mid != Some(mid) {
+            current_mid = Some(mid);
+            messages.push(MessageView {
+                role: role.unwrap_or_else(|| "unknown".to_string()),
+                timestamp: ts,
+                model,
+                blocks: Vec::new(),
+            });
+        }
+        if let Some(block_type) = btype {
+            if let Some(last) = messages.last_mut() {
+                last.blocks.push(BlockView { block_type, text, tool_name, tool_input, tool_result });
+            }
+        }
     }
     Ok(Some(SessionDetail { summary, messages }))
 }
