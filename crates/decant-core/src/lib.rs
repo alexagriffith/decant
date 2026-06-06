@@ -1,5 +1,6 @@
 //! decant-core: parse, normalize, store, and query AI coding-agent sessions.
 
+pub mod cost;
 pub mod db;
 pub mod error;
 pub mod model;
