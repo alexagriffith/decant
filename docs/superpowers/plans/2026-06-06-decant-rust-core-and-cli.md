@@ -517,7 +517,7 @@ CREATE TABLE IF NOT EXISTS ingest_source (
   size INTEGER,
   mtime INTEGER,
   hash TEXT,
-  session_id INTEGER REFERENCES session(id),
+  session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
   line_count INTEGER,
   status TEXT,
   error TEXT,

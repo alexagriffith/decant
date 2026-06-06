@@ -392,4 +392,29 @@ mod tests {
         let sessions3: i64 = conn.query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0)).unwrap();
         assert_eq!(sessions3, 1);
     }
+
+    #[test]
+    fn sync_handles_duplicate_session_id_across_files() {
+        // Two files in different project dirs share the SAME stem -> same
+        // source_session_id. The second must REPLACE the first without an FK
+        // violation. Regression test for: ingest_source.session_id orphaned when
+        // a session row is deleted (fixed via ON DELETE SET NULL).
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join("claude/projects");
+        let codex_dir = dir.path().join("codex");
+        let fx = claude_fixture();
+        write(&claude_dir.join("projA/dup.jsonl"), &fx);
+        write(&claude_dir.join("projB/dup.jsonl"), &fx);
+
+        let config = Config { db_path: dir.path().join("d.db"), claude_dir, codex_dir };
+        let mut conn = db::open(&config.db_path).unwrap();
+        schema::migrate(&conn).unwrap();
+
+        // Must NOT return Err (previously failed with FOREIGN KEY constraint failed).
+        let r = sync(&mut conn, &config).unwrap();
+        assert_eq!(r.ingested, 2);
+        // Both files map to source_session_id "dup" (the stem) -> collapse to one session.
+        let sessions: i64 = conn.query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0)).unwrap();
+        assert_eq!(sessions, 1);
+    }
 }

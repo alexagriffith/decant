@@ -280,7 +280,7 @@ ingest_source(
   size INTEGER,
   mtime INTEGER,
   hash TEXT,
-  session_id INTEGER REFERENCES session(id),
+  session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,  -- avoid orphan when a session is re-ingested/replaced
   line_count INTEGER,
   status TEXT,                         -- ok | error | skipped
   error TEXT,
