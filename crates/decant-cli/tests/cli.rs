@@ -54,3 +54,21 @@ fn sync_then_reports_json() {
         .success()
         .stdout(predicate::str::contains("\"ingested\""));
 }
+
+#[test]
+fn ls_json_lists_synced_sessions() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, claude_dir, codex_dir) = write_fixture_tree(dir.path());
+
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).arg("sync")
+        .env("DECANT_CLAUDE_DIR", &claude_dir).env("DECANT_CODEX_DIR", &codex_dir)
+        .assert().success();
+
+    Command::cargo_bin("decant").unwrap()
+        .args(["--json", "--db"]).arg(&db)
+        .args(["session", "ls"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fix the failing auth test"));
+}
