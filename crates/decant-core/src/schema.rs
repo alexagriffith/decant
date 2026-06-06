@@ -17,11 +17,14 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         |r| r.get(0),
     )?;
     if current < 1 {
-        conn.execute_batch(SCHEMA_V1)?;
-        conn.execute(
+        // Atomic: apply schema + record version together; rolls back on any error.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(SCHEMA_V1)?;
+        tx.execute(
             "INSERT INTO schema_migrations(version, applied_at) VALUES (1, datetime('now'))",
             [],
         )?;
+        tx.commit()?;
     }
     Ok(())
 }
