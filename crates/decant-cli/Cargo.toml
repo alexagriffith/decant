@@ -9,4 +9,14 @@ name = "decant"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.6.1", features = ["derive"] }
+comfy-table = "7.2.2"
 decant-core = { path = "../decant-core" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
+tempfile = "3.27.0"
