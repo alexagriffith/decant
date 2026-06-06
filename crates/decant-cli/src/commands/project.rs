@@ -11,7 +11,8 @@ pub enum ProjectCmd {
 #[derive(Args, Debug)]
 pub struct ProjectArgs {}
 
-pub fn run(cli: &Cli, _cmd: &ProjectCmd) -> anyhow::Result<i32> {
+pub fn run(cli: &Cli, cmd: &ProjectCmd) -> anyhow::Result<i32> {
+    let ProjectCmd::Ls(_) = cmd; // exhaustive today; a new variant will force a compile error here
     let config = Config::resolve(cli.db.clone(), None, None);
     let conn = db::open(&config.db_path)?;
     schema::migrate(&conn)?;

@@ -22,6 +22,9 @@ cargo build --release
 ./target/release/decant tool stats           # tool usage: built-in vs MCP, with error counts
 ./target/release/decant export 1 > s1.md     # export a transcript (Markdown, or --json)
 ./target/release/decant session ls --json    # machine-readable output (stable DTO contract)
+./target/release/decant project ls           # projects by session count + cost
+./target/release/decant db info               # db path, size, schema version, row counts
+./target/release/decant completion zsh        # shell completion script (bash|zsh|fish)
 ```
 
 ## Configuration
