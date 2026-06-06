@@ -1,5 +1,6 @@
 use crate::Cli;
 use clap::Args;
+use decant_core::{config::Config, db, query};
 
 #[derive(Args, Debug)]
 pub struct SearchArgs {
@@ -10,6 +11,26 @@ pub struct SearchArgs {
     pub limit: i64,
 }
 
-pub fn run(_cli: &Cli, _args: &SearchArgs) -> anyhow::Result<i32> {
-    anyhow::bail!("search not implemented yet")
+pub fn run(cli: &Cli, args: &SearchArgs) -> anyhow::Result<i32> {
+    let config = Config::resolve(cli.db.clone(), None, None);
+    let conn = db::open(&config.db_path)?;
+    let hits = query::search(&conn, &args.query, args.limit)?;
+    let out = cli.output();
+    match out.format {
+        crate::output::Format::Json => crate::output::print_json(&hits)?,
+        _ => {
+            if hits.is_empty() {
+                eprintln!("no matches for {:?}", args.query);
+            }
+            for h in &hits {
+                println!(
+                    "[{}] {}  —  {}",
+                    h.session_id,
+                    h.session_title.clone().unwrap_or_default(),
+                    h.snippet
+                );
+            }
+        }
+    }
+    Ok(0)
 }

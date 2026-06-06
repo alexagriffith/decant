@@ -72,3 +72,36 @@ fn ls_json_lists_synced_sessions() {
         .success()
         .stdout(predicate::str::contains("Fix the failing auth test"));
 }
+
+#[test]
+fn show_renders_transcript() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, claude_dir, codex_dir) = write_fixture_tree(dir.path());
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).arg("sync")
+        .env("DECANT_CLAUDE_DIR", &claude_dir).env("DECANT_CODEX_DIR", &codex_dir)
+        .assert().success();
+
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).args(["show", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fix the failing auth test"))
+        .stdout(predicate::str::contains("Read"));
+}
+
+#[test]
+fn search_finds_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, claude_dir, codex_dir) = write_fixture_tree(dir.path());
+    Command::cargo_bin("decant").unwrap()
+        .args(["--db"]).arg(&db).arg("sync")
+        .env("DECANT_CLAUDE_DIR", &claude_dir).env("DECANT_CODEX_DIR", &codex_dir)
+        .assert().success();
+
+    Command::cargo_bin("decant").unwrap()
+        .args(["--json", "--db"]).arg(&db).args(["search", "auth"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"session_id\""));
+}

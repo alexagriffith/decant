@@ -71,6 +71,59 @@ pub fn run_ls(cli: &Cli, args: &LsArgs) -> anyhow::Result<i32> {
     Ok(0)
 }
 
-pub fn run_show(_cli: &Cli, _args: &ShowArgs) -> anyhow::Result<i32> {
-    anyhow::bail!("session show not implemented yet")
+pub fn run_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<i32> {
+    let config = Config::resolve(cli.db.clone(), None, None);
+    let conn = db::open(&config.db_path)?;
+    let detail = match query::get_session(&conn, args.id)? {
+        Some(d) => d,
+        None => {
+            eprintln!("error: no session with id {}", args.id);
+            return Ok(1);
+        }
+    };
+    let out = cli.output();
+    if matches!(out.format, crate::output::Format::Json) {
+        crate::output::print_json(&detail)?;
+        return Ok(0);
+    }
+
+    let s = &detail.summary;
+    println!("# {}", s.title.clone().unwrap_or_else(|| s.source_session_id.clone()));
+    println!(
+        "{} · {} · {} msgs · ${:.2}",
+        s.tool,
+        s.model.clone().unwrap_or_default(),
+        s.message_count,
+        s.estimated_cost_usd
+    );
+    println!();
+    for m in &detail.messages {
+        println!("## {}", m.role.to_uppercase());
+        for b in &m.blocks {
+            match b.block_type.as_str() {
+                "text" | "thinking" => {
+                    if let Some(t) = &b.text {
+                        if b.block_type == "thinking" {
+                            println!("_(thinking)_ {t}");
+                        } else {
+                            println!("{t}");
+                        }
+                    }
+                }
+                "tool_use" => {
+                    println!(
+                        "→ tool: {} {}",
+                        b.tool_name.clone().unwrap_or_default(),
+                        b.tool_input.clone().unwrap_or_default()
+                    );
+                }
+                "tool_result" => {
+                    println!("← result: {}", b.tool_result.clone().unwrap_or_default());
+                }
+                other => println!("[{other}]"),
+            }
+        }
+        println!();
+    }
+    Ok(0)
 }
