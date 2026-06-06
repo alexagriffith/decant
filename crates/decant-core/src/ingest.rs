@@ -51,7 +51,8 @@ pub fn upsert_session(conn: &Connection, parsed: &ParsedSession, source_path: &s
 
     let mut results: HashMap<String, i64> = HashMap::new();
     let mut result_errors: HashMap<String, Option<bool>> = HashMap::new();
-    let mut tool_use_blocks: Vec<(i64, NormalizedBlock)> = Vec::new();
+    // (message_id, call_block_id, message_timestamp, block)
+    let mut tool_use_blocks: Vec<(i64, i64, Option<String>, NormalizedBlock)> = Vec::new();
 
     for m in &s.messages {
         conn.execute(
@@ -82,7 +83,7 @@ pub fn upsert_session(conn: &Connection, parsed: &ParsedSession, source_path: &s
             let block_id = conn.last_insert_rowid();
             match b.block_type {
                 BlockType::ToolUse => {
-                    tool_use_blocks.push((block_id, b.clone()));
+                    tool_use_blocks.push((message_id, block_id, m.timestamp.clone(), b.clone()));
                 }
                 BlockType::ToolResult => {
                     if let Some(id) = &b.tool_use_id {
@@ -96,7 +97,7 @@ pub fn upsert_session(conn: &Connection, parsed: &ParsedSession, source_path: &s
     }
 
     // Build tool_call rows from tool_use blocks, pairing results by tool_use_id.
-    for (call_block_id, b) in &tool_use_blocks {
+    for (message_id, call_block_id, ts, b) in &tool_use_blocks {
         let name = b.tool_name.clone().unwrap_or_default();
         let (kind, server, base) = classify_tool(&name);
         let result_block_id = b.tool_use_id.as_ref().and_then(|id| results.get(id)).copied();
@@ -107,15 +108,15 @@ pub fn upsert_session(conn: &Connection, parsed: &ParsedSession, source_path: &s
             .copied()
             .flatten();
         conn.execute(
-            "INSERT INTO tool_call(session_id, call_block_id, result_block_id, tool_kind, tool_name,
+            "INSERT INTO tool_call(session_id, message_id, call_block_id, result_block_id, tool_kind, tool_name,
                                    mcp_server, tool_base_name, tool_use_id, input, is_error, ordinal, timestamp)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             params![
-                session_id, call_block_id, result_block_id, kind.as_str(), name,
+                session_id, message_id, call_block_id, result_block_id, kind.as_str(), name,
                 server, base, b.tool_use_id,
                 b.tool_input.as_ref().map(|v| v.to_string()),
                 is_error.map(|e| e as i64),
-                b.ordinal, s.started_at,
+                b.ordinal, ts,
             ],
         )?;
     }
@@ -166,6 +167,11 @@ mod tests {
             .unwrap();
         assert_eq!(kind, "builtin");
         assert_eq!(base, "Read");
+
+        let msg_id_nulls: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tool_call WHERE message_id IS NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(msg_id_nulls, 0, "tool_call.message_id must be populated");
 
         let fts: i64 = conn
             .query_row("SELECT COUNT(*) FROM block_fts WHERE block_fts MATCH 'auth'", [], |r| r.get(0))
