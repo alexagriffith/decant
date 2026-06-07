@@ -7,6 +7,9 @@ defmodule DecantWeb.Components.UI do
   use Phoenix.Component
 
   import DecantWeb.CoreComponents, only: [icon: 1]
+  import DecantWeb.Components.Icons
+
+  alias DecantWeb.Filters
 
   @doc """
   A bordered surface panel. Optional `title`, `subtitle`, and `actions` slots
@@ -113,7 +116,9 @@ defmodule DecantWeb.Components.UI do
     assigns = assign(assigns, tone: tone, label: label)
 
     ~H"""
-    <.badge tone={@tone}>{@label}</.badge>
+    <.badge tone={@tone}>
+      <.tool_icon :if={@tool in ["claude_code", "codex"]} tool={@tool} class="size-3.5" />{@label}
+    </.badge>
     """
   end
 
@@ -124,7 +129,9 @@ defmodule DecantWeb.Components.UI do
     assigns = assign(assigns, :tone, model_tone(assigns.model))
 
     ~H"""
-    <.badge :if={@model} tone={@tone} mono>{@model}</.badge>
+    <.badge :if={@model} tone={@tone} mono>
+      <.model_icon model={@model} class="size-3.5" />{@model}
+    </.badge>
     <span :if={!@model} class="text-xs text-faint">—</span>
     """
   end
@@ -194,6 +201,132 @@ defmodule DecantWeb.Components.UI do
     </div>
     """
   end
+
+  @doc "Date-range navigator: prev/next window, presets, current-range label."
+  attr :filters, :map, required: true
+  attr :bounds, :map, required: true
+  attr :path, :string, required: true
+
+  def date_range(assigns) do
+    assigns = assign(assigns, :active, Filters.active_preset(assigns.filters, assigns.bounds))
+
+    ~H"""
+    <div class="flex flex-wrap items-center gap-2">
+      <div class="flex items-center rounded-lg border border-line bg-surface p-0.5 text-sm">
+        <.link
+          :if={@filters.from}
+          patch={Filters.url(@path, Filters.shift(@filters, :prev))}
+          class="grid size-7 place-items-center rounded-md text-muted hover:bg-elevated hover:text-fg"
+          aria-label="Previous period"
+        >
+          <.icon name="hero-chevron-left" class="size-4" />
+        </.link>
+        <.link
+          :for={{key, _days} <- Filters.presets()}
+          patch={Filters.url(@path, Filters.apply_preset(@filters, key, @bounds))}
+          class={[
+            "rounded-md px-2.5 py-1 font-medium",
+            (@active == key && "bg-elevated text-fg") || "text-muted hover:text-fg"
+          ]}
+        >
+          {key}
+        </.link>
+        <.link
+          patch={Filters.url(@path, %{@filters | from: nil, to: nil})}
+          class={[
+            "rounded-md px-2.5 py-1 font-medium",
+            (@active == "all" && "bg-elevated text-fg") || "text-muted hover:text-fg"
+          ]}
+        >
+          All
+        </.link>
+        <.link
+          :if={@filters.to}
+          patch={Filters.url(@path, Filters.shift(@filters, :next))}
+          class="grid size-7 place-items-center rounded-md text-muted hover:bg-elevated hover:text-fg"
+          aria-label="Next period"
+        >
+          <.icon name="hero-chevron-right" class="size-4" />
+        </.link>
+      </div>
+      <span class="text-xs text-muted">{Filters.label(@filters)}</span>
+    </div>
+    """
+  end
+
+  @doc "Removable active-filter chips (drill-down state)."
+  attr :filters, :map, required: true
+  attr :path, :string, required: true
+
+  def filter_chips(assigns) do
+    assigns = assign(assigns, :chips, Filters.chips(assigns.filters))
+
+    ~H"""
+    <div :if={@chips != []} class="flex flex-wrap items-center gap-2">
+      <span class="text-xs text-faint">Filtered by</span>
+      <.link
+        :for={{key, label} <- @chips}
+        patch={Filters.url(@path, Map.put(@filters, key, nil))}
+        class="inline-flex items-center gap-1 rounded-md bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent hover:bg-accent/20"
+      >
+        {label} <.icon name="hero-x-mark" class="size-3" />
+      </.link>
+    </div>
+    """
+  end
+
+  @doc "A tiny inline-SVG sparkline (Tufte small multiple). `values` is a list of numbers."
+  attr :values, :list, default: []
+  attr :class, :any, default: "h-6 w-24"
+  attr :tone, :atom, default: :accent
+
+  def sparkline(assigns) do
+    assigns = assign(assigns, :points, spark_points(assigns.values))
+
+    ~H"""
+    <svg
+      :if={@points}
+      viewBox="0 0 100 24"
+      preserveAspectRatio="none"
+      class={[@class, spark_color(@tone)]}
+      aria-hidden="true"
+    >
+      <polyline
+        points={@points}
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+        vector-effect="non-scaling-stroke"
+      />
+    </svg>
+    <span :if={!@points} class="text-faint">—</span>
+    """
+  end
+
+  defp spark_points(values) do
+    vals = Enum.map(values || [], fn v -> (v || 0) * 1.0 end)
+
+    if length(vals) < 2 do
+      nil
+    else
+      max = Enum.max(vals)
+      max = if max <= 0, do: 1.0, else: max
+      step = 100 / (length(vals) - 1)
+
+      vals
+      |> Enum.with_index()
+      |> Enum.map(fn {v, i} ->
+        "#{Float.round(i * step, 2)},#{Float.round(23 - v / max * 22, 2)}"
+      end)
+      |> Enum.join(" ")
+    end
+  end
+
+  defp spark_color(:success), do: "text-success"
+  defp spark_color(:warning), do: "text-warning"
+  defp spark_color(:danger), do: "text-danger"
+  defp spark_color(:info), do: "text-info"
+  defp spark_color(_), do: "text-accent"
 
   ## tone helpers
 

@@ -35,7 +35,35 @@ defmodule Decant.ArchiveTest do
     end
 
     test "honors the limit argument" do
-      assert [%{id: 2}] = Archive.list_sessions(1)
+      assert [%{id: 2}] = Archive.list_sessions(%{}, 1)
+    end
+  end
+
+  describe "filters" do
+    test "list_sessions scopes by date range" do
+      assert [%{id: 1}] = Archive.list_sessions(%{from: ~D[2026-05-01], to: ~D[2026-05-01]})
+      assert [%{id: 2}] = Archive.list_sessions(%{from: ~D[2026-05-02], to: ~D[2026-05-02]})
+      assert length(Archive.list_sessions(%{from: ~D[2026-05-01], to: ~D[2026-05-02]})) == 2
+    end
+
+    test "list_sessions scopes by model and tool" do
+      assert [%{id: 1}] = Archive.list_sessions(%{model: "claude-opus-4-7"})
+      assert [%{id: 2}] = Archive.list_sessions(%{tool: "codex"})
+    end
+
+    test "totals scope to filters" do
+      assert Archive.totals(%{tool: "codex"}).sessions == 1
+      assert Archive.totals(%{from: ~D[2026-05-02], to: ~D[2026-05-02]}).sessions == 1
+    end
+
+    test "date_bounds returns the fixture span" do
+      assert %{min: "2026-05-01", max: "2026-05-02"} = Archive.date_bounds()
+    end
+
+    test "model_sparklines returns per-model day counts" do
+      sparks = Archive.model_sparklines(%{})
+      assert is_map(sparks)
+      assert Map.has_key?(sparks, "claude-opus-4-7")
     end
   end
 

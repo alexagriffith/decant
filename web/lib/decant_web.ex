@@ -85,6 +85,7 @@ defmodule DecantWeb do
       # Core UI components + design-system components + format helpers
       import DecantWeb.CoreComponents
       import DecantWeb.Components.UI
+      import DecantWeb.Components.Icons
       import DecantWeb.Format
 
       # Common modules used in templates
