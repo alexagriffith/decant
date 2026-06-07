@@ -7,12 +7,11 @@ defmodule DecantWeb.ConnCase do
   import other functionality to make it easier
   to build common data structures and query the data layer.
 
-  Finally, if the test case interacts with the database,
-  we enable the SQL sandbox, so changes done to the database
-  are reverted at the end of every test. If you are using
-  PostgreSQL, you can even run database tests asynchronously
-  by setting `use DecantWeb.ConnCase, async: true`, although
-  this option is not recommended for other databases.
+  The archive DB is an external, read-only SQLite fixture (its schema is owned
+  by the Rust `decant` CLI). This app only reads it, so there is no Ecto SQL
+  Sandbox to set up or tear down — tests share the same read-only connection
+  pool. Because every test only reads the fixture, cases may safely run with
+  `async: true`.
   """
 
   use ExUnit.CaseTemplate
@@ -31,8 +30,7 @@ defmodule DecantWeb.ConnCase do
     end
   end
 
-  setup tags do
-    Decant.DataCase.setup_sandbox(tags)
+  setup _tags do
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
 end

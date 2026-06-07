@@ -1,0 +1,24 @@
+defmodule DecantWeb.SessionLive.ShowTest do
+  use DecantWeb.ConnCase, async: true
+
+  import Phoenix.LiveViewTest
+
+  test "shows a session's summary and message/block content", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/sessions/1")
+
+    assert html =~ "Fix the failing auth test"
+
+    # Summary line metadata.
+    assert html =~ "claude_code"
+    assert html =~ "claude-opus-4-7"
+
+    # Block text from the conversation is rendered.
+    assert html =~ "auth"
+  end
+
+  test "redirects to the index for a non-existent session id", %{conn: conn} do
+    # Show.mount/3 handles a nil session by flashing an error and
+    # push_navigate-ing back to "/", which surfaces as a live_redirect.
+    assert {:error, {:live_redirect, %{to: "/"}}} = live(conn, ~p"/sessions/999999")
+  end
+end

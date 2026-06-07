@@ -1,14 +1,14 @@
 import Config
 
-# Configure your database
+# Configure the database.
 #
-# The MIX_TEST_PARTITION environment variable can be used
-# to provide built-in test partitioning in CI environment.
-# Run `mix help test` for more information.
+# The archive schema is owned and written by the external Rust `decant` CLI;
+# this app only reads it. Tests run against a committed read-only fixture DB,
+# so we use a normal pool (NOT Ecto.Adapters.SQL.Sandbox) — there are no
+# Ecto-managed migrations and no writes to roll back.
 config :decant, Decant.Repo,
-  database: Path.expand("../decant_test.db", __DIR__),
-  pool_size: 5,
-  pool: Ecto.Adapters.SQL.Sandbox
+  database: Path.expand("../test/fixtures/decant.db", __DIR__),
+  pool_size: 5
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.

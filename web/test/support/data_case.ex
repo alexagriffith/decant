@@ -6,12 +6,10 @@ defmodule Decant.DataCase do
   You may define functions here to be used as helpers in
   your tests.
 
-  Finally, if the test case interacts with the database,
-  we enable the SQL sandbox, so changes done to the database
-  are reverted at the end of every test. If you are using
-  PostgreSQL, you can even run database tests asynchronously
-  by setting `use Decant.DataCase, async: true`, although
-  this option is not recommended for other databases.
+  The archive DB is an external, read-only SQLite fixture (its schema is owned
+  by the Rust `decant` CLI). This app only reads it, so there is no Ecto SQL
+  Sandbox to set up or tear down. Because every test only reads the fixture,
+  cases may safely run with `async: true`.
   """
 
   use ExUnit.CaseTemplate
@@ -27,17 +25,8 @@ defmodule Decant.DataCase do
     end
   end
 
-  setup tags do
-    Decant.DataCase.setup_sandbox(tags)
+  setup _tags do
     :ok
-  end
-
-  @doc """
-  Sets up the sandbox based on the test tags.
-  """
-  def setup_sandbox(tags) do
-    pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Decant.Repo, shared: not tags[:async])
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
   end
 
   @doc """
