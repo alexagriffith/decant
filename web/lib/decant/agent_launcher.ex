@@ -79,7 +79,11 @@ defmodule Decant.AgentLauncher do
 
     File.write!(tmp, prompt)
     dir = System.get_env("DECANT_SKILLS_DIR") || System.user_home() || "."
-    cmd = "cd #{shell_quote(dir)} && #{bin} \"$(cat #{shell_quote(tmp)})\""
+    # Read the prompt from the temp file, then remove it in the same subshell so
+    # the file never lingers and the prompt text never passes through parsing.
+    cmd =
+      "cd #{shell_quote(dir)} && #{bin} \"$(cat #{shell_quote(tmp)}; rm -f #{shell_quote(tmp)})\""
+
     terminal = Decant.Settings.value(:terminal, "terminal")
 
     run("osascript", ["-e", terminal_script(terminal, cmd)])

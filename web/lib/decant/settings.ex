@@ -29,6 +29,7 @@ defmodule Decant.Settings do
     merged = Map.merge(load(), sanitize(attrs))
     File.mkdir_p!(Path.dirname(path()))
     File.write!(path(), Jason.encode!(stringify(merged), pretty: true))
+    _ = File.chmod(path(), 0o600)
     merged
   end
 
@@ -43,7 +44,7 @@ defmodule Decant.Settings do
       System.get_env("DECANT_CONFIG_DIR") ||
         Path.join(System.user_home() || ".", ".config/decant")
 
-    Path.join(dir, "settings.json")
+    Path.expand(Path.join(dir, "settings.json"))
   end
 
   ## inference

@@ -254,7 +254,7 @@ defmodule DecantWeb.SessionLive.Show do
     |> Enum.with_index()
     |> Enum.filter(fn {m, _i} -> m.role == "user" and has_text?(m) end)
     |> Enum.map(fn {m, i} ->
-      %{i: i, label: turn_label(m), tools: Enum.count(m.blocks, &(&1.type == "tool_use"))}
+      %{i: i, label: turn_label(m), tools: Enum.count(m.blocks || [], &(&1.type == "tool_use"))}
     end)
   end
 
@@ -263,17 +263,19 @@ defmodule DecantWeb.SessionLive.Show do
       turns: length(toc),
       replies: Enum.count(messages, &(&1.role == "assistant")),
       tool_calls:
-        Enum.sum(Enum.map(messages, fn m -> Enum.count(m.blocks, &(&1.type == "tool_use")) end)),
+        Enum.sum(
+          Enum.map(messages, fn m -> Enum.count(m.blocks || [], &(&1.type == "tool_use")) end)
+        ),
       input_tokens: session_stats.input_tokens,
       output_tokens: session_stats.output_tokens,
       duration: session_stats.duration_seconds
     }
   end
 
-  defp has_text?(m), do: Enum.any?(m.blocks, &(&1.type == "text" and trimmed?(&1.text)))
+  defp has_text?(m), do: Enum.any?(m.blocks || [], &(&1.type == "text" and trimmed?(&1.text)))
 
   defp turn_label(m) do
-    m.blocks
+    (m.blocks || [])
     |> Enum.find_value("", fn b -> if b.type == "text" and trimmed?(b.text), do: b.text end)
     |> String.trim()
     |> String.split("\n", parts: 2)
@@ -314,7 +316,7 @@ defmodule DecantWeb.SessionLive.Show do
   # Skip meta/empty messages (e.g. summary or system markers) that carry no
   # renderable text or tool blocks, so the transcript reads cleanly.
   defp renderable_message?(m) do
-    Enum.any?(m.blocks, fn b ->
+    Enum.any?(m.blocks || [], fn b ->
       case b.type do
         t when t in ["text", "thinking"] -> is_binary(b.text) and String.trim(b.text) != ""
         t when t in ["tool_use", "tool_result"] -> true

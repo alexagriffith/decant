@@ -14,13 +14,25 @@ defmodule DecantWeb.TableSort do
   `String.to_existing_atom/1`, so columns must be real field atoms.
   """
   def toggle(current, col_string) when is_binary(col_string) do
-    col = String.to_existing_atom(col_string)
+    case safe_atom(col_string) do
+      nil ->
+        current
 
-    case current do
-      {^col, :desc} -> {col, :asc}
-      {^col, :asc} -> {col, :desc}
-      _ -> {col, :desc}
+      col ->
+        case current do
+          {^col, :desc} -> {col, :asc}
+          {^col, :asc} -> {col, :desc}
+          _ -> {col, :desc}
+        end
     end
+  end
+
+  # Only real, already-known field atoms are valid columns; ignore anything
+  # else (e.g. a crafted sort event) rather than crashing the LiveView.
+  defp safe_atom(s) do
+    String.to_existing_atom(s)
+  rescue
+    ArgumentError -> nil
   end
 
   @doc "Sort a list of row maps by the `{column, direction}` tuple."

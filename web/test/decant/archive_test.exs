@@ -189,6 +189,16 @@ defmodule Decant.ArchiveTest do
     end
   end
 
+  describe "overview/0" do
+    test "returns an unfiltered snapshot with sessions, cost, and freshness" do
+      o = Archive.overview()
+
+      assert o.sessions == 2
+      assert o.cost > 0
+      assert o.last_activity == "2026-05-02"
+    end
+  end
+
   describe "tool_usage/0" do
     test "lists the built-in tools used in the fixture" do
       rows = Archive.tool_usage()

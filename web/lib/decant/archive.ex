@@ -295,14 +295,14 @@ defmodule Decant.Archive do
 
   @doc "Min/max session dates (YYYY-MM-DD) for the date-range picker. nil if empty."
   def date_bounds do
-    [[mn, mx]] =
-      Repo.query!(
-        "SELECT MIN(substr(started_at,1,10)), MAX(substr(started_at,1,10)) " <>
-          "FROM session WHERE started_at IS NOT NULL",
-        []
-      ).rows
-
-    %{min: mn, max: mx}
+    case Repo.query!(
+           "SELECT MIN(substr(started_at,1,10)), MAX(substr(started_at,1,10)) " <>
+             "FROM session WHERE started_at IS NOT NULL",
+           []
+         ).rows do
+      [[mn, mx]] -> %{min: mn, max: mx}
+      _ -> %{min: nil, max: nil}
+    end
   end
 
   @doc """
