@@ -146,6 +146,46 @@ defmodule DecantWeb.Components.UI do
     end
   end
 
+  @doc """
+  A clickable, sortable table header cell. Pushes a "sort" event carrying the
+  column and table name; shows a direction chevron when this column is active.
+  Pair with `DecantWeb.TableSort` in the LiveView.
+  """
+  attr :col, :string, required: true
+  attr :label, :string, required: true
+  attr :sort, :any, required: true, doc: "current {column_atom, :asc | :desc}"
+  attr :table, :string, default: ""
+  attr :align, :string, default: "left", values: ["left", "right"]
+
+  def sort_header(assigns) do
+    {scol, sdir} = assigns.sort
+    assigns = assign(assigns, active: to_string(scol) == assigns.col, dir: sdir)
+
+    ~H"""
+    <th class={["px-4 py-2.5", @align == "right" && "text-right"]}>
+      <button
+        type="button"
+        phx-click="sort"
+        phx-value-table={@table}
+        phx-value-col={@col}
+        class={[
+          "group inline-flex items-center gap-1 hover:text-fg",
+          @align == "right" && "flex-row-reverse"
+        ]}
+      >
+        <span>{@label}</span>
+        <.icon
+          name={(@active && @dir == :asc && "hero-chevron-up") || "hero-chevron-down"}
+          class={[
+            "size-3 transition-opacity",
+            (@active && "text-fg opacity-100") || "opacity-0 group-hover:opacity-40"
+          ]}
+        />
+      </button>
+    </th>
+    """
+  end
+
   @doc "A friendly empty / no-results state."
   attr :icon, :string, default: "hero-inbox"
   attr :title, :string, required: true

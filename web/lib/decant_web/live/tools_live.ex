@@ -3,10 +3,17 @@ defmodule DecantWeb.ToolsLive do
 
   alias Decant.Archive
   alias DecantWeb.Filters
+  alias DecantWeb.TableSort
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, assign(socket, bounds: Archive.date_bounds(), page_title: "Tools & MCP")}
+    {:ok,
+     assign(socket,
+       bounds: Archive.date_bounds(),
+       page_title: "Tools & MCP",
+       tools_sort: {:calls, :desc},
+       mcp_sort: {:calls, :desc}
+     )}
   end
 
   @impl true
@@ -16,9 +23,20 @@ defmodule DecantWeb.ToolsLive do
     {:noreply,
      assign(socket,
        filters: filters,
-       tools: Archive.tool_usage(filters, 100),
-       mcp: Archive.mcp_usage(filters, 100)
+       tools: Archive.tool_usage(filters, 100) |> TableSort.sort(socket.assigns.tools_sort),
+       mcp: Archive.mcp_usage(filters, 100) |> TableSort.sort(socket.assigns.mcp_sort)
      )}
+  end
+
+  @impl true
+  def handle_event("sort", %{"table" => "tools", "col" => col}, socket) do
+    sort = TableSort.toggle(socket.assigns.tools_sort, col)
+    {:noreply, assign(socket, tools_sort: sort, tools: TableSort.sort(socket.assigns.tools, sort))}
+  end
+
+  def handle_event("sort", %{"table" => "mcp", "col" => col}, socket) do
+    sort = TableSort.toggle(socket.assigns.mcp_sort, col)
+    {:noreply, assign(socket, mcp_sort: sort, mcp: TableSort.sort(socket.assigns.mcp, sort))}
   end
 
   @impl true
@@ -50,10 +68,10 @@ defmodule DecantWeb.ToolsLive do
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b border-line text-left text-xs font-medium tracking-wide text-muted uppercase">
-                  <th class="px-4 py-2.5">Server</th>
-                  <th class="px-4 py-2.5 text-right">Tools</th>
-                  <th class="px-4 py-2.5 text-right">Calls</th>
-                  <th class="px-4 py-2.5 text-right">Errors</th>
+                  <.sort_header col="server" label="Server" sort={@mcp_sort} table="mcp" />
+                  <.sort_header col="tools" label="Tools" sort={@mcp_sort} table="mcp" align="right" />
+                  <.sort_header col="calls" label="Calls" sort={@mcp_sort} table="mcp" align="right" />
+                  <.sort_header col="errors" label="Errors" sort={@mcp_sort} table="mcp" align="right" />
                 </tr>
               </thead>
               <tbody>
@@ -84,11 +102,11 @@ defmodule DecantWeb.ToolsLive do
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b border-line text-left text-xs font-medium tracking-wide text-muted uppercase">
-                  <th class="px-4 py-2.5">Tool</th>
-                  <th class="px-4 py-2.5">Kind</th>
-                  <th class="px-4 py-2.5">Server</th>
-                  <th class="px-4 py-2.5 text-right">Calls</th>
-                  <th class="px-4 py-2.5 text-right">Errors</th>
+                  <.sort_header col="tool_name" label="Tool" sort={@tools_sort} table="tools" />
+                  <.sort_header col="kind" label="Kind" sort={@tools_sort} table="tools" />
+                  <.sort_header col="server" label="Server" sort={@tools_sort} table="tools" />
+                  <.sort_header col="calls" label="Calls" sort={@tools_sort} table="tools" align="right" />
+                  <.sort_header col="errors" label="Errors" sort={@tools_sort} table="tools" align="right" />
                 </tr>
               </thead>
               <tbody>
@@ -108,7 +126,7 @@ defmodule DecantWeb.ToolsLive do
                     >
                       <.server_icon server={r.server} class="size-4 shrink-0" />{r.server}
                     </span>
-                    <span :if={!(r.server && r.server != "")} class="text-faint">—</span>
+                    <span :if={!(r.server && r.server != "")} class="text-faint">·</span>
                   </td>
                   <td class="px-4 py-2.5 text-right tabular-nums">{int(r.calls)}</td>
                   <td class="px-4 py-2.5 text-right tabular-nums">

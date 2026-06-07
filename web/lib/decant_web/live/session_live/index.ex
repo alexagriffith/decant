@@ -3,10 +3,17 @@ defmodule DecantWeb.SessionLive.Index do
 
   alias Decant.Archive
   alias DecantWeb.Filters
+  alias DecantWeb.TableSort
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, assign(socket, bounds: Archive.date_bounds(), page_title: "Sessions", q: "")}
+    {:ok,
+     assign(socket,
+       bounds: Archive.date_bounds(),
+       page_title: "Sessions",
+       q: "",
+       sort: {:started_at, :desc}
+     )}
   end
 
   @impl true
@@ -17,13 +24,26 @@ defmodule DecantWeb.SessionLive.Index do
     {:noreply,
      socket
      |> assign(filters: filters, totals: Archive.totals(filters), all: sessions, q: "")
-     |> stream(:sessions, sessions, reset: true)}
+     |> refresh()}
   end
 
   @impl true
   def handle_event("filter", %{"q" => q}, socket) do
-    {:noreply,
-     socket |> assign(q: q) |> stream(:sessions, filter_all(socket.assigns.all, q), reset: true)}
+    {:noreply, socket |> assign(q: q) |> refresh()}
+  end
+
+  def handle_event("sort", %{"col" => col}, socket) do
+    {:noreply, socket |> assign(sort: TableSort.toggle(socket.assigns.sort, col)) |> refresh()}
+  end
+
+  # Apply the text filter and the current sort, then re-stream the rows.
+  defp refresh(socket) do
+    rows =
+      socket.assigns.all
+      |> filter_all(socket.assigns.q)
+      |> TableSort.sort(socket.assigns.sort)
+
+    stream(socket, :sessions, rows, reset: true)
   end
 
   defp filter_all(sessions, q) do
@@ -92,12 +112,12 @@ defmodule DecantWeb.SessionLive.Index do
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b border-line text-left text-xs font-medium tracking-wide text-muted uppercase">
-                  <th class="px-4 py-2.5">Tool</th>
-                  <th class="px-4 py-2.5">Title</th>
-                  <th class="px-4 py-2.5">Model</th>
-                  <th class="px-4 py-2.5 text-right">Msgs</th>
-                  <th class="px-4 py-2.5 text-right">Cost</th>
-                  <th class="px-4 py-2.5 text-right">Started</th>
+                  <.sort_header col="tool" label="Tool" sort={@sort} />
+                  <.sort_header col="title" label="Title" sort={@sort} />
+                  <.sort_header col="model" label="Model" sort={@sort} />
+                  <.sort_header col="message_count" label="Msgs" sort={@sort} align="right" />
+                  <.sort_header col="cost" label="Cost" sort={@sort} align="right" />
+                  <.sort_header col="started_at" label="Started" sort={@sort} align="right" />
                 </tr>
               </thead>
               <tbody id="sessions" phx-update="stream">

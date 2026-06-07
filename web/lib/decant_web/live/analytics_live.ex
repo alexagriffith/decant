@@ -3,18 +3,31 @@ defmodule DecantWeb.AnalyticsLive do
 
   alias Decant.Archive
   alias DecantWeb.Filters
+  alias DecantWeb.TableSort
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, assign(socket, bounds: Archive.date_bounds(), page_title: "Analytics")}
+    {:ok,
+     assign(socket,
+       bounds: Archive.date_bounds(),
+       page_title: "Analytics",
+       model_sort: {:cost, :desc},
+       project_sort: {:cost, :desc}
+     )}
   end
 
   @impl true
   def handle_params(params, _uri, socket) do
     filters = Filters.parse(params)
 
-    by_model = Archive.by_dimension(:model, filters) |> Enum.sort_by(& &1.cost, :desc)
-    by_project = Archive.by_dimension(:project, filters) |> Enum.sort_by(& &1.cost, :desc)
+    by_model = Archive.by_dimension(:model, filters) |> TableSort.sort(socket.assigns.model_sort)
+
+    by_project =
+      Archive.by_dimension(:project, filters)
+      |> Enum.sort_by(&(&1.cost || 0), :desc)
+      |> Enum.take(12)
+      |> TableSort.sort(socket.assigns.project_sort)
+
     by_day = Archive.by_dimension(:day, filters) |> reject_blank() |> Enum.sort_by(& &1.key)
     days = Enum.map(by_day, & &1.key)
 
@@ -23,7 +36,7 @@ defmodule DecantWeb.AnalyticsLive do
        filters: filters,
        totals: Archive.totals(filters),
        by_model: by_model,
-       by_project: Enum.take(by_project, 12),
+       by_project: by_project,
        sparks: Archive.model_sparklines(filters),
        max_cost: max(1.0e-9, Enum.reduce(by_model, 0.0, fn r, a -> max(a, r.cost || 0) end)),
        sessions_spec: %{
@@ -40,6 +53,19 @@ defmodule DecantWeb.AnalyticsLive do
          smooth: true
        }
      )}
+  end
+
+  @impl true
+  def handle_event("sort", %{"table" => "model", "col" => col}, socket) do
+    sort = TableSort.toggle(socket.assigns.model_sort, col)
+    {:noreply, assign(socket, model_sort: sort, by_model: TableSort.sort(socket.assigns.by_model, sort))}
+  end
+
+  def handle_event("sort", %{"table" => "project", "col" => col}, socket) do
+    sort = TableSort.toggle(socket.assigns.project_sort, col)
+
+    {:noreply,
+     assign(socket, project_sort: sort, by_project: TableSort.sort(socket.assigns.by_project, sort))}
   end
 
   defp reject_blank(rows), do: Enum.reject(rows, &(&1.key in [nil, ""]))
@@ -130,12 +156,12 @@ defmodule DecantWeb.AnalyticsLive do
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b border-line text-left text-xs font-medium tracking-wide text-muted uppercase">
-                  <th class="px-4 py-2.5">Model</th>
+                  <.sort_header col="key" label="Model" sort={@model_sort} table="model" />
                   <th class="px-4 py-2.5">Trend</th>
-                  <th class="px-4 py-2.5 text-right">Sessions</th>
-                  <th class="px-4 py-2.5 text-right">In tok</th>
-                  <th class="px-4 py-2.5 text-right">Out tok</th>
-                  <th class="px-4 py-2.5 text-right">Cost</th>
+                  <.sort_header col="sessions" label="Sessions" sort={@model_sort} table="model" align="right" />
+                  <.sort_header col="input_tokens" label="In tok" sort={@model_sort} table="model" align="right" />
+                  <.sort_header col="output_tokens" label="Out tok" sort={@model_sort} table="model" align="right" />
+                  <.sort_header col="cost" label="Cost" sort={@model_sort} table="model" align="right" />
                   <th class="px-4 py-2.5">Share</th>
                 </tr>
               </thead>
@@ -175,9 +201,9 @@ defmodule DecantWeb.AnalyticsLive do
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b border-line text-left text-xs font-medium tracking-wide text-muted uppercase">
-                  <th class="px-4 py-2.5">Project</th>
-                  <th class="px-4 py-2.5 text-right">Sessions</th>
-                  <th class="px-4 py-2.5 text-right">Cost</th>
+                  <.sort_header col="key" label="Project" sort={@project_sort} table="project" />
+                  <.sort_header col="sessions" label="Sessions" sort={@project_sort} table="project" align="right" />
+                  <.sort_header col="cost" label="Cost" sort={@project_sort} table="project" align="right" />
                 </tr>
               </thead>
               <tbody>
