@@ -3,3 +3,6 @@
 *.db
 *.db-shm
 *.db-wal
+
+# Erlang/BEAM crash dumps (transient; never commit)
+erl_crash.dump

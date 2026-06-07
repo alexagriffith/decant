@@ -40,4 +40,3 @@ npm-debug.log
 *.db-*
 # ...except the tiny synthetic fixture the test suite reads.
 !/test/fixtures/decant.db
-
