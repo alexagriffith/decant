@@ -20,6 +20,8 @@ defmodule DecantWeb.Router do
     live "/", SessionLive.Index, :index
     live "/sessions/:id", SessionLive.Show, :show
     live "/search", SessionLive.Search, :search
+    live "/analytics", AnalyticsLive, :index
+    live "/tools", ToolsLive, :index
   end
 
   # Other scopes may use custom stacks.

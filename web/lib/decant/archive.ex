@@ -97,4 +97,80 @@ defmodule Decant.Archive do
       %{session_id: sid, title: title, tool: tool, snippet: snip}
     end)
   end
+
+  @doc "Whole-archive rollup."
+  def totals do
+    [[sessions, messages, tool_calls, intok, outtok, cost]] =
+      Repo.query!(
+        """
+        SELECT (SELECT COUNT(*) FROM session),
+               (SELECT COUNT(*) FROM message),
+               (SELECT COUNT(*) FROM tool_call),
+               (SELECT COALESCE(SUM(total_input_tokens),0) FROM session),
+               (SELECT COALESCE(SUM(total_output_tokens),0) FROM session),
+               (SELECT COALESCE(SUM(estimated_cost_usd),0.0) FROM session)
+        """,
+        []
+      ).rows
+
+    %{sessions: sessions, messages: messages, tool_calls: tool_calls,
+      input_tokens: intok, output_tokens: outtok, cost: cost}
+  end
+
+  @doc "Per-dimension rollup. `dim` is one of :tool, :model, :project, :day (fixed SQL, no user text)."
+  def by_dimension(dim) when dim in [:tool, :model, :project, :day] do
+    {expr, join} =
+      case dim do
+        :tool -> {"s.tool", ""}
+        :model -> {"COALESCE(s.model, '(unknown)')", ""}
+        :project -> {"COALESCE(p.path, '(none)')", "LEFT JOIN project p ON p.id = s.project_id"}
+        :day -> {"substr(s.started_at, 1, 10)", ""}
+      end
+
+    sql =
+      "SELECT #{expr} AS k, COUNT(*), COALESCE(SUM(s.total_input_tokens),0), " <>
+        "COALESCE(SUM(s.total_output_tokens),0), COALESCE(SUM(s.estimated_cost_usd),0.0) " <>
+        "FROM session s #{join} GROUP BY k ORDER BY 2 DESC"
+
+    Repo.query!(sql, []).rows
+    |> Enum.map(fn [k, sessions, intok, outtok, cost] ->
+      %{key: k || "", sessions: sessions, input_tokens: intok, output_tokens: outtok, cost: cost}
+    end)
+  end
+
+  @doc "Per-tool usage (built-in vs MCP), most-called first."
+  def tool_usage(limit \\ 50) do
+    Repo.query!(
+      """
+      SELECT tool_name, tool_kind, mcp_server, COUNT(*),
+             COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0)
+      FROM tool_call GROUP BY tool_name, tool_kind, mcp_server ORDER BY 4 DESC LIMIT ?
+      """,
+      [limit]
+    ).rows
+    |> Enum.map(fn [n, k, srv, calls, errs] ->
+      %{tool_name: n || "", kind: k || "", server: srv, calls: calls, errors: errs}
+    end)
+  end
+
+  @doc "Per-MCP-server usage, most-called first."
+  def mcp_usage(limit \\ 50) do
+    Repo.query!(
+      """
+      SELECT mcp_server, COUNT(DISTINCT tool_name), COUNT(*),
+             COALESCE(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END), 0)
+      FROM tool_call WHERE tool_kind = 'mcp' AND mcp_server IS NOT NULL
+      GROUP BY mcp_server ORDER BY 3 DESC LIMIT ?
+      """,
+      [limit]
+    ).rows
+    |> Enum.map(fn [srv, tools, calls, errs] ->
+      %{server: srv || "", tools: tools, calls: calls, errors: errs}
+    end)
+  end
+
+  @doc "Resolved path of the archive DB (from the Repo config), for shelling out to `decant`."
+  def db_path do
+    Application.get_env(:decant, Decant.Repo)[:database]
+  end
 end
