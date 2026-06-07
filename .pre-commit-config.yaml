@@ -1,0 +1,50 @@
+# Pre-commit hooks for decant. See https://pre-commit.com.
+#
+#   pipx install pre-commit   # or: brew install pre-commit
+#   pre-commit install        # install the git hook
+#   pre-commit run --all-files
+#
+# The same checks run in CI (.github/workflows/ci.yml).
+minimum_pre_commit_version: "3.5.0"
+
+# The committed test fixture is a binary SQLite DB; never rewrite it.
+exclude: '^web/test/fixtures/'
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      # Guardrails: keep secrets and large blobs out of history.
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: mix-format
+        name: mix format (web)
+        entry: scripts/precommit-elixir.sh
+        language: script
+        files: '^web/.*\.(ex|exs|heex)$'
+        pass_filenames: false
