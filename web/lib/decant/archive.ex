@@ -19,7 +19,7 @@ defmodule Decant.Archive do
 
     sql = """
     SELECT s.id, s.tool, s.title, s.model, s.message_count,
-           s.estimated_cost_usd, s.started_at, p.path
+           s.estimated_cost_usd, s.started_at, p.path, s.source_session_id
     FROM session s
     LEFT JOIN project p ON p.id = s.project_id
     WHERE #{where}
@@ -30,7 +30,7 @@ defmodule Decant.Archive do
     Repo.query!(sql, params ++ [limit]).rows |> Enum.map(&to_summary/1)
   end
 
-  defp to_summary([id, tool, title, model, mc, cost, started, path]) do
+  defp to_summary([id, tool, title, model, mc, cost, started, path, source_id]) do
     %{
       id: id,
       tool: tool,
@@ -39,14 +39,16 @@ defmodule Decant.Archive do
       message_count: mc || 0,
       cost: cost || 0.0,
       started_at: started,
-      project: path
+      project: path,
+      source_session_id: source_id
     }
   end
 
   @doc "Full session detail: summary + ordered messages, each with its blocks."
   def get_session(id) do
     summary_sql = """
-    SELECT s.id, s.tool, s.title, s.model, s.message_count, s.estimated_cost_usd, s.started_at, p.path
+    SELECT s.id, s.tool, s.title, s.model, s.message_count, s.estimated_cost_usd,
+           s.started_at, p.path, s.source_session_id
     FROM session s
     LEFT JOIN project p ON p.id = s.project_id
     WHERE s.id = ?

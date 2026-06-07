@@ -21,6 +21,7 @@ defmodule DecantWeb.Router do
     live "/sessions/:id", SessionLive.Show, :show
     live "/search", SessionLive.Search, :search
     live "/analytics", AnalyticsLive, :index
+    live "/insights", InsightsLive, :index
     live "/tools", ToolsLive, :index
   end
 
