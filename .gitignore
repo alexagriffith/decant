@@ -9,3 +9,6 @@ erl_crash.dump
 
 # Local agent/workflow orchestration scripts (machine-specific paths)
 .workflows/
+
+# Browser-automation artifacts
+.playwright-mcp/
