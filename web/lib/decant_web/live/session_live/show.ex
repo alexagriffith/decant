@@ -1,7 +1,9 @@
 defmodule DecantWeb.SessionLive.Show do
   use DecantWeb, :live_view
 
+  alias Decant.AgentLauncher
   alias Decant.Archive
+  alias Decant.Settings
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -10,7 +12,21 @@ defmodule DecantWeb.SessionLive.Show do
         {:ok, socket |> put_flash(:error, "Session not found") |> push_navigate(to: ~p"/")}
 
       detail ->
-        {:ok, assign(socket, detail: detail, page_title: detail.summary.title || "Session")}
+        {:ok,
+         assign(socket,
+           detail: detail,
+           page_title: detail.summary.title || "Session",
+           can_launch: AgentLauncher.can_launch?(),
+           ide_label: AgentLauncher.ide_label(Settings.value(:ide, "vscode"))
+         )}
+    end
+  end
+
+  @impl true
+  def handle_event("open_ide", _params, socket) do
+    case AgentLauncher.open_ide(socket.assigns.detail.summary.project || "") do
+      :ok -> {:noreply, put_flash(socket, :info, "Opening #{socket.assigns.ide_label}.")}
+      {:error, msg} -> {:noreply, put_flash(socket, :error, msg)}
     end
   end
 
@@ -48,6 +64,13 @@ defmodule DecantWeb.SessionLive.Show do
               <span class="truncate max-w-[18rem]">{@detail.summary.project}</span>
             </span>
             <span class="text-muted tabular-nums">{money(@detail.summary.cost)} est. cost</span>
+            <button
+              :if={@can_launch and @detail.summary.project}
+              phx-click="open_ide"
+              class="inline-flex items-center gap-1 rounded-md border border-line bg-surface px-2 py-0.5 text-xs text-muted transition-colors hover:border-line-strong hover:bg-elevated hover:text-fg"
+            >
+              <.icon name="hero-code-bracket" class="size-3.5" /> Open in {@ide_label}
+            </button>
           </div>
         </div>
       </div>

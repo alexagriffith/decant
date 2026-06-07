@@ -133,6 +133,15 @@ defmodule DecantWeb.Layouts do
             <span class="hidden sm:inline">{(@syncing && "Syncing…") || "Sync"}</span>
           </button>
 
+          <.link
+            navigate={~p"/settings"}
+            class="inline-flex items-center justify-center rounded-lg border border-line bg-surface p-2 text-muted transition-colors hover:border-line-strong hover:bg-elevated hover:text-fg"
+            aria-label="Settings"
+            title="Settings"
+          >
+            <.icon name="hero-cog-6-tooth" class="size-4" />
+          </.link>
+
           <.theme_toggle />
         </header>
 

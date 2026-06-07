@@ -23,6 +23,7 @@ defmodule DecantWeb.Router do
     live "/analytics", AnalyticsLive, :index
     live "/insights", InsightsLive, :index
     live "/tools", ToolsLive, :index
+    live "/settings", SettingsLive, :index
   end
 
   # Other scopes may use custom stacks.
