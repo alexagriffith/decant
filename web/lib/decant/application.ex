@@ -14,8 +14,8 @@ defmodule Decant.Application do
        repos: Application.fetch_env!(:decant, :ecto_repos), skip: skip_migrations?()},
       {DNSCluster, query: Application.get_env(:decant, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Decant.PubSub},
-      # Start a worker by calling: Decant.Worker.start_link(arg)
-      # {Decant.Worker, arg},
+      # Realtime: watch the source dirs and keep the archive fresh.
+      Decant.AutoSync,
       # Start to serve requests, typically the last entry
       DecantWeb.Endpoint
     ]

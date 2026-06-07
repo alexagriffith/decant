@@ -70,8 +70,8 @@ defmodule DecantWeb.Layouts do
 
         <div class="border-t border-line p-3">
           <div class="flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted">
-            <span class="size-1.5 shrink-0 rounded-full bg-success"></span>
-            <span class="truncate">local archive · read-only</span>
+            <span class="size-1.5 shrink-0 rounded-full bg-success motion-safe:animate-pulse"></span>
+            <span class="truncate">live · auto-syncing</span>
           </div>
         </div>
       </aside>

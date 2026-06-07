@@ -62,7 +62,8 @@ defmodule Decant.MixProject do
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
-      {:contex, "~> 0.5"}
+      {:contex, "~> 0.5"},
+      {:file_system, "~> 1.0"}
     ]
   end
 

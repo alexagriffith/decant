@@ -8,6 +8,9 @@ unless config_env() == :test do
       Path.expand("~/Library/Application Support/decant/decant.db")
 
   config :decant, Decant.Repo, database: decant_db, pool_size: 5
+
+  # Watch the source dirs and keep the archive fresh in realtime.
+  config :decant, auto_sync: true
 end
 
 # config/runtime.exs is executed for all environments, including
