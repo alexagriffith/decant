@@ -41,7 +41,7 @@ defmodule DecantWeb.SyncHook do
   defp on_info({:archive_updated, report}, socket) do
     socket =
       if socket.assigns[:syncing],
-        do: put_flash(socket, :info, "Synced — #{report}"),
+        do: put_flash(socket, :info, "Synced. #{report}"),
         else: socket
 
     {:halt, socket |> assign(:syncing, false) |> push_patch(to: socket.assigns.current_url)}

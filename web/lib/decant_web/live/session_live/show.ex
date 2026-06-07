@@ -73,11 +73,12 @@ defmodule DecantWeb.SessionLive.Show do
                   {row.label}
                 </span>
                 <span class="truncate text-fg">{row.cmd}</span>
-                <span data-copy-label class="ml-auto shrink-0 text-muted">Copy</span>
+                <span data-copy-icon class="hero-clipboard-document ml-auto size-4 shrink-0 text-muted">
+                </span>
               </button>
             </div>
             <p class="mt-3 text-xs text-muted">
-              Run in the session's directory — threads are tied to their cwd.
+              Run these in the session's working directory. Threads are tied to their cwd.
             </p>
           </.panel>
         </div>

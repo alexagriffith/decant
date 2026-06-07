@@ -110,7 +110,7 @@ defmodule DecantWeb.Components.UI do
       case assigns.tool do
         "claude_code" -> {:accent, "Claude"}
         "codex" -> {:info, "Codex"}
-        other -> {:neutral, other || "—"}
+        other -> {:neutral, other || "·"}
       end
 
     assigns = assign(assigns, tone: tone, label: label)
@@ -132,7 +132,7 @@ defmodule DecantWeb.Components.UI do
     <.badge :if={@model} tone={@tone} mono>
       <.model_icon model={@model} class="size-3.5" />{@model}
     </.badge>
-    <span :if={!@model} class="text-xs text-faint">—</span>
+    <span :if={!@model} class="text-xs text-faint">·</span>
     """
   end
 
@@ -202,7 +202,35 @@ defmodule DecantWeb.Components.UI do
     """
   end
 
-  @doc "Date-range navigator: prev/next window, presets, current-range label."
+  @doc """
+  Copy-to-clipboard icon button. The clipboard glyph swaps to a check on click
+  (handled by the `Copy` JS hook). Use this everywhere instead of a "Copy" word.
+  """
+  attr :id, :string, required: true
+  attr :text, :string, required: true
+  attr :title, :string, default: "Copy"
+  attr :class, :any, default: nil
+
+  def copy_button(assigns) do
+    ~H"""
+    <button
+      id={@id}
+      type="button"
+      phx-hook="Copy"
+      data-copy={@text}
+      aria-label={@title}
+      title={@title}
+      class={[
+        "inline-grid size-7 shrink-0 place-items-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-fg",
+        @class
+      ]}
+    >
+      <span data-copy-icon class="hero-clipboard-document size-4"></span>
+    </button>
+    """
+  end
+
+  @doc "Date-range navigator with previous and next window, presets, and a range label."
   attr :filters, :map, required: true
   attr :bounds, :map, required: true
   attr :path, :string, required: true
@@ -299,7 +327,7 @@ defmodule DecantWeb.Components.UI do
         vector-effect="non-scaling-stroke"
       />
     </svg>
-    <span :if={!@points} class="text-faint">—</span>
+    <span :if={!@points} class="text-faint">·</span>
     """
   end
 

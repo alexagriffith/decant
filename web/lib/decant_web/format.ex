@@ -31,11 +31,11 @@ defmodule DecantWeb.Format do
   def compact(nil), do: "0"
 
   @doc "First 10 chars of an ISO timestamp (the date)."
-  def date_only(nil), do: "—"
+  def date_only(nil), do: "·"
   def date_only(s) when is_binary(s), do: String.slice(s, 0, 10)
 
   @doc "Humanized age of an ISO8601 timestamp, e.g. `3d ago`."
-  def relative_time(nil), do: "—"
+  def relative_time(nil), do: "·"
 
   def relative_time(iso) when is_binary(iso) do
     case parse(iso) do

@@ -71,15 +71,15 @@ defmodule DecantWeb.Filters do
   def shift(filters, _dir), do: filters
 
   @doc "Human label for the active range."
-  def label(%{from: %Date{} = f, to: %Date{} = t}), do: "#{fmt(f)} – #{fmt(t)}"
+  def label(%{from: %Date{} = f, to: %Date{} = t}), do: "#{fmt(f)} to #{fmt(t)}"
   def label(_), do: "All time"
 
   @doc "Removable filter chips: list of {key, label}."
   def chips(filters) do
     [
-      filters[:model] && {:model, "model: #{filters[:model]}"},
-      filters[:tool] && {:tool, "tool: #{tool_label(filters[:tool])}"},
-      filters[:project] && {:project, "project: #{Path.basename(filters[:project])}"}
+      filters[:model] && {:model, "model · #{filters[:model]}"},
+      filters[:tool] && {:tool, "tool · #{tool_label(filters[:tool])}"},
+      filters[:project] && {:project, "project · #{Path.basename(filters[:project])}"}
     ]
     |> Enum.filter(& &1)
   end

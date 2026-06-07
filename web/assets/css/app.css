@@ -2,9 +2,17 @@
 @source "../css";
 @source "../js";
 @source "../../lib/decant_web";
+/* Core lib too: some hero-* icon names are chosen from archive data here
+   (e.g. Decant.Insights), and Tailwind only emits classes it can see. */
+@source "../../lib/decant";
 
 /* heroicons — "hero-#{ICON}" classes (installed via mix.exs). */
 @plugin "../vendor/heroicons";
+
+/* Safelist every heroicon we pick at runtime from data, so a chip is never
+   blank even if the literal name isn't visible to the content scanner. Keep
+   this in sync when a new data-driven icon is introduced. */
+@source inline("hero-{exclamation-triangle,cpu-chip,bolt,bolt-slash,currency-dollar,document-text,sparkles,command-line,beaker,light-bulb,arrow-top-right-on-square,clock,calendar-days,fire,shield-check,rocket-launch,clipboard-document,clipboard-document-check,check,check-circle,wrench-screwdriver,chart-bar,chart-bar-square,list-bullet,hashtag,puzzle-piece,book-open,squares-2x2,bell-alert,banknotes,arrow-trending-up,signal,map}");
 
 /* ──────────────────────────────────────────────────────────────────────────
    decant design system — a hand-built, dark-first "developer instrument".
