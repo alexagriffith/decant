@@ -1,4 +1,27 @@
-This is a web application written using the Phoenix web framework.
+This is a web application written using the Phoenix web framework. See the
+repo-root `AGENTS.md` for cross-cutting rules; this file adds web-specific
+guidance, and the Phoenix framework conventions below are authoritative for this
+app.
+
+## decant web app (read this first)
+
+- **Read-only.** This `:decant` app only *reads* the SQLite archive that the
+  Rust CLI owns and writes. Do not write to the DB and do not add Ecto
+  migrations for the archive tables — the schema lives in
+  `crates/decant-core/src/schema_v1.sql`. `Decant.Archive` issues raw SQL and
+  returns plain maps; follow that pattern rather than defining Ecto schemas.
+- **DB location.** `config/runtime.exs` reads `DECANT_DB` (default
+  `~/Library/Application Support/decant/decant.db`) and intentionally skips the
+  Repo config in `:test`. Tests are wired in `config/test.exs` to point
+  `Decant.Repo` at the committed fixture `test/fixtures/decant.db` (a tiny
+  synthetic archive — regenerate it with the CLI; never point tests at a real
+  archive).
+- **Commands** (from `web/`): `mix deps.get`, `mix test`,
+  `mix format --check-formatted`, `mix compile --warnings-as-errors`,
+  `DECANT_DB=/path/decant.db mix phx.server`.
+- Don't trigger the "Sync now" button in tests; it shells out to the `decant`
+  binary via `System.cmd`. The analytics chart (contex SVG) degrades to `nil`;
+  don't assert on the SVG.
 
 ## Project guidelines
 
