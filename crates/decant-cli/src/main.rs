@@ -71,38 +71,6 @@ impl Cli {
     }
 }
 
-#[cfg(test)]
-mod conformance {
-    use super::*;
-    use clap::CommandFactory;
-
-    /// Every (sub)command must carry help text (`about`).
-    fn assert_has_help(cmd: &clap::Command) {
-        for sub in cmd.get_subcommands() {
-            assert!(
-                sub.get_about().is_some(),
-                "command `{}` is missing help/about text",
-                sub.get_name()
-            );
-            assert_has_help(sub);
-        }
-    }
-
-    #[test]
-    fn every_command_has_help() {
-        assert_has_help(&Cli::command());
-    }
-
-    #[test]
-    fn global_flags_present() {
-        let cmd = Cli::command();
-        let ids: Vec<String> = cmd.get_arguments().map(|a| a.get_id().as_str().to_string()).collect();
-        for flag in ["db", "json", "format", "quiet", "no_color"] {
-            assert!(ids.contains(&flag.to_string()), "missing global flag --{flag}");
-        }
-    }
-}
-
 fn main() {
     let cli = Cli::parse();
     let code = match run(&cli) {
@@ -130,5 +98,43 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
         Commands::Completion(args) => commands::completion::run(cli, args),
         Commands::Db(cmd) => commands::db::run(cli, cmd),
         Commands::Project(cmd) => commands::project::run(cli, cmd),
+    }
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Every (sub)command must carry help text (`about`).
+    fn assert_has_help(cmd: &clap::Command) {
+        for sub in cmd.get_subcommands() {
+            assert!(
+                sub.get_about().is_some(),
+                "command `{}` is missing help/about text",
+                sub.get_name()
+            );
+            assert_has_help(sub);
+        }
+    }
+
+    #[test]
+    fn every_command_has_help() {
+        assert_has_help(&Cli::command());
+    }
+
+    #[test]
+    fn global_flags_present() {
+        let cmd = Cli::command();
+        let ids: Vec<String> = cmd
+            .get_arguments()
+            .map(|a| a.get_id().as_str().to_string())
+            .collect();
+        for flag in ["db", "json", "format", "quiet", "no_color"] {
+            assert!(
+                ids.contains(&flag.to_string()),
+                "missing global flag --{flag}"
+            );
+        }
     }
 }

@@ -4,7 +4,11 @@ use std::collections::HashMap;
 
 /// Parse one Codex rollout file (one session per file). `titles` maps session id ->
 /// thread name (from ~/.codex/session_index.jsonl); used as the preferred title.
-pub fn parse_session(fallback_id: &str, content: &str, titles: &HashMap<String, String>) -> ParsedSession {
+pub fn parse_session(
+    fallback_id: &str,
+    content: &str,
+    titles: &HashMap<String, String>,
+) -> ParsedSession {
     let mut issues = Vec::new();
     let mut id = fallback_id.to_string();
     let mut cwd: Option<String> = None;
@@ -19,36 +23,70 @@ pub fn parse_session(fallback_id: &str, content: &str, titles: &HashMap<String, 
     let mut seq: i64 = 0;
 
     for (i, line) in content.lines().enumerate() {
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
         let v: Value = match serde_json::from_str(line) {
             Ok(v) => v,
-            Err(e) => { issues.push(Issue { line_no: i + 1, error: e.to_string(), raw_line: line.to_string() }); continue; }
+            Err(e) => {
+                issues.push(Issue {
+                    line_no: i + 1,
+                    error: e.to_string(),
+                    raw_line: line.to_string(),
+                });
+                continue;
+            }
         };
         let typ = v.get("type").and_then(Value::as_str).unwrap_or("");
         if let Some(ts) = v.get("timestamp").and_then(Value::as_str) {
-            if started_at.is_none() { started_at = Some(ts.to_string()); }
+            if started_at.is_none() {
+                started_at = Some(ts.to_string());
+            }
             ended_at = Some(ts.to_string());
         }
         let payload = v.get("payload").cloned().unwrap_or(Value::Null);
         match typ {
             "session_meta" => {
-                if let Some(s) = payload.get("id").and_then(Value::as_str) { id = s.to_string(); }
-                cwd = payload.get("cwd").and_then(Value::as_str).map(String::from).or(cwd);
-                cli_version = payload.get("cli_version").and_then(Value::as_str).map(String::from).or(cli_version);
+                if let Some(s) = payload.get("id").and_then(Value::as_str) {
+                    id = s.to_string();
+                }
+                cwd = payload
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .map(String::from)
+                    .or(cwd);
+                cli_version = payload
+                    .get("cli_version")
+                    .and_then(Value::as_str)
+                    .map(String::from)
+                    .or(cli_version);
                 raw_meta = payload.clone();
             }
             "turn_context" => {
                 // A session may switch models mid-run; keep the most recent turn's model.
-                if let Some(m) = payload.get("model").and_then(Value::as_str) { model = Some(m.to_string()); }
-                if cwd.is_none() { cwd = payload.get("cwd").and_then(Value::as_str).map(String::from); }
+                if let Some(m) = payload.get("model").and_then(Value::as_str) {
+                    model = Some(m.to_string());
+                }
+                if cwd.is_none() {
+                    cwd = payload.get("cwd").and_then(Value::as_str).map(String::from);
+                }
             }
             "event_msg" if payload.get("type").and_then(Value::as_str) == Some("token_count") => {
-                let g = |k: &str| payload.get(k).and_then(Value::as_i64).unwrap_or(0);
-                // token_count is cumulative; keep the latest seen.
+                // Newer rollouts nest cumulative usage under info.total_token_usage;
+                // older ones placed the fields directly on payload. token_count is
+                // cumulative, so keep the latest seen. Codex's `input_tokens`
+                // INCLUDES `cached_input_tokens`, so subtract to avoid billing the
+                // cached portion at both the input and cache-read rates.
+                let src = payload
+                    .get("info")
+                    .and_then(|i| i.get("total_token_usage"))
+                    .unwrap_or(&payload);
+                let g = |k: &str| src.get(k).and_then(Value::as_i64).unwrap_or(0);
+                let cached = g("cached_input_tokens");
                 totals = TokenUsage {
-                    input: g("input_tokens"),
+                    input: (g("input_tokens") - cached).max(0),
                     output: g("output_tokens"),
-                    cache_read: g("cached_input_tokens"),
+                    cache_read: cached,
                     cache_creation: 0,
                 };
             }
@@ -62,7 +100,9 @@ pub fn parse_session(fallback_id: &str, content: &str, titles: &HashMap<String, 
         }
     }
 
-    if let Some(t) = titles.get(&id) { title = Some(t.clone()); }
+    if let Some(t) = titles.get(&id) {
+        title = Some(t.clone());
+    }
 
     let session = NormalizedSession {
         tool: Tool::Codex,
@@ -83,13 +123,28 @@ pub fn parse_session(fallback_id: &str, content: &str, titles: &HashMap<String, 
     ParsedSession { session, issues }
 }
 
-fn parse_item(line: &Value, payload: &Value, seq: i64, title: &mut Option<String>) -> Option<NormalizedMessage> {
+fn parse_item(
+    line: &Value,
+    payload: &Value,
+    seq: i64,
+    title: &mut Option<String>,
+) -> Option<NormalizedMessage> {
     let ptyp = payload.get("type").and_then(Value::as_str).unwrap_or("");
-    let ts = line.get("timestamp").and_then(Value::as_str).map(String::from);
+    let ts = line
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .map(String::from);
     let mk = |role: Role, block: NormalizedBlock| NormalizedMessage {
-        seq, source_uuid: None, parent_source_uuid: None, role,
-        model: None, stop_reason: None, timestamp: ts.clone(), usage: None,
-        raw: line.clone(), blocks: vec![block],
+        seq,
+        source_uuid: None,
+        parent_source_uuid: None,
+        role,
+        model: None,
+        stop_reason: None,
+        timestamp: ts.clone(),
+        usage: None,
+        raw: line.clone(),
+        blocks: vec![block],
     };
     match ptyp {
         "message" => {
@@ -102,49 +157,109 @@ fn parse_item(line: &Value, payload: &Value, seq: i64, title: &mut Option<String
             if role == Role::User && title.is_none() && !text.is_empty() {
                 *title = Some(crate::tools::preview(text.trim(), 120));
             }
-            Some(mk(role, NormalizedBlock {
-                ordinal: 0, block_type: BlockType::Text, text: Some(text),
-                tool_name: None, tool_use_id: None, tool_input: None, tool_result: None, is_error: None,
-            }))
+            Some(mk(
+                role,
+                NormalizedBlock {
+                    ordinal: 0,
+                    block_type: BlockType::Text,
+                    text: Some(text),
+                    tool_name: None,
+                    tool_use_id: None,
+                    tool_input: None,
+                    tool_result: None,
+                    is_error: None,
+                },
+            ))
         }
         "reasoning" => {
             let text = collect_text(payload.get("summary")).trim().to_string();
-            let text = if text.is_empty() { collect_text(payload.get("content")) } else { text };
-            Some(mk(Role::Assistant, NormalizedBlock {
-                ordinal: 0, block_type: BlockType::Thinking, text: Some(text),
-                tool_name: None, tool_use_id: None, tool_input: None, tool_result: None, is_error: None,
-            }))
+            let text = if text.is_empty() {
+                collect_text(payload.get("content"))
+            } else {
+                text
+            };
+            Some(mk(
+                Role::Assistant,
+                NormalizedBlock {
+                    ordinal: 0,
+                    block_type: BlockType::Thinking,
+                    text: Some(text),
+                    tool_name: None,
+                    tool_use_id: None,
+                    tool_input: None,
+                    tool_result: None,
+                    is_error: None,
+                },
+            ))
         }
         "function_call" | "custom_tool_call" | "tool_search_call" | "mcp_tool_call" => {
-            let name = payload.get("name").and_then(Value::as_str).map(String::from);
-            let args = payload.get("arguments").cloned()
+            let name = payload
+                .get("name")
+                .and_then(Value::as_str)
+                .map(String::from);
+            let args = payload
+                .get("arguments")
+                .cloned()
                 .or_else(|| payload.get("input").cloned());
-            Some(mk(Role::Assistant, NormalizedBlock {
-                ordinal: 0, block_type: BlockType::ToolUse, text: None,
-                tool_name: name,
-                tool_use_id: payload.get("call_id").and_then(Value::as_str).map(String::from),
-                tool_input: args, tool_result: None, is_error: None,
-            }))
+            Some(mk(
+                Role::Assistant,
+                NormalizedBlock {
+                    ordinal: 0,
+                    block_type: BlockType::ToolUse,
+                    text: None,
+                    tool_name: name,
+                    tool_use_id: payload
+                        .get("call_id")
+                        .and_then(Value::as_str)
+                        .map(String::from),
+                    tool_input: args,
+                    tool_result: None,
+                    is_error: None,
+                },
+            ))
         }
-        "function_call_output" | "custom_tool_call_output" | "tool_search_output" => {
-            Some(mk(Role::Tool, NormalizedBlock {
-                ordinal: 0, block_type: BlockType::ToolResult, text: None,
+        "function_call_output" | "custom_tool_call_output" | "tool_search_output" => Some(mk(
+            Role::Tool,
+            NormalizedBlock {
+                ordinal: 0,
+                block_type: BlockType::ToolResult,
+                text: None,
                 tool_name: None,
-                tool_use_id: payload.get("call_id").and_then(Value::as_str).map(String::from),
+                tool_use_id: payload
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .map(String::from),
                 tool_input: None,
                 tool_result: Some(stringify(payload.get("output"))),
                 is_error: None,
-            }))
-        }
-        "web_search_call" => Some(mk(Role::Assistant, NormalizedBlock {
-            ordinal: 0, block_type: BlockType::WebSearch, text: None,
-            tool_name: Some("web_search".to_string()),
-            tool_use_id: None, tool_input: None, tool_result: None, is_error: None,
-        })),
-        _ => Some(mk(Role::Other, NormalizedBlock {
-            ordinal: 0, block_type: BlockType::Other, text: Some(payload.to_string()),
-            tool_name: None, tool_use_id: None, tool_input: None, tool_result: None, is_error: None,
-        })),
+            },
+        )),
+        "web_search_call" => Some(mk(
+            Role::Assistant,
+            NormalizedBlock {
+                ordinal: 0,
+                block_type: BlockType::WebSearch,
+                text: None,
+                tool_name: Some("web_search".to_string()),
+                tool_use_id: None,
+                tool_input: None,
+                tool_result: None,
+                is_error: None,
+            },
+        )),
+        _ => Some(mk(
+            Role::Other,
+            NormalizedBlock {
+                ordinal: 0,
+                block_type: BlockType::Other,
+                text: Some(payload.to_string()),
+                tool_name: None,
+                tool_use_id: None,
+                tool_input: None,
+                tool_result: None,
+                is_error: None,
+            },
+        )),
     }
 }
 
@@ -173,7 +288,11 @@ mod tests {
     use super::*;
 
     fn fixture() -> String {
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/codex/sample.jsonl")).unwrap()
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/codex/sample.jsonl"
+        ))
+        .unwrap()
     }
 
     #[test]
@@ -196,7 +315,11 @@ mod tests {
     #[test]
     fn cumulative_token_count_becomes_session_totals() {
         let parsed = parse_session("fallback", &fixture(), &HashMap::new());
-        assert_eq!(parsed.session.totals.input, 900);
+        // Latest token_count wins (cumulative): info.total_token_usage with
+        // input_tokens=900, cached=400, output=150. Codex's input_tokens
+        // includes the cached portion, so the billable input is 900-400=500
+        // and cache_read captures the 400 cached tokens separately.
+        assert_eq!(parsed.session.totals.input, 500);
         assert_eq!(parsed.session.totals.output, 150);
         assert_eq!(parsed.session.totals.cache_read, 400);
     }

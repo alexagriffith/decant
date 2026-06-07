@@ -2,8 +2,13 @@ use crate::model::*;
 use serde_json::Value;
 
 const KNOWN_META: &[&str] = &[
-    "summary", "ai-title", "last-prompt", "permission-mode",
-    "attachment", "file-history-snapshot", "queue-operation",
+    "summary",
+    "ai-title",
+    "last-prompt",
+    "permission-mode",
+    "attachment",
+    "file-history-snapshot",
+    "queue-operation",
 ];
 
 /// Parse one Claude Code session file's contents (one session per file).
@@ -26,18 +31,30 @@ pub fn parse_session(source_session_id: &str, content: &str) -> ParsedSession {
         let v: Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(e) => {
-                issues.push(Issue { line_no: i + 1, error: e.to_string(), raw_line: line.to_string() });
+                issues.push(Issue {
+                    line_no: i + 1,
+                    error: e.to_string(),
+                    raw_line: line.to_string(),
+                });
                 continue;
             }
         };
         let typ = v.get("type").and_then(Value::as_str).unwrap_or("");
         if let Some(ts) = v.get("timestamp").and_then(Value::as_str) {
-            if started_at.is_none() { started_at = Some(ts.to_string()); }
+            if started_at.is_none() {
+                started_at = Some(ts.to_string());
+            }
             ended_at = Some(ts.to_string());
         }
-        if cwd.is_none() { cwd = v.get("cwd").and_then(Value::as_str).map(String::from); }
-        if git_branch.is_none() { git_branch = v.get("gitBranch").and_then(Value::as_str).map(String::from); }
-        if cli_version.is_none() { cli_version = v.get("version").and_then(Value::as_str).map(String::from); }
+        if cwd.is_none() {
+            cwd = v.get("cwd").and_then(Value::as_str).map(String::from);
+        }
+        if git_branch.is_none() {
+            git_branch = v.get("gitBranch").and_then(Value::as_str).map(String::from);
+        }
+        if cli_version.is_none() {
+            cli_version = v.get("version").and_then(Value::as_str).map(String::from);
+        }
 
         match typ {
             "user" => {
@@ -59,8 +76,11 @@ pub fn parse_session(source_session_id: &str, content: &str) -> ParsedSession {
             }
             t if KNOWN_META.contains(&t) => {
                 if title.is_none() {
-                    if let Some(s) = v.get("summary").and_then(Value::as_str)
-                        .or_else(|| v.get("title").and_then(Value::as_str)) {
+                    if let Some(s) = v
+                        .get("summary")
+                        .and_then(Value::as_str)
+                        .or_else(|| v.get("title").and_then(Value::as_str))
+                    {
                         title = Some(truncate(s, 120));
                     }
                 }
@@ -96,20 +116,46 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 fn first_text(msg: &NormalizedMessage) -> Option<String> {
-    msg.blocks.iter().find(|b| b.block_type == BlockType::Text).and_then(|b| b.text.clone())
+    msg.blocks
+        .iter()
+        .find(|b| b.block_type == BlockType::Text)
+        .and_then(|b| b.text.clone())
 }
 
-/// First non-null assistant model seen. Most sessions use a single model;
-/// true most-frequent selection is deferred to a later plan.
+/// The session's primary model for display and cost: the most-frequently-used
+/// model we can price, falling back to the most-frequent model overall, then
+/// None. Preferring a priceable model skips synthetic/auxiliary markers
+/// (`<synthetic>`, `exa-research-*`) that would otherwise mask the real model
+/// and zero out the session's estimated cost. Cost applies one price to the
+/// session's aggregate tokens, so the dominant model is the best single choice.
 fn primary_model(messages: &[NormalizedMessage]) -> Option<String> {
-    messages.iter().find_map(|m| m.model.clone())
+    use std::collections::HashMap;
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for m in messages {
+        if let Some(model) = m.model.as_deref() {
+            *counts.entry(model).or_default() += 1;
+        }
+    }
+    counts
+        .iter()
+        .max_by(|a, b| {
+            // Priceable wins; then higher frequency; then name for determinism.
+            crate::cost::is_priceable(a.0)
+                .cmp(&crate::cost::is_priceable(b.0))
+                .then(a.1.cmp(b.1))
+                .then_with(|| b.0.cmp(a.0))
+        })
+        .map(|(model, _)| model.to_string())
 }
 
 fn simple_message(v: &Value, role: Role, seq: i64) -> NormalizedMessage {
     NormalizedMessage {
         seq,
         source_uuid: v.get("uuid").and_then(Value::as_str).map(String::from),
-        parent_source_uuid: v.get("parentUuid").and_then(Value::as_str).map(String::from),
+        parent_source_uuid: v
+            .get("parentUuid")
+            .and_then(Value::as_str)
+            .map(String::from),
         role,
         model: None,
         stop_reason: None,
@@ -137,7 +183,10 @@ fn parse_user(v: &Value, seq: i64) -> NormalizedMessage {
                 match bt {
                     "text" => {
                         has_text = true;
-                        blocks.push(text_block(ord, item.get("text").and_then(Value::as_str).unwrap_or("")));
+                        blocks.push(text_block(
+                            ord,
+                            item.get("text").and_then(Value::as_str).unwrap_or(""),
+                        ));
                     }
                     "tool_result" => {
                         has_tool_result = true;
@@ -146,7 +195,10 @@ fn parse_user(v: &Value, seq: i64) -> NormalizedMessage {
                             block_type: BlockType::ToolResult,
                             text: None,
                             tool_name: None,
-                            tool_use_id: item.get("tool_use_id").and_then(Value::as_str).map(String::from),
+                            tool_use_id: item
+                                .get("tool_use_id")
+                                .and_then(Value::as_str)
+                                .map(String::from),
                             tool_input: None,
                             tool_result: Some(stringify_content(item.get("content"))),
                             is_error: item.get("is_error").and_then(Value::as_bool),
@@ -159,11 +211,18 @@ fn parse_user(v: &Value, seq: i64) -> NormalizedMessage {
         _ => {}
     }
     // Role is Tool only when the turn is purely tool results (no human text).
-    let role = if has_tool_result && !has_text { Role::Tool } else { Role::User };
+    let role = if has_tool_result && !has_text {
+        Role::Tool
+    } else {
+        Role::User
+    };
     NormalizedMessage {
         seq,
         source_uuid: v.get("uuid").and_then(Value::as_str).map(String::from),
-        parent_source_uuid: v.get("parentUuid").and_then(Value::as_str).map(String::from),
+        parent_source_uuid: v
+            .get("parentUuid")
+            .and_then(Value::as_str)
+            .map(String::from),
         role,
         model: None,
         stop_reason: None,
@@ -176,8 +235,14 @@ fn parse_user(v: &Value, seq: i64) -> NormalizedMessage {
 
 fn parse_assistant(v: &Value, seq: i64, totals: &mut TokenUsage) -> NormalizedMessage {
     let m = v.get("message");
-    let model = m.and_then(|m| m.get("model")).and_then(Value::as_str).map(String::from);
-    let stop_reason = m.and_then(|m| m.get("stop_reason")).and_then(Value::as_str).map(String::from);
+    let model = m
+        .and_then(|m| m.get("model"))
+        .and_then(Value::as_str)
+        .map(String::from);
+    let stop_reason = m
+        .and_then(|m| m.get("stop_reason"))
+        .and_then(Value::as_str)
+        .map(String::from);
     let usage = m.and_then(|m| m.get("usage")).map(|u| {
         let g = |k: &str| u.get(k).and_then(Value::as_i64).unwrap_or(0);
         TokenUsage {
@@ -198,19 +263,32 @@ fn parse_assistant(v: &Value, seq: i64, totals: &mut TokenUsage) -> NormalizedMe
         for (ord, item) in items.iter().enumerate() {
             let bt = item.get("type").and_then(Value::as_str).unwrap_or("");
             match bt {
-                "text" => blocks.push(text_block(ord as i64, item.get("text").and_then(Value::as_str).unwrap_or(""))),
+                "text" => blocks.push(text_block(
+                    ord as i64,
+                    item.get("text").and_then(Value::as_str).unwrap_or(""),
+                )),
                 "thinking" => blocks.push(NormalizedBlock {
-                    ordinal: ord as i64, block_type: BlockType::Thinking,
-                    text: item.get("thinking").and_then(Value::as_str).map(String::from),
-                    tool_name: None, tool_use_id: None, tool_input: None, tool_result: None, is_error: None,
+                    ordinal: ord as i64,
+                    block_type: BlockType::Thinking,
+                    text: item
+                        .get("thinking")
+                        .and_then(Value::as_str)
+                        .map(String::from),
+                    tool_name: None,
+                    tool_use_id: None,
+                    tool_input: None,
+                    tool_result: None,
+                    is_error: None,
                 }),
                 "tool_use" => blocks.push(NormalizedBlock {
-                    ordinal: ord as i64, block_type: BlockType::ToolUse,
+                    ordinal: ord as i64,
+                    block_type: BlockType::ToolUse,
                     text: None,
                     tool_name: item.get("name").and_then(Value::as_str).map(String::from),
                     tool_use_id: item.get("id").and_then(Value::as_str).map(String::from),
                     tool_input: item.get("input").cloned(),
-                    tool_result: None, is_error: None,
+                    tool_result: None,
+                    is_error: None,
                 }),
                 _ => blocks.push(other_block(ord as i64, item)),
             }
@@ -219,9 +297,13 @@ fn parse_assistant(v: &Value, seq: i64, totals: &mut TokenUsage) -> NormalizedMe
     NormalizedMessage {
         seq,
         source_uuid: v.get("uuid").and_then(Value::as_str).map(String::from),
-        parent_source_uuid: v.get("parentUuid").and_then(Value::as_str).map(String::from),
+        parent_source_uuid: v
+            .get("parentUuid")
+            .and_then(Value::as_str)
+            .map(String::from),
         role: Role::Assistant,
-        model, stop_reason,
+        model,
+        stop_reason,
         timestamp: v.get("timestamp").and_then(Value::as_str).map(String::from),
         usage,
         raw: v.clone(),
@@ -231,16 +313,27 @@ fn parse_assistant(v: &Value, seq: i64, totals: &mut TokenUsage) -> NormalizedMe
 
 fn text_block(ordinal: i64, text: &str) -> NormalizedBlock {
     NormalizedBlock {
-        ordinal, block_type: BlockType::Text, text: Some(text.to_string()),
-        tool_name: None, tool_use_id: None, tool_input: None, tool_result: None, is_error: None,
+        ordinal,
+        block_type: BlockType::Text,
+        text: Some(text.to_string()),
+        tool_name: None,
+        tool_use_id: None,
+        tool_input: None,
+        tool_result: None,
+        is_error: None,
     }
 }
 
 fn other_block(ordinal: i64, item: &Value) -> NormalizedBlock {
     NormalizedBlock {
-        ordinal, block_type: BlockType::Other,
+        ordinal,
+        block_type: BlockType::Other,
         text: Some(item.to_string()),
-        tool_name: None, tool_use_id: None, tool_input: None, tool_result: None, is_error: None,
+        tool_name: None,
+        tool_use_id: None,
+        tool_input: None,
+        tool_result: None,
+        is_error: None,
     }
 }
 
@@ -265,7 +358,11 @@ mod tests {
     use super::*;
 
     fn fixture() -> String {
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/claude/sample.jsonl")).unwrap()
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/claude/sample.jsonl"
+        ))
+        .unwrap()
     }
 
     #[test]
@@ -279,7 +376,10 @@ mod tests {
         assert_eq!(s.messages[1].role, Role::Assistant);
         assert_eq!(s.messages[2].role, Role::Tool);
         let kinds: Vec<_> = s.messages[1].blocks.iter().map(|b| b.block_type).collect();
-        assert_eq!(kinds, vec![BlockType::Thinking, BlockType::Text, BlockType::ToolUse]);
+        assert_eq!(
+            kinds,
+            vec![BlockType::Thinking, BlockType::Text, BlockType::ToolUse]
+        );
     }
 
     #[test]
