@@ -5,98 +5,138 @@ defmodule DecantWeb.SessionLive.Index do
 
   @impl true
   def mount(_params, _session, socket) do
+    sessions = Archive.list_sessions(200)
+    totals = Archive.totals()
+
     {:ok,
-     assign(socket,
-       sessions: Archive.list_sessions(200),
-       syncing: false,
-       page_title: "decant — sessions"
-     )}
-  end
-
-  @impl true
-  def handle_event("sync", _params, %{assigns: %{syncing: true}} = socket), do: {:noreply, socket}
-
-  def handle_event("sync", _params, socket) do
-    bin = System.get_env("DECANT_BIN") || "decant"
-    db = Archive.db_path()
-    {:noreply, socket |> assign(syncing: true) |> start_async(:sync, fn -> run_sync(bin, db) end)}
-  end
-
-  defp run_sync(_bin, nil), do: "error: archive DB not configured (set DECANT_DB)"
-
-  defp run_sync(bin, db) do
-    case System.cmd(bin, ["--db", db, "sync"], stderr_to_stdout: true) do
-      {out, 0} -> String.trim(out)
-      {out, 3} -> String.trim(out) <> " (with issues)"
-      {out, code} -> "exit #{code}: #{String.slice(out, 0, 200)}"
-    end
-  rescue
-    e -> "error: #{Exception.message(e)} (is the `decant` binary on PATH? set DECANT_BIN)"
-  end
-
-  @impl true
-  def handle_async(:sync, {:ok, msg}, socket) do
-    {:noreply,
      socket
-     |> assign(syncing: false, sessions: Archive.list_sessions(200))
-     |> put_flash(:info, "sync: #{msg}")}
+     |> assign(totals: totals, all: sessions, page_title: "Sessions")
+     |> stream(:sessions, sessions)}
   end
 
   @impl true
-  def handle_async(:sync, {:exit, reason}, socket) do
-    {:noreply,
-     socket |> assign(syncing: false) |> put_flash(:error, "sync crashed: #{inspect(reason)}")}
+  def handle_event("filter", %{"q" => q}, socket) do
+    filtered = filter_sessions(socket.assigns.all, q)
+    {:noreply, stream(socket, :sessions, filtered, reset: true)}
   end
 
-  defp money(n), do: :erlang.float_to_binary((n || 0) * 1.0, decimals: 2)
+  defp filter_sessions(sessions, q) do
+    case String.trim(q || "") do
+      "" ->
+        sessions
+
+      term ->
+        needle = String.downcase(term)
+
+        Enum.filter(sessions, fn s ->
+          matches?(s.title, needle) or matches?(s.model, needle) or matches?(s.tool, needle)
+        end)
+    end
+  end
+
+  defp matches?(nil, _needle), do: false
+  defp matches?(value, needle), do: String.contains?(String.downcase(value), needle)
 
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="p-6">
-      <div class="flex items-center justify-between flex-wrap gap-2">
-        <h1 class="text-2xl font-bold">decant — sessions</h1>
-        <div class="flex gap-3 items-center text-sm">
-          <.link navigate={~p"/search"} class="text-blue-600 hover:underline">search</.link>
-          <.link navigate={~p"/analytics"} class="text-blue-600 hover:underline">analytics</.link>
-          <.link navigate={~p"/tools"} class="text-blue-600 hover:underline">tools</.link>
-          <button
-            phx-click="sync"
-            disabled={@syncing}
-            class="px-3 py-1 rounded bg-blue-600 text-white disabled:opacity-50"
-          >
-            {if @syncing, do: "syncing…", else: "Sync now"}
-          </button>
+    <Layouts.app flash={@flash} active={:sessions} page_title="Sessions" syncing={@syncing}>
+      <div class="space-y-6">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <.stat_card
+            label="Sessions"
+            value={int(@totals.sessions)}
+            hint="all time"
+            icon="hero-rectangle-stack"
+            tone={:accent}
+          />
+          <.stat_card
+            label="Messages"
+            value={int(@totals.messages)}
+            hint="all time"
+            icon="hero-chat-bubble-left-right"
+            tone={:info}
+          />
+          <.stat_card
+            label="Est. cost"
+            value={money(@totals.cost)}
+            hint="all time"
+            icon="hero-currency-dollar"
+            tone={:success}
+          />
         </div>
-      </div>
 
-      <table class="mt-4 w-full text-sm border-collapse">
-        <thead>
-          <tr class="text-left border-b">
-            <th class="p-2">tool</th>
-            <th class="p-2">title</th>
-            <th class="p-2">model</th>
-            <th class="p-2 text-right">msgs</th>
-            <th class="p-2 text-right">cost$</th>
-            <th class="p-2">started</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr :for={s <- @sessions} class="border-b hover:bg-base-200">
-            <td class="p-2">{s.tool}</td>
-            <td class="p-2 max-w-xl truncate">
-              <.link navigate={~p"/sessions/#{s.id}"} class="text-blue-600 hover:underline">
-                {s.title || "(untitled)"}
-              </.link>
-            </td>
-            <td class="p-2">{s.model}</td>
-            <td class="p-2 text-right">{s.message_count}</td>
-            <td class="p-2 text-right">{money(s.cost)}</td>
-            <td class="p-2 text-gray-500">{s.started_at}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+        <.panel title="Sessions" body_class="p-0">
+          <:actions>
+            <form phx-change="filter">
+              <input
+                name="q"
+                phx-debounce="150"
+                autocomplete="off"
+                placeholder="Filter by title, model, or tool…"
+                class="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm text-fg placeholder:text-faint focus:border-accent"
+              />
+            </form>
+          </:actions>
+
+          <table class="w-full">
+            <thead>
+              <tr class="border-b border-line">
+                <th class="px-3 py-2.5 text-left text-xs font-medium tracking-wide text-muted uppercase">
+                  Tool
+                </th>
+                <th class="px-3 py-2.5 text-left text-xs font-medium tracking-wide text-muted uppercase">
+                  Title
+                </th>
+                <th class="px-3 py-2.5 text-left text-xs font-medium tracking-wide text-muted uppercase">
+                  Model
+                </th>
+                <th class="px-3 py-2.5 text-right text-xs font-medium tracking-wide text-muted uppercase">
+                  Msgs
+                </th>
+                <th class="px-3 py-2.5 text-right text-xs font-medium tracking-wide text-muted uppercase">
+                  Cost
+                </th>
+                <th class="px-3 py-2.5 text-left text-xs font-medium tracking-wide text-muted uppercase">
+                  Started
+                </th>
+              </tr>
+            </thead>
+            <tbody id="sessions" phx-update="stream">
+              <tr
+                :for={{id, s} <- @streams.sessions}
+                id={id}
+                class="border-b border-line/60 transition-colors hover:bg-elevated"
+              >
+                <td class="px-3 py-2.5 text-sm">
+                  <.tool_badge tool={s.tool} />
+                </td>
+                <td class="max-w-md px-3 py-2.5 text-sm">
+                  <.link
+                    navigate={~p"/sessions/#{s.id}"}
+                    class="block truncate font-medium text-fg hover:text-accent"
+                  >
+                    {s.title || "(untitled)"}
+                  </.link>
+                </td>
+                <td class="px-3 py-2.5 text-sm">
+                  <.model_badge model={s.model} />
+                </td>
+                <td class="px-3 py-2.5 text-right text-sm text-muted tabular-nums">
+                  {int(s.message_count)}
+                </td>
+                <td class="px-3 py-2.5 text-right text-sm tabular-nums">
+                  {money(s.cost)}
+                </td>
+                <td class="px-3 py-2.5 text-sm text-muted">
+                  {relative_time(s.started_at)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </.panel>
+      </div>
+    </Layouts.app>
     """
   end
 end

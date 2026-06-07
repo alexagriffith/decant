@@ -1,0 +1,9 @@
+{
+  "name": "decant-assets",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Client dependencies for the decant web app (bundled by esbuild).",
+  "dependencies": {
+    "echarts": "^5.5.0"
+  }
+}

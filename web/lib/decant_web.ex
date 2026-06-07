@@ -50,6 +50,9 @@ defmodule DecantWeb do
     quote do
       use Phoenix.LiveView
 
+      # Global sync control (powers the top-bar Sync button on every page).
+      on_mount(DecantWeb.SyncHook)
+
       unquote(html_helpers())
     end
   end
@@ -79,8 +82,10 @@ defmodule DecantWeb do
     quote do
       # HTML escaping functionality
       import Phoenix.HTML
-      # Core UI components
+      # Core UI components + design-system components + format helpers
       import DecantWeb.CoreComponents
+      import DecantWeb.Components.UI
+      import DecantWeb.Format
 
       # Common modules used in templates
       alias Phoenix.LiveView.JS

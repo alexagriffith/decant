@@ -6,3 +6,6 @@
 
 # Erlang/BEAM crash dumps (transient; never commit)
 erl_crash.dump
+
+# Local agent/workflow orchestration scripts (machine-specific paths)
+.workflows/

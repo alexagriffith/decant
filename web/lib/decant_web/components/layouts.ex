@@ -1,152 +1,240 @@
 defmodule DecantWeb.Layouts do
   @moduledoc """
-  This module holds layouts and related functionality
-  used by your application.
+  App shell and layout components: a responsive sidebar + top bar that wraps
+  every page via `app/1`, plus the flash container and theme toggle.
   """
   use DecantWeb, :html
 
-  # Embed all files in layouts/* within this module.
-  # The default root.html.heex file contains the HTML
-  # skeleton of your application, namely HTML headers
-  # and other static content.
   embed_templates "layouts/*"
 
+  @nav [
+    %{key: :sessions, label: "Sessions", path: "/", icon: "hero-rectangle-stack"},
+    %{key: :search, label: "Search", path: "/search", icon: "hero-magnifying-glass"},
+    %{key: :analytics, label: "Analytics", path: "/analytics", icon: "hero-chart-bar"},
+    %{key: :tools, label: "Tools & MCP", path: "/tools", icon: "hero-wrench-screwdriver"}
+  ]
+
   @doc """
-  Renders your app layout.
+  The application shell. Wrap each LiveView's content in it:
 
-  This function is typically invoked from every template,
-  and it often contains your application menu, sidebar,
-  or similar.
-
-  ## Examples
-
-      <Layouts.app flash={@flash}>
-        <h1>Content</h1>
+      <Layouts.app flash={@flash} active={:sessions} page_title="Sessions" syncing={@syncing}>
+        ...
+        <:actions>...</:actions>
       </Layouts.app>
-
   """
   attr :flash, :map, required: true, doc: "the map of flash messages"
-
-  attr :current_scope, :map,
-    default: nil,
-    doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
-
+  attr :active, :atom, default: nil, doc: "the active nav key"
+  attr :page_title, :string, default: nil, doc: "title shown in the top bar"
+  attr :syncing, :boolean, default: false, doc: "whether a sync is in progress"
+  attr :current_scope, :map, default: nil
   slot :inner_block, required: true
+  slot :actions, doc: "page-specific top-bar actions"
 
   def app(assigns) do
+    assigns = assign(assigns, :nav, @nav)
+
     ~H"""
-    <header class="navbar px-4 sm:px-6 lg:px-8">
-      <div class="flex-1">
-        <a href="/" class="flex-1 flex w-fit items-center gap-2">
-          <img src={~p"/images/logo.svg"} width="36" />
-          <span class="text-sm font-semibold">v{Application.spec(:phoenix, :vsn)}</span>
-        </a>
-      </div>
-      <div class="flex-none">
-        <ul class="flex flex-column px-1 space-x-4 items-center">
-          <li>
-            <a href="https://phoenixframework.org/" class="btn btn-ghost">Website</a>
-          </li>
-          <li>
-            <a href="https://github.com/phoenixframework/phoenix" class="btn btn-ghost">GitHub</a>
-          </li>
-          <li>
-            <.theme_toggle />
-          </li>
-          <li>
-            <a href="https://hexdocs.pm/phoenix/overview.html" class="btn btn-primary">
-              Get Started <span aria-hidden="true">&rarr;</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </header>
+    <div class="min-h-dvh bg-canvas text-fg">
+      <div
+        id="sidebar-backdrop"
+        class="fixed inset-0 z-30 hidden bg-black/60 backdrop-blur-sm md:hidden"
+        phx-click={close_sidebar()}
+      />
 
-    <main class="px-4 py-20 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-2xl space-y-4">
-        {render_slot(@inner_block)}
-      </div>
-    </main>
+      <aside
+        id="sidebar"
+        class={[
+          "fixed inset-y-0 left-0 z-40 flex w-60 -translate-x-full flex-col",
+          "border-r border-line bg-surface transition-transform duration-200 md:translate-x-0"
+        ]}
+      >
+        <div class="flex h-14 items-center gap-2.5 border-b border-line px-5">
+          <.link navigate={~p"/"} class="flex items-center gap-2.5">
+            <span class="grid size-7 place-items-center rounded-lg bg-accent text-on-accent shadow-sm">
+              <.icon name="hero-beaker-solid" class="size-4" />
+            </span>
+            <span class="text-[15px] font-semibold tracking-tight">decant</span>
+          </.link>
+          <button
+            class="ml-auto rounded-md p-1.5 text-muted hover:bg-elevated hover:text-fg md:hidden"
+            phx-click={close_sidebar()}
+            aria-label="Close menu"
+          >
+            <.icon name="hero-x-mark" class="size-5" />
+          </button>
+        </div>
 
-    <.flash_group flash={@flash} />
+        <nav class="flex-1 space-y-1 p-3">
+          <.nav_item :for={item <- @nav} item={item} active={@active} />
+        </nav>
+
+        <div class="border-t border-line p-3">
+          <div class="flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted">
+            <span class="size-1.5 shrink-0 rounded-full bg-success"></span>
+            <span class="truncate">local archive · read-only</span>
+          </div>
+        </div>
+      </aside>
+
+      <div class="flex min-h-dvh flex-col md:pl-60">
+        <header class="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-line bg-canvas/80 px-4 backdrop-blur-md sm:px-6">
+          <button
+            class="rounded-md p-1.5 text-muted hover:bg-elevated hover:text-fg md:hidden"
+            phx-click={open_sidebar()}
+            aria-label="Open menu"
+          >
+            <.icon name="hero-bars-3" class="size-5" />
+          </button>
+
+          <h1 :if={@page_title} class="text-sm font-semibold tracking-tight">{@page_title}</h1>
+
+          <div class="flex-1"></div>
+
+          <.link
+            navigate={~p"/search"}
+            class={[
+              "group hidden items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5",
+              "text-sm text-faint hover:border-line-strong hover:text-muted sm:flex"
+            ]}
+          >
+            <.icon name="hero-magnifying-glass" class="size-4" />
+            <span>Search…</span>
+            <kbd class="ml-2 rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-faint">
+              /
+            </kbd>
+          </.link>
+
+          {render_slot(@actions)}
+
+          <button
+            phx-click="sync"
+            disabled={@syncing}
+            class={[
+              "inline-flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5",
+              "text-sm font-medium text-fg transition-colors hover:bg-elevated hover:border-line-strong",
+              "disabled:opacity-60 disabled:pointer-events-none"
+            ]}
+          >
+            <.icon name="hero-arrow-path" class={["size-4", @syncing && "animate-spin"]} />
+            <span class="hidden sm:inline">{(@syncing && "Syncing…") || "Sync"}</span>
+          </button>
+
+          <.theme_toggle />
+        </header>
+
+        <main class="flex-1 px-4 py-6 sm:px-6 lg:px-8">
+          <div class="mx-auto w-full max-w-6xl">
+            {render_slot(@inner_block)}
+          </div>
+        </main>
+      </div>
+
+      <.flash_group flash={@flash} />
+    </div>
     """
   end
 
-  @doc """
-  Shows the flash group with standard titles and content.
+  attr :item, :map, required: true
+  attr :active, :atom, default: nil
 
-  ## Examples
+  defp nav_item(assigns) do
+    assigns = assign(assigns, :is_active, assigns.item.key == assigns.active)
 
-      <.flash_group flash={@flash} />
-  """
-  attr :flash, :map, required: true, doc: "the map of flash messages"
-  attr :id, :string, default: "flash-group", doc: "the optional id of flash container"
+    ~H"""
+    <.link
+      navigate={@item.path}
+      aria-current={@is_active && "page"}
+      class={[
+        "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+        (@is_active && "bg-accent/10 text-accent") ||
+          "text-muted hover:bg-elevated hover:text-fg"
+      ]}
+    >
+      <.icon name={@item.icon} class="size-[18px]" />
+      {@item.label}
+    </.link>
+    """
+  end
+
+  defp open_sidebar(js \\ %JS{}) do
+    js
+    |> JS.remove_class("-translate-x-full", to: "#sidebar")
+    |> JS.show(to: "#sidebar-backdrop")
+  end
+
+  defp close_sidebar(js \\ %JS{}) do
+    js
+    |> JS.add_class("-translate-x-full", to: "#sidebar")
+    |> JS.hide(to: "#sidebar-backdrop")
+  end
+
+  @doc "Fixed, stacking container for flash messages."
+  attr :flash, :map, required: true
+  attr :id, :string, default: "flash-group"
 
   def flash_group(assigns) do
     ~H"""
-    <div id={@id} aria-live="polite">
+    <div
+      id={@id}
+      aria-live="polite"
+      class="fixed top-4 right-4 z-50 flex w-80 flex-col gap-2 sm:w-96"
+    >
       <.flash kind={:info} flash={@flash} />
       <.flash kind={:error} flash={@flash} />
 
       <.flash
         id="client-error"
         kind={:error}
-        title="We can't find the internet"
-        phx-disconnected={show(".phx-client-error #client-error") |> JS.remove_attribute("hidden")}
-        phx-connected={hide("#client-error") |> JS.set_attribute({"hidden", ""})}
+        title="Connection lost"
+        phx-disconnected={show(".phx-client-error #client-error")}
+        phx-connected={hide("#client-error")}
         hidden
       >
-        Attempting to reconnect
-        <.icon name="hero-arrow-path" class="ml-1 size-3 motion-safe:animate-spin" />
+        Attempting to reconnect <.icon name="hero-arrow-path" class="ml-1 size-3 animate-spin" />
       </.flash>
 
       <.flash
         id="server-error"
         kind={:error}
-        title="Something went wrong!"
-        phx-disconnected={show(".phx-server-error #server-error") |> JS.remove_attribute("hidden")}
-        phx-connected={hide("#server-error") |> JS.set_attribute({"hidden", ""})}
+        title="Something went wrong"
+        phx-disconnected={show(".phx-server-error #server-error")}
+        phx-connected={hide("#server-error")}
         hidden
       >
-        Attempting to reconnect
-        <.icon name="hero-arrow-path" class="ml-1 size-3 motion-safe:animate-spin" />
+        Attempting to reconnect <.icon name="hero-arrow-path" class="ml-1 size-3 animate-spin" />
       </.flash>
     </div>
     """
   end
 
-  @doc """
-  Provides dark vs light theme toggle based on themes defined in app.css.
-
-  See <head> in root.html.heex which applies the theme before page load.
-  """
+  @doc "Three-way theme toggle (system / light / dark)."
   def theme_toggle(assigns) do
     ~H"""
-    <div class="card relative flex flex-row items-center border-2 border-base-300 bg-base-300 rounded-full">
-      <div class="absolute w-1/3 h-full rounded-full border-1 border-base-200 bg-base-100 brightness-200 left-0 [[data-theme=light]_&]:left-1/3 [[data-theme=dark]_&]:left-2/3 transition-[left]" />
-
+    <div class="relative flex items-center rounded-lg border border-line bg-surface p-0.5">
+      <div class="absolute top-0.5 bottom-0.5 left-0.5 w-7 rounded-md bg-elevated transition-[left] [[data-theme=light]_&]:left-[calc(0.125rem+1.75rem)] [[data-theme=dark]_&]:left-[calc(0.125rem+3.5rem)]" />
       <button
-        class="flex p-2 cursor-pointer w-1/3"
+        class="relative z-10 grid size-7 place-items-center rounded-md text-muted hover:text-fg"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="system"
+        aria-label="System theme"
       >
-        <.icon name="hero-computer-desktop-micro" class="size-4 opacity-75 hover:opacity-100" />
+        <.icon name="hero-computer-desktop-micro" class="size-4" />
       </button>
-
       <button
-        class="flex p-2 cursor-pointer w-1/3"
+        class="relative z-10 grid size-7 place-items-center rounded-md text-muted hover:text-fg"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="light"
+        aria-label="Light theme"
       >
-        <.icon name="hero-sun-micro" class="size-4 opacity-75 hover:opacity-100" />
+        <.icon name="hero-sun-micro" class="size-4" />
       </button>
-
       <button
-        class="flex p-2 cursor-pointer w-1/3"
+        class="relative z-10 grid size-7 place-items-center rounded-md text-muted hover:text-fg"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="dark"
+        aria-label="Dark theme"
       >
-        <.icon name="hero-moon-micro" class="size-4 opacity-75 hover:opacity-100" />
+        <.icon name="hero-moon-micro" class="size-4" />
       </button>
     </div>
     """
