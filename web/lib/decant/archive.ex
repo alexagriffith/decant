@@ -72,7 +72,13 @@ defmodule Decant.Archive do
         chunk
         |> Enum.reject(fn [_, _, type | _] -> is_nil(type) end)
         |> Enum.map(fn [_, _, type, text, tool_name, tool_input, tool_result] ->
-          %{type: type, text: text, tool_name: tool_name, tool_input: tool_input, tool_result: tool_result}
+          %{
+            type: type,
+            text: text,
+            tool_name: tool_name,
+            tool_input: tool_input,
+            tool_result: tool_result
+          }
         end)
 
       %{role: role || "unknown", blocks: blocks}
@@ -113,8 +119,14 @@ defmodule Decant.Archive do
         []
       ).rows
 
-    %{sessions: sessions, messages: messages, tool_calls: tool_calls,
-      input_tokens: intok, output_tokens: outtok, cost: cost}
+    %{
+      sessions: sessions,
+      messages: messages,
+      tool_calls: tool_calls,
+      input_tokens: intok,
+      output_tokens: outtok,
+      cost: cost
+    }
   end
 
   @doc "Per-dimension rollup. `dim` is one of :tool, :model, :project, :day (fixed SQL, no user text)."

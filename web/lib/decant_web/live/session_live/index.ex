@@ -44,7 +44,8 @@ defmodule DecantWeb.SessionLive.Index do
 
   @impl true
   def handle_async(:sync, {:exit, reason}, socket) do
-    {:noreply, socket |> assign(syncing: false) |> put_flash(:error, "sync crashed: #{inspect(reason)}")}
+    {:noreply,
+     socket |> assign(syncing: false) |> put_flash(:error, "sync crashed: #{inspect(reason)}")}
   end
 
   defp money(n), do: :erlang.float_to_binary((n || 0) * 1.0, decimals: 2)

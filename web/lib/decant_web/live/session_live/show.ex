@@ -34,7 +34,10 @@ defmodule DecantWeb.SessionLive.Show do
               <div class="font-mono">→ {b.tool_name}</div>
               <pre class="whitespace-pre-wrap">{b.tool_input}</pre>
             </div>
-            <pre :if={b.type == "tool_result"} class="bg-base-200/50 p-2 rounded text-xs whitespace-pre-wrap">{b.tool_result}</pre>
+            <pre
+              :if={b.type == "tool_result"}
+              class="bg-base-200/50 p-2 rounded text-xs whitespace-pre-wrap"
+            >{b.tool_result}</pre>
           </div>
         </div>
       </div>
