@@ -18,6 +18,7 @@ defmodule DecantWeb.SyncHook do
       socket
       |> assign_new(:syncing, fn -> false end)
       |> assign_new(:current_url, fn -> "/" end)
+      |> assign_new(:archive_meta, &Decant.Archive.overview/0)
       |> attach_hook(:decant_sync_params, :handle_params, &store_url/3)
       |> attach_hook(:decant_sync_event, :handle_event, &on_event/3)
       |> attach_hook(:decant_sync_info, :handle_info, &on_info/2)
@@ -44,7 +45,11 @@ defmodule DecantWeb.SyncHook do
         do: put_flash(socket, :info, "Synced. #{report}"),
         else: socket
 
-    {:halt, socket |> assign(:syncing, false) |> push_patch(to: socket.assigns.current_url)}
+    {:halt,
+     socket
+     |> assign(:syncing, false)
+     |> assign(:archive_meta, Decant.Archive.overview())
+     |> push_patch(to: socket.assigns.current_url)}
   end
 
   defp on_info(_msg, socket), do: {:cont, socket}

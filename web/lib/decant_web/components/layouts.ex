@@ -27,6 +27,7 @@ defmodule DecantWeb.Layouts do
   attr :active, :atom, default: nil, doc: "the active nav key"
   attr :page_title, :string, default: nil, doc: "title shown in the top bar"
   attr :syncing, :boolean, default: false, doc: "whether a sync is in progress"
+  attr :metrics, :map, default: nil, doc: "archive snapshot for the sidebar footer"
   attr :current_scope, :map, default: nil
   slot :inner_block, required: true
   slot :actions, doc: "page-specific top-bar actions"
@@ -69,10 +70,22 @@ defmodule DecantWeb.Layouts do
           <.nav_item :for={item <- @nav} item={item} active={@active} />
         </nav>
 
-        <div class="border-t border-line p-3">
-          <div class="flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted">
+        <div :if={@metrics} class="space-y-1.5 border-t border-line px-4 py-3 text-xs text-muted">
+          <div class="flex items-center gap-2" title="Live and auto-syncing">
             <span class="size-1.5 shrink-0 rounded-full bg-success motion-safe:animate-pulse"></span>
-            <span class="truncate">live · auto-syncing</span>
+            <span>
+              <span class="font-medium text-fg tabular-nums">{int(@metrics.sessions)}</span> sessions
+            </span>
+          </div>
+          <div class="flex items-center gap-2">
+            <.icon name="hero-banknotes" class="size-3.5 shrink-0 text-faint" />
+            <span>
+              <span class="font-medium text-fg tabular-nums">{money(@metrics.cost)}</span> tracked
+            </span>
+          </div>
+          <div :if={@metrics.last_activity} class="flex items-center gap-2">
+            <.icon name="hero-clock" class="size-3.5 shrink-0 text-faint" />
+            <span>latest {fmt_day(@metrics.last_activity)}</span>
           </div>
         </div>
       </aside>
@@ -168,6 +181,16 @@ defmodule DecantWeb.Layouts do
     |> JS.add_class("-translate-x-full", to: "#sidebar")
     |> JS.hide(to: "#sidebar-backdrop")
   end
+
+  # Friendly day label for the sidebar freshness line (e.g. "Jun 07").
+  defp fmt_day(iso) when is_binary(iso) do
+    case Date.from_iso8601(iso) do
+      {:ok, d} -> Calendar.strftime(d, "%b %d")
+      _ -> iso
+    end
+  end
+
+  defp fmt_day(other), do: other
 
   @doc "Fixed, stacking container for flash messages."
   attr :flash, :map, required: true

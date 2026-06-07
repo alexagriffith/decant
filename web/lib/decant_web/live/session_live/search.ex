@@ -24,7 +24,13 @@ defmodule DecantWeb.SessionLive.Search do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} active={:search} page_title="Search" syncing={@syncing}>
+    <Layouts.app
+      flash={@flash}
+      active={:search}
+      page_title="Search"
+      syncing={@syncing}
+      metrics={@archive_meta}
+    >
       <div class="mx-auto max-w-3xl space-y-6">
         <header class="space-y-1">
           <h1 class="text-xl font-semibold tracking-tight text-fg">Search</h1>

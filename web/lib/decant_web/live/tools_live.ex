@@ -42,7 +42,13 @@ defmodule DecantWeb.ToolsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} active={:tools} page_title="Tools & MCP" syncing={@syncing}>
+    <Layouts.app
+      flash={@flash}
+      active={:tools}
+      page_title="Tools & MCP"
+      syncing={@syncing}
+      metrics={@archive_meta}
+    >
       <div class="space-y-5">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>

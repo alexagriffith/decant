@@ -272,6 +272,15 @@ defmodule Decant.Archive do
     %{min: mn, max: mx}
   end
 
+  @doc """
+  Unfiltered snapshot for the sidebar: total session count, total estimated
+  cost, and the most recent session date (archive freshness).
+  """
+  def overview do
+    t = totals(%{})
+    %{sessions: t.sessions, cost: t.cost, last_activity: date_bounds().max}
+  end
+
   @doc "Resolved path of the archive DB (from the Repo config), for shelling out to `decant`."
   def db_path do
     Application.get_env(:decant, Decant.Repo)[:database]

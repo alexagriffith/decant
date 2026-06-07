@@ -65,7 +65,13 @@ defmodule DecantWeb.SessionLive.Index do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} active={:sessions} page_title="Sessions" syncing={@syncing}>
+    <Layouts.app
+      flash={@flash}
+      active={:sessions}
+      page_title="Sessions"
+      syncing={@syncing}
+      metrics={@archive_meta}
+    >
       <div class="space-y-5">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <.date_range filters={@filters} bounds={@bounds} path={~p"/"} />

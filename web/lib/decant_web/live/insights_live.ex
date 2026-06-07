@@ -43,7 +43,13 @@ defmodule DecantWeb.InsightsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} active={:insights} page_title="Insights" syncing={@syncing}>
+    <Layouts.app
+      flash={@flash}
+      active={:insights}
+      page_title="Insights"
+      syncing={@syncing}
+      metrics={@archive_meta}
+    >
       <div class="space-y-8">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
