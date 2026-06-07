@@ -68,12 +68,45 @@ defmodule Decant.Archive do
             [id]
           ).rows
 
-        %{summary: to_summary(row), messages: group_messages(rows)}
+        %{summary: to_summary(row), messages: group_messages(rows), stats: session_stats(id)}
 
       _ ->
         nil
     end
   end
+
+  # Token totals and wall-clock duration for the transcript header.
+  defp session_stats(id) do
+    sql = """
+    SELECT started_at, ended_at, total_input_tokens, total_output_tokens,
+           total_cache_read_tokens, total_cache_creation_tokens
+    FROM session WHERE id = ?
+    """
+
+    case Repo.query!(sql, [id]).rows do
+      [[started, ended, intok, outtok, cread, ccreate]] ->
+        %{
+          input_tokens: intok || 0,
+          output_tokens: outtok || 0,
+          cache_tokens: (cread || 0) + (ccreate || 0),
+          duration_seconds: duration_seconds(started, ended)
+        }
+
+      _ ->
+        %{input_tokens: 0, output_tokens: 0, cache_tokens: 0, duration_seconds: nil}
+    end
+  end
+
+  defp duration_seconds(a, b) when is_binary(a) and is_binary(b) do
+    with {:ok, da, _} <- DateTime.from_iso8601(a),
+         {:ok, db, _} <- DateTime.from_iso8601(b) do
+      max(0, DateTime.diff(db, da, :second))
+    else
+      _ -> nil
+    end
+  end
+
+  defp duration_seconds(_, _), do: nil
 
   defp group_messages(rows) do
     rows

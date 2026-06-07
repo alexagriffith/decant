@@ -30,6 +30,14 @@ defmodule DecantWeb.Format do
 
   def compact(nil), do: "0"
 
+  @doc ~s|Human duration from seconds: `dur(45) => "45s"`, `dur(83) => "1m23s"`, `dur(3920) => "1h05m"`.|
+  def dur(nil), do: "·"
+  def dur(s) when is_integer(s) and s < 60, do: "#{s}s"
+  def dur(s) when is_integer(s) and s < 3_600, do: "#{div(s, 60)}m#{pad2(rem(s, 60))}s"
+  def dur(s) when is_integer(s), do: "#{div(s, 3_600)}h#{pad2(rem(div(s, 60), 60))}m"
+
+  defp pad2(n), do: n |> Integer.to_string() |> String.pad_leading(2, "0")
+
   @doc "First 10 chars of an ISO timestamp (the date)."
   def date_only(nil), do: "·"
   def date_only(s) when is_binary(s), do: String.slice(s, 0, 10)
