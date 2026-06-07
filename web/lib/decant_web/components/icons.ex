@@ -73,25 +73,29 @@ defmodule DecantWeb.Components.Icons do
     """
   end
 
-  @doc "Brand icon for a model id (claude/opus/sonnet/haiku -> Claude, gpt/codex -> OpenAI)."
+  @doc """
+  Brand icon for a model id (claude/opus/sonnet/haiku -> Claude, gpt/codex ->
+  OpenAI). The Claude mark is tinted Anthropic Clay; the OpenAI mark stays
+  monochrome (inherits the foreground), per each company's official brand.
+  """
   attr :model, :string, default: nil
   attr :class, :any, default: "size-3.5"
 
   def model_icon(assigns) do
     ~H"""
-    <.claude :if={brand(@model) == :claude} class={@class} />
-    <.openai :if={brand(@model) == :openai} class={@class} />
+    <.claude :if={brand(@model) == :claude} class={["text-claude", @class]} />
+    <.openai :if={brand(@model) == :openai} class={["text-fg", @class]} />
     """
   end
 
-  @doc "Brand icon for a tool (claude_code -> Claude, codex -> OpenAI)."
+  @doc "Brand icon for a tool (claude_code -> Claude clay, codex -> OpenAI mono)."
   attr :tool, :string, default: nil
   attr :class, :any, default: "size-3.5"
 
   def tool_icon(assigns) do
     ~H"""
-    <.claude :if={@tool == "claude_code"} class={@class} />
-    <.openai :if={@tool == "codex"} class={@class} />
+    <.claude :if={@tool == "claude_code"} class={["text-claude", @class]} />
+    <.openai :if={@tool == "codex"} class={["text-fg", @class]} />
     """
   end
 

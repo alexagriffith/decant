@@ -83,7 +83,7 @@ defmodule DecantWeb.Components.UI do
   @doc "A small pill badge."
   attr :tone, :atom,
     default: :neutral,
-    values: [:neutral, :accent, :success, :warning, :danger, :info]
+    values: [:neutral, :accent, :success, :warning, :danger, :info, :claude, :openai]
 
   attr :class, :any, default: nil
   attr :mono, :boolean, default: false
@@ -102,14 +102,14 @@ defmodule DecantWeb.Components.UI do
     """
   end
 
-  @doc "Badge for a tool (`claude_code` / `codex`)."
+  @doc "Badge for a tool (`claude_code` / `codex`), tinted with the brand color."
   attr :tool, :string, default: nil
 
   def tool_badge(assigns) do
     {tone, label} =
       case assigns.tool do
-        "claude_code" -> {:accent, "Claude"}
-        "codex" -> {:info, "Codex"}
+        "claude_code" -> {:claude, "Claude"}
+        "codex" -> {:openai, "Codex"}
         other -> {:neutral, other || "·"}
       end
 
@@ -122,11 +122,11 @@ defmodule DecantWeb.Components.UI do
     """
   end
 
-  @doc "Badge for a model id, colored by family, rendered monospace."
+  @doc "Badge for a model id, tinted by brand (Claude clay, OpenAI mono), monospace."
   attr :model, :string, default: nil
 
   def model_badge(assigns) do
-    assigns = assign(assigns, :tone, model_tone(assigns.model))
+    assigns = assign(assigns, :tone, brand_tone(assigns.model))
 
     ~H"""
     <.badge :if={@model} tone={@tone} mono>
@@ -134,6 +134,15 @@ defmodule DecantWeb.Components.UI do
     </.badge>
     <span :if={!@model} class="text-xs text-faint">·</span>
     """
+  end
+
+  # Brand tone for a model id: Claude family -> clay, OpenAI family -> mono.
+  defp brand_tone(model) do
+    case DecantWeb.Components.Icons.brand(model) do
+      :claude -> :claude
+      :openai -> :openai
+      _ -> :neutral
+    end
   end
 
   @doc "A friendly empty / no-results state."
@@ -378,6 +387,8 @@ defmodule DecantWeb.Components.UI do
   defp tone_soft(:warning), do: "bg-warning/10 text-warning"
   defp tone_soft(:danger), do: "bg-danger/10 text-danger"
   defp tone_soft(:info), do: "bg-info/10 text-info"
+  defp tone_soft(:claude), do: "bg-claude/10 text-claude"
+  defp tone_soft(:openai), do: "bg-elevated text-fg"
   defp tone_soft(_), do: "bg-elevated text-muted"
 
   defp tone_bar(:success), do: "bg-success"

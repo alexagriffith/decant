@@ -42,6 +42,12 @@
   --color-accent-hover: #a78bfa;
   --color-on-accent: #f5f3ff;
 
+  /* Brand marks use each company's official color. Anthropic Clay for the
+     Claude mark (anthropic.com brand tokens); OpenAI is monochrome by spec,
+     so its mark inherits the foreground color instead of a brand hue. */
+  --color-claude: #d97757;
+  --color-claude-strong: #c6613f;
+
   --color-success: #34d399;
   --color-warning: #fbbf24;
   --color-danger: #f87171;
