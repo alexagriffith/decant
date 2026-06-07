@@ -14,11 +14,15 @@ defmodule DecantWeb.SessionLive.Index do
   end
 
   @impl true
+  def handle_event("sync", _params, %{assigns: %{syncing: true}} = socket), do: {:noreply, socket}
+
   def handle_event("sync", _params, socket) do
     bin = System.get_env("DECANT_BIN") || "decant"
     db = Archive.db_path()
     {:noreply, socket |> assign(syncing: true) |> start_async(:sync, fn -> run_sync(bin, db) end)}
   end
+
+  defp run_sync(_bin, nil), do: "error: archive DB not configured (set DECANT_DB)"
 
   defp run_sync(bin, db) do
     case System.cmd(bin, ["--db", db, "sync"], stderr_to_stdout: true) do
@@ -38,6 +42,7 @@ defmodule DecantWeb.SessionLive.Index do
      |> put_flash(:info, "sync: #{msg}")}
   end
 
+  @impl true
   def handle_async(:sync, {:exit, reason}, socket) do
     {:noreply, socket |> assign(syncing: false) |> put_flash(:error, "sync crashed: #{inspect(reason)}")}
   end
