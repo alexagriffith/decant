@@ -10,6 +10,7 @@ defmodule DecantWeb.Components.UI do
   import DecantWeb.Components.Icons
 
   alias DecantWeb.Filters
+  alias Phoenix.LiveView.JS
 
   @doc """
   A bordered surface panel. Optional `title`, `subtitle`, and `actions` slots
@@ -238,6 +239,77 @@ defmodule DecantWeb.Components.UI do
     </button>
     """
   end
+
+  @doc """
+  Primary call to action that opens a coding agent in a terminal seeded with a
+  prompt. Renders a split button. The left segment launches the preferred
+  agent in one click; the chevron opens a small menu for the others. When
+  opening a terminal is not available it falls back to a copy button for the
+  prompt. Requires a parent LiveView that handles the "launch" event.
+  """
+  attr :id, :string, required: true
+  attr :prompt, :string, required: true
+  attr :agents, :list, required: true, doc: "list of {key, label}"
+  attr :default, :string, required: true, doc: "preferred agent key"
+  attr :can_launch, :boolean, default: false
+
+  def agent_cta(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :default_label,
+        Enum.find_value(assigns.agents, "agent", fn {k, l} -> if k == assigns.default, do: l end)
+      )
+
+    ~H"""
+    <div :if={@can_launch} class="relative inline-flex">
+      <button
+        type="button"
+        phx-click="launch"
+        phx-value-agent={@default}
+        phx-value-prompt={@prompt}
+        class="inline-flex items-center gap-1.5 rounded-l-lg bg-accent px-3 py-1.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-hover"
+      >
+        <.icon name="hero-rocket-launch" class="size-4" /> Run in {@default_label}
+      </button>
+      <button
+        type="button"
+        phx-click={JS.toggle(to: "##{@id}-menu")}
+        aria-haspopup="true"
+        aria-label="Choose another agent"
+        class="grid place-items-center rounded-r-lg border-l border-on-accent/25 bg-accent px-1.5 text-on-accent transition-colors hover:bg-accent-hover"
+      >
+        <.icon name="hero-chevron-down" class="size-4" />
+      </button>
+      <div
+        id={"#{@id}-menu"}
+        hidden
+        phx-click-away={JS.hide(to: "##{@id}-menu")}
+        class="absolute top-full right-0 z-20 mt-1 w-44 overflow-hidden rounded-lg border border-line bg-overlay py-1 shadow-lg"
+      >
+        <button
+          :for={{key, label} <- @agents}
+          type="button"
+          phx-click={JS.hide(to: "##{@id}-menu") |> JS.push("launch", value: %{agent: key, prompt: @prompt})}
+          class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-fg hover:bg-elevated"
+        >
+          <.tool_icon tool={agent_tool(key)} class="size-4" /> Run in {label}
+        </button>
+      </div>
+    </div>
+
+    <.copy_button
+      :if={!@can_launch}
+      id={"#{@id}-copy"}
+      text={@prompt}
+      title="Copy the setup prompt"
+    />
+    """
+  end
+
+  # Map an agent key to the tool id its brand mark is keyed on.
+  defp agent_tool("claude"), do: "claude_code"
+  defp agent_tool(_), do: "codex"
 
   @doc "Date-range navigator with previous and next window, presets, and a range label."
   attr :filters, :map, required: true
