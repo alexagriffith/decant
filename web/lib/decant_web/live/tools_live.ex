@@ -61,7 +61,11 @@ defmodule DecantWeb.ToolsLive do
                   :for={r <- @mcp}
                   class="border-b border-line/60 transition-colors hover:bg-elevated"
                 >
-                  <td class="px-4 py-2.5 font-mono text-fg">{r.server}</td>
+                  <td class="px-4 py-2.5">
+                    <span class="inline-flex items-center gap-2 font-mono text-fg">
+                      <.server_icon server={r.server} class="size-4 shrink-0 text-muted" />{r.server}
+                    </span>
+                  </td>
                   <td class="px-4 py-2.5 text-right tabular-nums text-muted">{int(r.tools)}</td>
                   <td class="px-4 py-2.5 text-right tabular-nums">{int(r.calls)}</td>
                   <td class="px-4 py-2.5 text-right tabular-nums">
@@ -97,8 +101,14 @@ defmodule DecantWeb.ToolsLive do
                     <.badge :if={r.kind == "mcp"} tone={:accent}>MCP</.badge>
                     <.badge :if={r.kind != "mcp"} tone={:neutral}>built-in</.badge>
                   </td>
-                  <td class="px-4 py-2.5 font-mono text-muted">
-                    {(r.server && r.server != "" && r.server) || "—"}
+                  <td class="px-4 py-2.5">
+                    <span
+                      :if={r.server && r.server != ""}
+                      class="inline-flex items-center gap-2 font-mono text-muted"
+                    >
+                      <.server_icon server={r.server} class="size-4 shrink-0" />{r.server}
+                    </span>
+                    <span :if={!(r.server && r.server != "")} class="text-faint">—</span>
                   </td>
                   <td class="px-4 py-2.5 text-right tabular-nums">{int(r.calls)}</td>
                   <td class="px-4 py-2.5 text-right tabular-nums">
