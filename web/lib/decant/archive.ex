@@ -199,6 +199,34 @@ defmodule Decant.Archive do
     end)
   end
 
+  @doc """
+  When sessions happen, for "busiest hour / day" reporting. Returns
+  `%{by_hour: [24 counts], by_weekday: [7 counts]}` in the server's local time
+  (timestamps are stored UTC). `by_hour` is indexed 0..23, `by_weekday` 0..6
+  with 0 = Sunday.
+  """
+  def activity(filters \\ %{}) do
+    {where, params} = where_clause(filters)
+    hours = activity_counts("strftime('%H', s.started_at, 'localtime')", where, params)
+    wdays = activity_counts("strftime('%w', s.started_at, 'localtime')", where, params)
+
+    %{
+      by_hour: Enum.map(0..23, fn h -> Map.get(hours, pad2(h), 0) end),
+      by_weekday: Enum.map(0..6, fn d -> Map.get(wdays, Integer.to_string(d), 0) end)
+    }
+  end
+
+  defp activity_counts(expr, where, params) do
+    Repo.query!(
+      "SELECT #{expr} AS k, COUNT(*) FROM session s " <>
+        "WHERE #{where} AND s.started_at IS NOT NULL GROUP BY k",
+      params
+    ).rows
+    |> Map.new(fn [k, c] -> {k, c} end)
+  end
+
+  defp pad2(n), do: n |> Integer.to_string() |> String.pad_leading(2, "0")
+
   @doc "Per-tool usage (built-in vs MCP) within `filters`, most-called first."
   def tool_usage(filters \\ %{}, limit \\ 50) do
     {where, params} = where_clause(filters)

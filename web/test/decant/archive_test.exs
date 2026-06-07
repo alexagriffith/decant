@@ -173,6 +173,22 @@ defmodule Decant.ArchiveTest do
     end
   end
 
+  describe "activity/0,1" do
+    test "returns 24 hour buckets and 7 weekday buckets that sum to the session count" do
+      a = Archive.activity()
+
+      assert length(a.by_hour) == 24
+      assert length(a.by_weekday) == 7
+      assert Enum.sum(a.by_hour) == 2
+      assert Enum.sum(a.by_weekday) == 2
+    end
+
+    test "scopes to filters" do
+      a = Archive.activity(%{tool: "codex"})
+      assert Enum.sum(a.by_hour) == 1
+    end
+  end
+
   describe "tool_usage/0" do
     test "lists the built-in tools used in the fixture" do
       rows = Archive.tool_usage()

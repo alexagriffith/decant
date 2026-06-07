@@ -30,6 +30,7 @@ defmodule DecantWeb.AnalyticsLive do
 
     by_day = Archive.by_dimension(:day, filters) |> reject_blank() |> Enum.sort_by(& &1.key)
     days = Enum.map(by_day, & &1.key)
+    activity = Archive.activity(filters)
 
     {:noreply,
      assign(socket,
@@ -51,9 +52,40 @@ defmodule DecantWeb.AnalyticsLive do
          series: [%{name: "cost", data: Enum.map(by_day, &(&1.cost || 0))}],
          y_format: "money",
          smooth: true
+       },
+       peak_hour: peak_label(activity.by_hour, &hour_label/1),
+       peak_day: peak_label(activity.by_weekday, &weekday_label/1),
+       hour_spec: %{
+         type: "bar",
+         categories: Enum.map(0..23, &hour_label/1),
+         series: [%{name: "sessions", data: activity.by_hour}],
+         y_format: "int"
+       },
+       weekday_spec: %{
+         type: "bar",
+         categories: Enum.map(0..6, &weekday_label/1),
+         series: [%{name: "sessions", data: activity.by_weekday}],
+         y_format: "int"
        }
      )}
   end
+
+  # Label of the highest-count bucket, or nil when there is no activity.
+  defp peak_label(counts, labeler) do
+    max = Enum.max(counts, fn -> 0 end)
+
+    if max > 0 do
+      idx = Enum.find_index(counts, &(&1 == max))
+      labeler.(idx)
+    end
+  end
+
+  defp hour_label(0), do: "12a"
+  defp hour_label(12), do: "12p"
+  defp hour_label(h) when h < 12, do: "#{h}a"
+  defp hour_label(h), do: "#{h - 12}p"
+
+  defp weekday_label(d), do: Enum.at(~w(Sun Mon Tue Wed Thu Fri Sat), d)
 
   @impl true
   def handle_event("sort", %{"table" => "model", "col" => col}, socket) do
@@ -150,8 +182,24 @@ defmodule DecantWeb.AnalyticsLive do
           </.panel>
         </div>
 
+        <div :if={@totals.sessions > 0} class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <.panel title="Busiest hours">
+            <:subtitle>
+              {(@peak_hour && "Local time, you ship most around #{@peak_hour}") ||
+                "Sessions by hour, local time"}
+            </:subtitle>
+            <.chart id="chart-hours" spec={@hour_spec} class="h-56" />
+          </.panel>
+          <.panel title="Busiest days">
+            <:subtitle>
+              {(@peak_day && "You ship most on #{@peak_day}") || "Sessions by weekday"}
+            </:subtitle>
+            <.chart id="chart-weekday" spec={@weekday_spec} class="h-56" />
+          </.panel>
+        </div>
+
         <.panel title="By model" body_class="p-0">
-          <:subtitle>Trend = sessions/day over the selected range</:subtitle>
+          <:subtitle>Trend is sessions per day over the selected range</:subtitle>
           <div class="overflow-x-auto">
             <table class="w-full text-sm">
               <thead>
