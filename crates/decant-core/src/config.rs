@@ -15,7 +15,9 @@ impl Config {
         claude_override: Option<PathBuf>,
         codex_override: Option<PathBuf>,
     ) -> Config {
-        let home = BaseDirs::new().map(|b| b.home_dir().to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+        let home = BaseDirs::new()
+            .map(|b| b.home_dir().to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
         let data_dir = ProjectDirs::from("", "", "decant")
             .map(|p| p.data_dir().to_path_buf())
             .unwrap_or_else(|| home.join(".local/share/decant"));
@@ -30,7 +32,11 @@ impl Config {
             .or_else(|| std::env::var_os("DECANT_CODEX_DIR").map(PathBuf::from))
             .unwrap_or_else(|| home.join(".codex"));
 
-        Config { db_path, claude_dir, codex_dir }
+        Config {
+            db_path,
+            claude_dir,
+            codex_dir,
+        }
     }
 }
 

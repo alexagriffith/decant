@@ -19,7 +19,9 @@ pub fn run(cli: &Cli, args: &StatsArgs) -> anyhow::Result<i32> {
         let dim = match stats::Dimension::parse(by) {
             Some(d) => d,
             None => {
-                eprintln!("error: unknown --by value {by:?} (expected: tool | model | project | day)");
+                eprintln!(
+                    "error: unknown --by value {by:?} (expected: tool | model | project | day)"
+                );
                 return Ok(2);
             }
         };
@@ -30,7 +32,13 @@ pub fn run(cli: &Cli, args: &StatsArgs) -> anyhow::Result<i32> {
                 use comfy_table::{presets::UTF8_FULL, Table};
                 let mut table = Table::new();
                 table.load_preset(UTF8_FULL);
-                table.set_header([by.to_uppercase().as_str(), "SESSIONS", "IN_TOK", "OUT_TOK", "COST$"]);
+                table.set_header([
+                    by.to_uppercase().as_str(),
+                    "SESSIONS",
+                    "IN_TOK",
+                    "OUT_TOK",
+                    "COST$",
+                ]);
                 for r in &rows {
                     table.add_row([
                         r.key.clone(),

@@ -15,7 +15,14 @@ use std::path::{Path, PathBuf};
 /// atomic — a mid-write failure must roll back the whole session, never leave partial
 /// rows. Deletes any prior rows for the same (tool, source_session_id) first, so
 /// re-ingest is idempotent. FTS is maintained by triggers.
-pub fn upsert_session(conn: &Connection, parsed: &ParsedSession, source_path: &str, mtime: i64, size: i64, hash: &str) -> Result<i64> {
+pub fn upsert_session(
+    conn: &Connection,
+    parsed: &ParsedSession,
+    source_path: &str,
+    mtime: i64,
+    size: i64,
+    hash: &str,
+) -> Result<i64> {
     let s = &parsed.session;
 
     // Project (by cwd path).
@@ -26,7 +33,11 @@ pub fn upsert_session(conn: &Connection, parsed: &ParsedSession, source_path: &s
              ON CONFLICT(path) DO UPDATE SET last_seen_at = datetime('now')",
             params![path, basename(path)],
         )?;
-        Some(conn.query_row("SELECT id FROM project WHERE path = ?1", params![path], |r| r.get(0))?)
+        Some(conn.query_row(
+            "SELECT id FROM project WHERE path = ?1",
+            params![path],
+            |r| r.get(0),
+        )?)
     } else {
         None
     };
@@ -107,7 +118,11 @@ pub fn upsert_session(conn: &Connection, parsed: &ParsedSession, source_path: &s
     for (message_id, call_block_id, ts, b) in &tool_use_blocks {
         let name = b.tool_name.clone().unwrap_or_default();
         let (kind, server, base) = classify_tool(&name);
-        let result_block_id = b.tool_use_id.as_ref().and_then(|id| results.get(id)).copied();
+        let result_block_id = b
+            .tool_use_id
+            .as_ref()
+            .and_then(|id| results.get(id))
+            .copied();
         let is_error: Option<bool> = b
             .tool_use_id
             .as_ref()
@@ -132,7 +147,11 @@ pub fn upsert_session(conn: &Connection, parsed: &ParsedSession, source_path: &s
 }
 
 fn basename(path: &str) -> String {
-    path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_string()
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .to_string()
 }
 
 #[derive(Debug, Default)]
@@ -154,9 +173,27 @@ pub struct SourceFile {
 /// Find all Claude and Codex session files under the configured roots.
 pub fn discover(config: &Config) -> Vec<SourceFile> {
     let mut out = Vec::new();
-    collect(&config.claude_dir, Tool::ClaudeCode, false, |name| name.ends_with(".jsonl"), &mut out);
-    collect(&config.codex_dir.join("sessions"), Tool::Codex, false, is_rollout, &mut out);
-    collect(&config.codex_dir.join("archived_sessions"), Tool::Codex, true, is_rollout, &mut out);
+    collect(
+        &config.claude_dir,
+        Tool::ClaudeCode,
+        false,
+        |name| name.ends_with(".jsonl"),
+        &mut out,
+    );
+    collect(
+        &config.codex_dir.join("sessions"),
+        Tool::Codex,
+        false,
+        is_rollout,
+        &mut out,
+    );
+    collect(
+        &config.codex_dir.join("archived_sessions"),
+        Tool::Codex,
+        true,
+        is_rollout,
+        &mut out,
+    );
     out
 }
 
@@ -164,13 +201,27 @@ fn is_rollout(name: &str) -> bool {
     name.starts_with("rollout-") && name.ends_with(".jsonl")
 }
 
-fn collect(root: &Path, tool: Tool, archived: bool, want: impl Fn(&str) -> bool, out: &mut Vec<SourceFile>) {
-    if !root.exists() { return; }
+fn collect(
+    root: &Path,
+    tool: Tool,
+    archived: bool,
+    want: impl Fn(&str) -> bool,
+    out: &mut Vec<SourceFile>,
+) {
+    if !root.exists() {
+        return;
+    }
     for entry in walkdir::WalkDir::new(root).into_iter().flatten() {
-        if !entry.file_type().is_file() { continue; }
+        if !entry.file_type().is_file() {
+            continue;
+        }
         let name = entry.file_name().to_string_lossy();
         if want(&name) {
-            out.push(SourceFile { tool, path: entry.path().to_path_buf(), archived });
+            out.push(SourceFile {
+                tool,
+                path: entry.path().to_path_buf(),
+                archived,
+            });
         }
     }
 }
@@ -211,17 +262,27 @@ pub fn sync(conn: &mut Connection, config: &Config) -> Result<SyncReport> {
 
     let files = discover(config);
     let titles = codex_titles(config);
-    let mut report = SyncReport { scanned: files.len(), ..Default::default() };
+    let mut report = SyncReport {
+        scanned: files.len(),
+        ..Default::default()
+    };
 
     // Decide which files changed (cheap, serial: stat + lookup).
     let mut to_read: Vec<SourceFile> = Vec::new();
     for f in files {
-        let meta = match std::fs::metadata(&f.path) { Ok(m) => m, Err(_) => continue };
+        let meta = match std::fs::metadata(&f.path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
         let size = meta.len() as i64;
         let mtime = mtime_secs(&meta);
         let path_str = f.path.to_string_lossy().to_string();
         let prior: Option<(i64, i64)> = conn
-            .query_row("SELECT size, mtime FROM ingest_source WHERE path = ?1", params![path_str], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row(
+                "SELECT size, mtime FROM ingest_source WHERE path = ?1",
+                params![path_str],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .ok();
         if prior == Some((size, mtime)) {
             report.skipped += 1;
@@ -238,12 +299,25 @@ pub fn sync(conn: &mut Connection, config: &Config) -> Result<SyncReport> {
             let meta = std::fs::metadata(&f.path).ok()?;
             let hash = blake3::hash(content.as_bytes()).to_hex().to_string();
             let line_count = content.lines().count() as i64;
-            let stem = f.path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            let stem = f
+                .path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
             let parsed = match f.tool {
                 Tool::ClaudeCode => sources::claude::parse_session(&stem, &content),
                 Tool::Codex => sources::codex::parse_session(&stem, &content, &titles),
             };
-            Some((Prepared { file: f.clone(), line_count, mtime: mtime_secs(&meta), size: meta.len() as i64, hash }, parsed))
+            Some((
+                Prepared {
+                    file: f.clone(),
+                    line_count,
+                    mtime: mtime_secs(&meta),
+                    size: meta.len() as i64,
+                    hash,
+                },
+                parsed,
+            ))
         })
         .collect();
     report.failed = results.iter().filter(|r| r.is_none()).count();
@@ -257,10 +331,17 @@ pub fn sync(conn: &mut Connection, config: &Config) -> Result<SyncReport> {
         let tx = conn.transaction()?;
         // Release any FK reference from ingest_source -> session so upsert_session
         // can safely DELETE the old session row without a constraint violation.
-        tx.execute("UPDATE ingest_source SET session_id = NULL WHERE path = ?1", params![path_str])?;
-        let session_id = upsert_session(&tx, &parsed, &path_str, prep.mtime, prep.size, &prep.hash)?;
+        tx.execute(
+            "UPDATE ingest_source SET session_id = NULL WHERE path = ?1",
+            params![path_str],
+        )?;
+        let session_id =
+            upsert_session(&tx, &parsed, &path_str, prep.mtime, prep.size, &prep.hash)?;
         // Clear any prior issues for this path so re-ingest doesn't accumulate them.
-        tx.execute("DELETE FROM ingest_issue WHERE source_path = ?1", params![path_str])?;
+        tx.execute(
+            "DELETE FROM ingest_issue WHERE source_path = ?1",
+            params![path_str],
+        )?;
         for issue in &parsed.issues {
             tx.execute(
                 "INSERT INTO ingest_issue(source_path, line_no, error, raw_line, created_at)
@@ -269,7 +350,11 @@ pub fn sync(conn: &mut Connection, config: &Config) -> Result<SyncReport> {
             )?;
             report.issues += 1;
         }
-        let status = if parsed.issues.is_empty() { "ok" } else { "ok_with_issues" };
+        let status = if parsed.issues.is_empty() {
+            "ok"
+        } else {
+            "ok_with_issues"
+        };
         tx.execute(
             "INSERT INTO ingest_source(path, tool, size, mtime, hash, session_id, line_count, status, last_ingested_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,datetime('now'))
@@ -296,7 +381,11 @@ mod tests {
     use crate::{db, schema, sources};
 
     fn claude_fixture() -> String {
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/claude/sample.jsonl")).unwrap()
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/claude/sample.jsonl"
+        ))
+        .unwrap()
     }
 
     #[test]
@@ -328,18 +417,28 @@ mod tests {
         assert_eq!(tin, 2700);
 
         let (kind, base): (String, String) = conn
-            .query_row("SELECT tool_kind, tool_base_name FROM tool_call", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row("SELECT tool_kind, tool_base_name FROM tool_call", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .unwrap();
         assert_eq!(kind, "builtin");
         assert_eq!(base, "Read");
 
         let msg_id_nulls: i64 = conn
-            .query_row("SELECT COUNT(*) FROM tool_call WHERE message_id IS NULL", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM tool_call WHERE message_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(msg_id_nulls, 0, "tool_call.message_id must be populated");
 
         let fts: i64 = conn
-            .query_row("SELECT COUNT(*) FROM block_fts WHERE block_fts MATCH 'auth'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM block_fts WHERE block_fts MATCH 'auth'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert!(fts >= 1, "FTS should find 'auth'");
     }
@@ -361,24 +460,34 @@ mod tests {
         claude.push_str("\n{not valid json\n");
         write(&claude_dir.join("proj/sess.jsonl"), &claude);
 
-        let config = Config { db_path: dir.path().join("d.db"), claude_dir, codex_dir };
+        let config = Config {
+            db_path: dir.path().join("d.db"),
+            claude_dir,
+            codex_dir,
+        };
         let mut conn = db::open(&config.db_path).unwrap();
         schema::migrate(&conn).unwrap();
 
         let r1 = sync(&mut conn, &config).unwrap();
         assert_eq!(r1.ingested, 1);
         assert_eq!(r1.issues, 1);
-        let issues1: i64 = conn.query_row("SELECT COUNT(*) FROM ingest_issue", [], |r| r.get(0)).unwrap();
+        let issues1: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ingest_issue", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(issues1, 1);
 
-        let sessions: i64 = conn.query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0)).unwrap();
+        let sessions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(sessions, 1);
 
         // Second run: nothing changed -> skipped, no duplicates.
         let r2 = sync(&mut conn, &config).unwrap();
         assert_eq!(r2.ingested, 0);
         assert_eq!(r2.skipped, 1);
-        let sessions2: i64 = conn.query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0)).unwrap();
+        let sessions2: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(sessions2, 1);
 
         // Modify the file (different bad line) -> re-ingest; issues must NOT accumulate.
@@ -387,9 +496,13 @@ mod tests {
         write(&config.claude_dir.join("proj/sess.jsonl"), &claude3);
         let r3 = sync(&mut conn, &config).unwrap();
         assert_eq!(r3.ingested, 1, "changed file re-ingests");
-        let issues3: i64 = conn.query_row("SELECT COUNT(*) FROM ingest_issue", [], |r| r.get(0)).unwrap();
+        let issues3: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ingest_issue", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(issues3, 1, "issues must not accumulate across re-ingests");
-        let sessions3: i64 = conn.query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0)).unwrap();
+        let sessions3: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(sessions3, 1);
     }
 
@@ -406,7 +519,11 @@ mod tests {
         write(&claude_dir.join("projA/dup.jsonl"), &fx);
         write(&claude_dir.join("projB/dup.jsonl"), &fx);
 
-        let config = Config { db_path: dir.path().join("d.db"), claude_dir, codex_dir };
+        let config = Config {
+            db_path: dir.path().join("d.db"),
+            claude_dir,
+            codex_dir,
+        };
         let mut conn = db::open(&config.db_path).unwrap();
         schema::migrate(&conn).unwrap();
 
@@ -414,7 +531,9 @@ mod tests {
         let r = sync(&mut conn, &config).unwrap();
         assert_eq!(r.ingested, 2);
         // Both files map to source_session_id "dup" (the stem) -> collapse to one session.
-        let sessions: i64 = conn.query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0)).unwrap();
+        let sessions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(sessions, 1);
     }
 }

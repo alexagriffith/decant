@@ -58,9 +58,11 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = if let Some(tool) = &filter.tool {
-        stmt.query_map(params![tool], map_session_summary)?.collect::<std::result::Result<Vec<_>, _>>()?
+        stmt.query_map(params![tool], map_session_summary)?
+            .collect::<std::result::Result<Vec<_>, _>>()?
     } else {
-        stmt.query_map([], map_session_summary)?.collect::<std::result::Result<Vec<_>, _>>()?
+        stmt.query_map([], map_session_summary)?
+            .collect::<std::result::Result<Vec<_>, _>>()?
     };
     Ok(rows)
 }
@@ -178,7 +180,13 @@ pub fn get_session(conn: &Connection, id: i64) -> Result<Option<SessionDetail>> 
         }
         if let Some(block_type) = btype {
             if let Some(last) = messages.last_mut() {
-                last.blocks.push(BlockView { block_type, text, tool_name, tool_input, tool_result });
+                last.blocks.push(BlockView {
+                    block_type,
+                    text,
+                    tool_name,
+                    tool_input,
+                    tool_result,
+                });
             }
         }
     }
@@ -229,7 +237,11 @@ mod tests {
     fn seeded() -> Connection {
         let conn = db::open_in_memory().unwrap();
         schema::migrate(&conn).unwrap();
-        let content = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/claude/sample.jsonl")).unwrap();
+        let content = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/claude/sample.jsonl"
+        ))
+        .unwrap();
         let parsed = sources::claude::parse_session("sess-claude-1", &content);
         let tx = conn.unchecked_transaction().unwrap();
         ingest::upsert_session(&tx, &parsed, "/x.jsonl", 1, 2, "h").unwrap();

@@ -39,7 +39,13 @@ pub fn run(cli: &Cli, args: &ExportArgs) -> anyhow::Result<i32> {
             }
         };
         std::fs::create_dir_all(&dir)?;
-        let summaries = query::list_sessions(&conn, &query::ListFilter { tool: None, limit: i64::MAX })?;
+        let summaries = query::list_sessions(
+            &conn,
+            &query::ListFilter {
+                tool: None,
+                limit: i64::MAX,
+            },
+        )?;
         let mut n = 0;
         for s in &summaries {
             if let Some(detail) = query::get_session(&conn, s.id)? {

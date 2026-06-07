@@ -50,8 +50,15 @@ mod tests {
         migrate(&conn).unwrap(); // second run must not error or duplicate
 
         for t in [
-            "project", "session", "message", "block", "tool_call",
-            "block_fts", "ingest_source", "ingest_issue", "model_pricing",
+            "project",
+            "session",
+            "message",
+            "block",
+            "tool_call",
+            "block_fts",
+            "ingest_source",
+            "ingest_issue",
+            "model_pricing",
         ] {
             assert!(table_exists(&conn, t), "missing table {t}");
         }

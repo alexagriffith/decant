@@ -3,8 +3,8 @@
 pub mod config;
 pub mod cost;
 pub mod db;
-pub mod export;
 pub mod error;
+pub mod export;
 pub mod ingest;
 pub mod model;
 pub mod query;

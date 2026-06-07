@@ -23,7 +23,9 @@ pub fn run(cli: &Cli, cmd: &DbCmd) -> anyhow::Result<i32> {
             eprintln!("vacuumed {}", config.db_path.display());
         }
         DbCmd::Info => {
-            let size = std::fs::metadata(&config.db_path).map(|m| m.len()).unwrap_or(0);
+            let size = std::fs::metadata(&config.db_path)
+                .map(|m| m.len())
+                .unwrap_or(0);
             let version: i64 = conn.query_row(
                 "SELECT COALESCE(MAX(version),0) FROM schema_migrations",
                 [],

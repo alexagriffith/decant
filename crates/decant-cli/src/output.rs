@@ -1,5 +1,5 @@
-use std::io::IsTerminal;
 use clap::ValueEnum;
+use std::io::IsTerminal;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Format {
@@ -17,9 +17,17 @@ pub struct OutputCtx {
 
 impl OutputCtx {
     pub fn new(json: bool, format: Option<Format>, no_color: bool, quiet: bool) -> Self {
-        let format = if json { Format::Json } else { format.unwrap_or(Format::Table) };
+        let format = if json {
+            Format::Json
+        } else {
+            format.unwrap_or(Format::Table)
+        };
         let color = should_color(no_color);
-        OutputCtx { format, color, quiet }
+        OutputCtx {
+            format,
+            color,
+            quiet,
+        }
     }
 }
 

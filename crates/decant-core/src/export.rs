@@ -6,7 +6,10 @@ use std::fmt::Write;
 pub fn to_markdown(detail: &SessionDetail) -> String {
     let s = &detail.summary;
     let mut out = String::new();
-    let title = s.title.clone().unwrap_or_else(|| s.source_session_id.clone());
+    let title = s
+        .title
+        .clone()
+        .unwrap_or_else(|| s.source_session_id.clone());
     let _ = writeln!(out, "# {title}\n");
     let _ = writeln!(
         out,
@@ -41,7 +44,11 @@ pub fn to_markdown(detail: &SessionDetail) -> String {
                     );
                 }
                 "tool_result" => {
-                    let _ = writeln!(out, "```\n{}\n```\n", b.tool_result.clone().unwrap_or_default());
+                    let _ = writeln!(
+                        out,
+                        "```\n{}\n```\n",
+                        b.tool_result.clone().unwrap_or_default()
+                    );
                 }
                 other => {
                     let _ = writeln!(out, "_[{other}]_\n");
@@ -61,7 +68,11 @@ mod tests {
     fn renders_markdown_transcript() {
         let conn = db::open_in_memory().unwrap();
         schema::migrate(&conn).unwrap();
-        let content = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/claude/sample.jsonl")).unwrap();
+        let content = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/claude/sample.jsonl"
+        ))
+        .unwrap();
         let parsed = sources::claude::parse_session("sess-claude-1", &content);
         let tx = conn.unchecked_transaction().unwrap();
         let id = ingest::upsert_session(&tx, &parsed, "/x.jsonl", 1, 2, "h").unwrap();

@@ -38,7 +38,10 @@ pub fn run_ls(cli: &Cli, args: &LsArgs) -> anyhow::Result<i32> {
     let config = Config::resolve(cli.db.clone(), None, None);
     let conn = db::open(&config.db_path)?;
     schema::migrate(&conn)?;
-    let filter = ListFilter { tool: args.tool.clone(), limit: args.limit };
+    let filter = ListFilter {
+        tool: args.tool.clone(),
+        limit: args.limit,
+    };
     let sessions = query::list_sessions(&conn, &filter)?;
     let out = cli.output();
 
@@ -90,7 +93,12 @@ pub fn run_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<i32> {
     }
 
     let s = &detail.summary;
-    println!("# {}", s.title.clone().unwrap_or_else(|| s.source_session_id.clone()));
+    println!(
+        "# {}",
+        s.title
+            .clone()
+            .unwrap_or_else(|| s.source_session_id.clone())
+    );
     println!(
         "{} · {} · {} msgs · ${:.2}",
         s.tool,

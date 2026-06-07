@@ -191,7 +191,11 @@ mod tests {
     fn seeded() -> Connection {
         let conn = db::open_in_memory().unwrap();
         schema::migrate(&conn).unwrap();
-        let content = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/claude/sample.jsonl")).unwrap();
+        let content = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/claude/sample.jsonl"
+        ))
+        .unwrap();
         let parsed = sources::claude::parse_session("sess-claude-1", &content);
         let tx = conn.unchecked_transaction().unwrap();
         ingest::upsert_session(&tx, &parsed, "/x.jsonl", 1, 2, "h").unwrap();

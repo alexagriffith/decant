@@ -23,8 +23,7 @@ fn configure(conn: &Connection) -> Result<()> {
          PRAGMA synchronous = NORMAL;",
     )?;
     // journal_mode returns a row, so use query_row (file DBs become WAL).
-    let _: String =
-        conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
+    let _: String = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))?;
     Ok(())
 }
 

@@ -23,7 +23,11 @@ struct ReportJson {
 }
 
 pub fn run(cli: &Cli, args: &SyncArgs) -> anyhow::Result<i32> {
-    let config = Config::resolve(cli.db.clone(), args.claude_dir.clone(), args.codex_dir.clone());
+    let config = Config::resolve(
+        cli.db.clone(),
+        args.claude_dir.clone(),
+        args.codex_dir.clone(),
+    );
     if let Some(parent) = config.db_path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
