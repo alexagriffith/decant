@@ -5,4 +5,5 @@ members = ["crates/decant-core", "crates/decant-cli"]
 [workspace.package]
 edition = "2021"
 version = "0.1.0"
-license = "MIT"
+license = "Apache-2.0"
+repository = "https://github.com/onlydole/decant"
