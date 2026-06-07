@@ -330,7 +330,9 @@ defmodule DecantWeb.Components.UI do
         <button
           :for={{key, label} <- @agents}
           type="button"
-          phx-click={JS.hide(to: "##{@id}-menu") |> JS.push("launch", value: %{agent: key, prompt: @prompt})}
+          phx-click={
+            JS.hide(to: "##{@id}-menu") |> JS.push("launch", value: %{agent: key, prompt: @prompt})
+          }
           class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-fg hover:bg-elevated"
         >
           <.tool_icon tool={agent_tool(key)} class="size-4" /> Run in {label}

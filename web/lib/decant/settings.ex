@@ -39,7 +39,10 @@ defmodule Decant.Settings do
 
   @doc "Path to the settings file."
   def path do
-    dir = System.get_env("DECANT_CONFIG_DIR") || Path.join(System.user_home() || ".", ".config/decant")
+    dir =
+      System.get_env("DECANT_CONFIG_DIR") ||
+        Path.join(System.user_home() || ".", ".config/decant")
+
     Path.join(dir, "settings.json")
   end
 

@@ -93,7 +93,10 @@ defmodule DecantWeb.SessionLive.Show do
       </div>
 
       <div class="mx-auto mt-6 max-w-6xl">
-        <.link navigate={~p"/"} class="inline-flex items-center gap-1 text-sm text-muted hover:text-fg">
+        <.link
+          navigate={~p"/"}
+          class="inline-flex items-center gap-1 text-sm text-muted hover:text-fg"
+        >
           <.icon name="hero-arrow-left" class="size-4" /> Sessions
         </.link>
 
@@ -159,7 +162,10 @@ defmodule DecantWeb.SessionLive.Show do
                       {row.label}
                     </span>
                     <span class="truncate text-fg">{row.cmd}</span>
-                    <span class="hero-clipboard-document ml-auto size-4 shrink-0 text-muted" data-copy-icon>
+                    <span
+                      class="hero-clipboard-document ml-auto size-4 shrink-0 text-muted"
+                      data-copy-icon
+                    >
                     </span>
                   </button>
                 </div>
@@ -256,7 +262,8 @@ defmodule DecantWeb.SessionLive.Show do
     %{
       turns: length(toc),
       replies: Enum.count(messages, &(&1.role == "assistant")),
-      tool_calls: Enum.sum(Enum.map(messages, fn m -> Enum.count(m.blocks, &(&1.type == "tool_use")) end)),
+      tool_calls:
+        Enum.sum(Enum.map(messages, fn m -> Enum.count(m.blocks, &(&1.type == "tool_use")) end)),
       input_tokens: session_stats.input_tokens,
       output_tokens: session_stats.output_tokens,
       duration: session_stats.duration_seconds

@@ -90,14 +90,19 @@ defmodule DecantWeb.AnalyticsLive do
   @impl true
   def handle_event("sort", %{"table" => "model", "col" => col}, socket) do
     sort = TableSort.toggle(socket.assigns.model_sort, col)
-    {:noreply, assign(socket, model_sort: sort, by_model: TableSort.sort(socket.assigns.by_model, sort))}
+
+    {:noreply,
+     assign(socket, model_sort: sort, by_model: TableSort.sort(socket.assigns.by_model, sort))}
   end
 
   def handle_event("sort", %{"table" => "project", "col" => col}, socket) do
     sort = TableSort.toggle(socket.assigns.project_sort, col)
 
     {:noreply,
-     assign(socket, project_sort: sort, by_project: TableSort.sort(socket.assigns.by_project, sort))}
+     assign(socket,
+       project_sort: sort,
+       by_project: TableSort.sort(socket.assigns.by_project, sort)
+     )}
   end
 
   defp reject_blank(rows), do: Enum.reject(rows, &(&1.key in [nil, ""]))
@@ -212,10 +217,34 @@ defmodule DecantWeb.AnalyticsLive do
                 <tr class="border-b border-line text-left text-xs font-medium tracking-wide text-muted uppercase">
                   <.sort_header col="key" label="Model" sort={@model_sort} table="model" />
                   <th class="px-4 py-2.5">Trend</th>
-                  <.sort_header col="sessions" label="Sessions" sort={@model_sort} table="model" align="right" />
-                  <.sort_header col="input_tokens" label="In tok" sort={@model_sort} table="model" align="right" />
-                  <.sort_header col="output_tokens" label="Out tok" sort={@model_sort} table="model" align="right" />
-                  <.sort_header col="cost" label="Cost" sort={@model_sort} table="model" align="right" />
+                  <.sort_header
+                    col="sessions"
+                    label="Sessions"
+                    sort={@model_sort}
+                    table="model"
+                    align="right"
+                  />
+                  <.sort_header
+                    col="input_tokens"
+                    label="In tok"
+                    sort={@model_sort}
+                    table="model"
+                    align="right"
+                  />
+                  <.sort_header
+                    col="output_tokens"
+                    label="Out tok"
+                    sort={@model_sort}
+                    table="model"
+                    align="right"
+                  />
+                  <.sort_header
+                    col="cost"
+                    label="Cost"
+                    sort={@model_sort}
+                    table="model"
+                    align="right"
+                  />
                   <th class="px-4 py-2.5">Share</th>
                 </tr>
               </thead>
@@ -256,8 +285,20 @@ defmodule DecantWeb.AnalyticsLive do
               <thead>
                 <tr class="border-b border-line text-left text-xs font-medium tracking-wide text-muted uppercase">
                   <.sort_header col="key" label="Project" sort={@project_sort} table="project" />
-                  <.sort_header col="sessions" label="Sessions" sort={@project_sort} table="project" align="right" />
-                  <.sort_header col="cost" label="Cost" sort={@project_sort} table="project" align="right" />
+                  <.sort_header
+                    col="sessions"
+                    label="Sessions"
+                    sort={@project_sort}
+                    table="project"
+                    align="right"
+                  />
+                  <.sort_header
+                    col="cost"
+                    label="Cost"
+                    sort={@project_sort}
+                    table="project"
+                    align="right"
+                  />
                 </tr>
               </thead>
               <tbody>

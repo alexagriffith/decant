@@ -31,7 +31,9 @@ defmodule DecantWeb.ToolsLive do
   @impl true
   def handle_event("sort", %{"table" => "tools", "col" => col}, socket) do
     sort = TableSort.toggle(socket.assigns.tools_sort, col)
-    {:noreply, assign(socket, tools_sort: sort, tools: TableSort.sort(socket.assigns.tools, sort))}
+
+    {:noreply,
+     assign(socket, tools_sort: sort, tools: TableSort.sort(socket.assigns.tools, sort))}
   end
 
   def handle_event("sort", %{"table" => "mcp", "col" => col}, socket) do
@@ -77,7 +79,13 @@ defmodule DecantWeb.ToolsLive do
                   <.sort_header col="server" label="Server" sort={@mcp_sort} table="mcp" />
                   <.sort_header col="tools" label="Tools" sort={@mcp_sort} table="mcp" align="right" />
                   <.sort_header col="calls" label="Calls" sort={@mcp_sort} table="mcp" align="right" />
-                  <.sort_header col="errors" label="Errors" sort={@mcp_sort} table="mcp" align="right" />
+                  <.sort_header
+                    col="errors"
+                    label="Errors"
+                    sort={@mcp_sort}
+                    table="mcp"
+                    align="right"
+                  />
                 </tr>
               </thead>
               <tbody>
@@ -111,8 +119,20 @@ defmodule DecantWeb.ToolsLive do
                   <.sort_header col="tool_name" label="Tool" sort={@tools_sort} table="tools" />
                   <.sort_header col="kind" label="Kind" sort={@tools_sort} table="tools" />
                   <.sort_header col="server" label="Server" sort={@tools_sort} table="tools" />
-                  <.sort_header col="calls" label="Calls" sort={@tools_sort} table="tools" align="right" />
-                  <.sort_header col="errors" label="Errors" sort={@tools_sort} table="tools" align="right" />
+                  <.sort_header
+                    col="calls"
+                    label="Calls"
+                    sort={@tools_sort}
+                    table="tools"
+                    align="right"
+                  />
+                  <.sort_header
+                    col="errors"
+                    label="Errors"
+                    sort={@tools_sort}
+                    table="tools"
+                    align="right"
+                  />
                 </tr>
               </thead>
               <tbody>
