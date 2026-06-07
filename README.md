@@ -5,8 +5,9 @@ SQLite archive — then browse, search, and read them.
 
 ## Status
 
-Plan 1 of 3 (Rust core + CLI). Design: `docs/superpowers/specs/2026-06-06-decant-design.md`.
-A Phoenix LiveView web app (analytics dashboard, transcript reader) is planned (Plan 3).
+CLI complete (Plans 1, 2, 2b): ingest, browse, search, analytics, export, project/db/completion.
+Phoenix LiveView web app (`web/`): browse/read/search foundation working (Plan 3); analytics &
+tools dashboards + "Sync now" are the remaining work. Design + plans under `docs/superpowers/`.
 Validated on real data: ~1,500 sessions / 185k messages / 60k tool calls ingested cleanly.
 
 ## Quick start
@@ -38,3 +39,15 @@ The default database lives under your platform data dir (macOS: `~/Library/Appli
 Sync is idempotent — re-running only re-ingests files whose size/mtime changed. Malformed
 JSON lines are recorded in the `ingest_issue` table (non-fatal); exit code `3` signals
 "completed with parse issues" for CI. Global flags: `--json`, `-q/--quiet`, `--no-color` (honors `NO_COLOR`).
+
+## Web app
+
+A Phoenix LiveView UI in `web/` reads the same SQLite archive (read-only):
+
+```bash
+cd web && mix setup
+DECANT_DB=/path/to/decant.db mix phx.server   # then open http://localhost:4000
+```
+
+Browse sessions at `/`, read a transcript at `/sessions/:id`, full-text search at `/search`.
+Run `decant sync` (the CLI) to refresh the data the web app reads.
