@@ -63,6 +63,9 @@ pub enum Commands {
     /// Projects (workspaces): `project ls`.
     #[command(subcommand)]
     Project(commands::project::ProjectCmd),
+    /// Run the background daemon: `daemon serve`.
+    #[command(subcommand)]
+    Daemon(commands::daemon::DaemonCmd),
 }
 
 impl Cli {
@@ -98,6 +101,7 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
         Commands::Completion(args) => commands::completion::run(cli, args),
         Commands::Db(cmd) => commands::db::run(cli, cmd),
         Commands::Project(cmd) => commands::project::run(cli, cmd),
+        Commands::Daemon(cmd) => commands::daemon::run(cli, cmd),
     }
 }
 

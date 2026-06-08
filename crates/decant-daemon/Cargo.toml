@@ -8,6 +8,7 @@ name = "decant-daemon"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1"
 decant-core = { path = "../decant-core" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync"] }
 axum = "0.7"
