@@ -1,5 +1,7 @@
 //! decant-daemon: the long-running service that owns the archive and serves the HTTP API.
 
+pub mod config;
+
 /// HTTP API contract version, surfaced in the `X-Decant-API-Version` header and `/health`.
 pub const API_VERSION: u32 = 1;
 
