@@ -61,9 +61,53 @@ fn host_allowed(host: &str) -> bool {
     matches!(name, "127.0.0.1" | "localhost" | "[::1]" | "::1")
 }
 
+// Cross-origin write guard. Match the Origin's host EXACTLY (any port) so an
+// unanchored lookalike like "http://127.0.0.1.evil.com" cannot slip through.
+// Absent Origin is intentionally allowed by the caller: non-browser clients
+// (the launched coding agent and the CLI) send no Origin, and every write is
+// already gated by the bearer token, which a cross-origin browser page can
+// neither read nor make Phoenix attach.
 fn origin_allowed(origin: &str) -> bool {
-    origin.starts_with("http://127.0.0.1")
-        || origin.starts_with("http://localhost")
-        || origin.starts_with("https://127.0.0.1")
-        || origin.starts_with("https://localhost")
+    let rest = match origin.split_once("://") {
+        Some((scheme, rest)) if scheme == "http" || scheme == "https" => rest,
+        _ => return false,
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""), // "[::1]:port" -> "::1"
+        None => authority.split(':').next().unwrap_or(""), // "host:port" -> "host"
+    };
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_allows_loopback_any_port() {
+        assert!(origin_allowed("http://localhost:4000"));
+        assert!(origin_allowed("http://127.0.0.1:4000"));
+        assert!(origin_allowed("https://localhost"));
+        assert!(origin_allowed("http://[::1]:4000"));
+    }
+
+    #[test]
+    fn origin_rejects_lookalikes_and_other_hosts() {
+        assert!(!origin_allowed("http://127.0.0.1.evil.com"));
+        assert!(!origin_allowed("http://localhost.evil.com"));
+        assert!(!origin_allowed("http://evil.com"));
+        assert!(!origin_allowed("ftp://localhost"));
+        assert!(!origin_allowed("http://127.0.0.1@evil.com"));
+        assert!(!origin_allowed(""));
+    }
+
+    #[test]
+    fn host_allows_loopback_only() {
+        assert!(host_allowed("127.0.0.1:4577"));
+        assert!(host_allowed("localhost:4577"));
+        assert!(host_allowed("[::1]:4577"));
+        assert!(!host_allowed("evil.example.com"));
+        assert!(!host_allowed("127.0.0.1.evil.com:4577"));
+    }
 }
