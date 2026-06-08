@@ -4,6 +4,7 @@ pub mod api;
 pub mod auth;
 pub mod config;
 pub mod db;
+pub mod events;
 pub mod health;
 pub mod http;
 pub mod ingest;
@@ -48,6 +49,10 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
 
     let sync_status = sync_status::SyncStatusHandle::new();
 
+    // Change-event broadcast channel (spec §7): the ingest task sends on it after
+    // a sync that ingested new data; the SSE handler subscribes per connection.
+    let change_tx = events::channel();
+
     // Shared shutdown: a watch channel fired by the OS-signal listener; both the
     // HTTP server and the ingest loop observe it.
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -73,12 +78,14 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         }
     };
 
-    // Spawn the ingest task (the only writer).
+    // Spawn the ingest task (the only writer). It gets a sender clone so each
+    // sync that ingests new data broadcasts a change event.
     let ingest_shutdown = wait_for_shutdown(shutdown_rx.clone());
     let ingest_handle = tokio::spawn(ingest::run_loop(
         write,
         core_cfg.clone(),
         sync_status.clone(),
+        change_tx.clone(),
         trigger_rx,
         ingest::DEFAULT_SYNC_INTERVAL,
         ingest_shutdown,
@@ -88,6 +95,7 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         token,
         read_pool,
         sync_status,
+        events: change_tx,
     });
 
     // Serve until shutdown, then wind down the ingest task cleanly.

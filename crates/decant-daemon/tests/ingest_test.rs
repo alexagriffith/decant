@@ -92,6 +92,7 @@ async fn sync_status_endpoint_returns_envelope() {
         token: token.to_string(),
         read_pool: pool,
         sync_status: status.clone(),
+        events: decant_daemon::events::channel(),
     });
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -155,6 +156,7 @@ async fn run_loop_syncs_then_stops_on_shutdown() {
         write,
         core_cfg.clone(),
         status.clone(),
+        decant_daemon::events::channel(),
         trigger_rx,
         Duration::from_secs(3600),
         shutdown,
@@ -194,6 +196,64 @@ async fn run_loop_syncs_then_stops_on_shutdown() {
     assert_eq!(sessions2, 2, "triggered sync must ingest the new session");
 
     // Shutdown: the loop must observe it and the task must join cleanly.
+    sd_tx.send(true).unwrap();
+    let joined = tokio::time::timeout(Duration::from_secs(5), loop_handle).await;
+    assert!(joined.is_ok(), "ingest loop must stop on shutdown");
+    joined.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn run_loop_broadcasts_change_event_on_ingest_but_not_on_noop() {
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core_cfg = seed_core_config(dir.path());
+
+    let write = decant_core::db::open(&core_cfg.db_path).unwrap();
+    decant_core::schema::migrate(&write).unwrap();
+
+    let status = SyncStatusHandle::new();
+    // Subscribe BEFORE booting the loop so the boot sync's event is captured.
+    let change_tx = decant_daemon::events::channel();
+    let mut rx = change_tx.subscribe();
+
+    let (trigger_tx, trigger_rx) = tokio::sync::mpsc::channel::<()>(8);
+    let (sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+    let shutdown = async move {
+        while !*sd_rx.borrow() {
+            if sd_rx.changed().await.is_err() {
+                break;
+            }
+        }
+    };
+
+    let loop_handle = tokio::spawn(ingest::run_loop(
+        write,
+        core_cfg.clone(),
+        status.clone(),
+        change_tx.clone(),
+        trigger_rx,
+        Duration::from_secs(3600),
+        shutdown,
+    ));
+
+    // The boot sync ingests the seeded fixture, so it must broadcast one event.
+    let ev = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("boot sync must broadcast a change event within 5s")
+        .expect("channel open");
+    assert_eq!(ev.kind, "archive_updated");
+    assert_eq!(ev.ingested, 1, "boot sync ingested the one fixture session");
+
+    // Fire a trigger with NO new files: the sync is a no-op (nothing ingested),
+    // so it must NOT broadcast. Give the loop time to run that sync.
+    trigger_tx.send(()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    match rx.try_recv() {
+        Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {} // expected
+        other => panic!("no-op sync must not broadcast a change event, got {other:?}"),
+    }
+
     sd_tx.send(true).unwrap();
     let joined = tokio::time::timeout(Duration::from_secs(5), loop_handle).await;
     assert!(joined.is_ok(), "ingest loop must stop on shutdown");

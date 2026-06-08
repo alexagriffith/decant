@@ -17,6 +17,7 @@ async fn spawn(token: &str) -> (String, tokio::task::JoinHandle<()>) {
         token: token.to_string(),
         read_pool,
         sync_status: decant_daemon::sync_status::SyncStatusHandle::new(),
+        events: decant_daemon::events::channel(),
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

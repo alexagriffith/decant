@@ -33,7 +33,12 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 r2d2 = "0.8"
 notify = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Adapts the change-event `broadcast::Receiver` into a `Stream` for the SSE
+# endpoint (`BroadcastStream`); `Lagged`/`Closed` surface as stream items we
+# handle explicitly. The `sync` feature gates the broadcast wrapper.
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 [dev-dependencies]
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 tempfile = "3"
+futures-util = "0.3"

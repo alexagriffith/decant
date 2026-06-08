@@ -28,6 +28,7 @@ tags:
   - name: analytics
   - name: tools
   - name: metadata
+  - name: events
 
 paths:
   /health:
@@ -372,6 +373,63 @@ paths:
                   - type: object
                     properties:
                       data: { $ref: "#/components/schemas/DateBounds" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /events:
+    get:
+      tags: [events]
+      summary: Change-stream (Server-Sent Events)
+      description: >
+        A long-lived `text/event-stream` (SSE) connection that emits a compact
+        event each time a sync ingests new data (architecture design §7). Phoenix
+        holds one connection and rebroadcasts to LiveViews; on each event a client
+        re-fetches the affected slice via the read API — the events themselves
+        carry only ids/counts, never session rows.
+
+
+        Behind the same bearer-token / Host / Origin guard as the rest of
+        `/api/*`: send `Authorization: Bearer <token>` on the SSE request.
+
+
+        Event types:
+
+        - `archive_updated` — one sync ingested new data. `data` is a
+          [`ChangeEvent`](#/components/schemas/ChangeEvent). No-op syncs (nothing
+          newly ingested) do not emit.
+
+        - `resync` — the client fell behind the server's broadcast buffer and may
+          have missed events; it should re-fetch current state from scratch. Sent
+          at most once per lag episode. `data` is `{"type":"resync"}`.
+
+
+        A keep-alive comment (`:`) is sent about every 15s so idle connections
+        (no sync activity) stay open through intermediaries.
+      responses:
+        "200":
+          description: >
+            The event stream. Stays open until the client disconnects or the
+            daemon shuts down (clean end of stream).
+          headers:
+            X-Decant-API-Version: { $ref: "#/components/headers/ApiVersion" }
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: >
+                  An SSE stream. Each frame is `event: <name>\n` followed by one
+                  or more `data: <json>\n` lines and a terminating blank line.
+              examples:
+                archiveUpdated:
+                  summary: A sync ingested 3 sessions
+                  value: |
+                    event: archive_updated
+                    data: {"type":"archive_updated","last_sync_at":"2026-06-07T12:00:00Z","ingested":3}
+
+                resync:
+                  summary: Client lagged; re-fetch from scratch
+                  value: |
+                    event: resync
+                    data: {"type":"resync"}
         "401": { $ref: "#/components/responses/Unauthorized" }
 
 components:
@@ -730,6 +788,27 @@ components:
       properties:
         min: { type: [string, "null"], format: date }
         max: { type: [string, "null"], format: date }
+
+    ChangeEvent:
+      type: object
+      description: >
+        The JSON `data` payload of an `archive_updated` SSE event. Deliberately
+        small (no session rows): on receipt the client re-fetches the affected
+        slice via the read API.
+      properties:
+        type:
+          type: string
+          const: archive_updated
+          description: Event discriminator.
+        last_sync_at:
+          type: string
+          format: date-time
+          description: When the emitting sync completed (RFC3339 UTC); matches `/metadata/sync-status`.
+        ingested:
+          type: integer
+          minimum: 1
+          description: Sessions ingested by that sync (always >= 1; no-op syncs do not emit).
+      required: [type, last_sync_at, ingested]
 
   responses:
     BadRequest:

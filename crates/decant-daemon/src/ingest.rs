@@ -18,6 +18,7 @@ use decant_core::ingest::{self as core_ingest, SyncReport};
 use rusqlite::Connection;
 use tokio::sync::mpsc;
 
+use crate::events::{self, ChangeEvent, ChangeSender};
 use crate::sync_status::SyncStatusHandle;
 
 /// Default fallback interval between syncs when no filesystem events arrive.
@@ -91,16 +92,20 @@ pub fn run_sync_once(
 /// periodic timer provides the fallback. The actual sync runs on a blocking
 /// thread (`spawn_blocking`) because decant-core's sync is synchronous and CPU
 /// + I/O bound (it parses files in a rayon pool).
+///
+/// `change_tx` broadcasts a [`ChangeEvent`] to SSE subscribers after each sync
+/// that ingested new data; no-op syncs do not emit (spec §7).
 pub async fn run_loop(
     mut write: Connection,
     cfg: CoreConfig,
     status: SyncStatusHandle,
+    change_tx: ChangeSender,
     mut trigger: mpsc::Receiver<()>,
     interval: Duration,
     shutdown: impl std::future::Future<Output = ()>,
 ) {
     // Initial sync on boot.
-    write = sync_blocking(write, &cfg, &status).await;
+    write = sync_blocking(write, &cfg, &status, &change_tx).await;
 
     let mut tick = tokio::time::interval(interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -121,14 +126,14 @@ pub async fn run_loop(
                 break;
             }
             _ = tick.tick() => {
-                write = sync_blocking(write, &cfg, &status).await;
+                write = sync_blocking(write, &cfg, &status, &change_tx).await;
             }
             recv = trigger.recv(), if watcher_alive => {
                 match recv {
                     Some(()) => {
                         // Coalesce any backlog of triggers into this one sync.
                         while trigger.try_recv().is_ok() {}
-                        write = sync_blocking(write, &cfg, &status).await;
+                        write = sync_blocking(write, &cfg, &status, &change_tx).await;
                     }
                     None => {
                         // All trigger senders dropped (watcher gone). Fall back to
@@ -145,21 +150,28 @@ pub async fn run_loop(
 /// Run one sync on a blocking thread, handing ownership of the connection in and
 /// back out so the loop keeps its single exclusive writer. A panic inside the
 /// blocking sync is caught here and recorded — the task never aborts.
+///
+/// After a successful sync that ingested new data, broadcasts a [`ChangeEvent`]
+/// to SSE subscribers; a no-op sync (nothing newly ingested) is silent.
 async fn sync_blocking(
     write: Connection,
     cfg: &CoreConfig,
     status: &SyncStatusHandle,
+    change_tx: &ChangeSender,
 ) -> Connection {
     let cfg_task = cfg.clone();
     let status_task = status.clone();
     let join = tokio::task::spawn_blocking(move || {
         let mut write = write;
-        let _ = run_sync_once(&mut write, &cfg_task, &status_task);
-        write
+        let report = run_sync_once(&mut write, &cfg_task, &status_task);
+        (write, report)
     })
     .await;
     match join {
-        Ok(conn) => conn,
+        Ok((conn, report)) => {
+            maybe_emit_change(change_tx, status, &report);
+            conn
+        }
         Err(e) => {
             // The blocking sync panicked; the connection was moved into the
             // panicking task and is gone. Re-open a fresh write connection so
@@ -169,6 +181,30 @@ async fn sync_blocking(
             reopen_write(&cfg.db_path, status)
         }
     }
+}
+
+/// Broadcast a change event iff the sync succeeded and ingested new data.
+///
+/// The timestamp matches what the sync just stored in `status` (`finish_ok`
+/// stamps `last_sync_at`), so the SSE event and `/metadata/sync-status` agree.
+/// `events::emit` ignores a "no subscribers" send error.
+fn maybe_emit_change(
+    change_tx: &ChangeSender,
+    status: &SyncStatusHandle,
+    report: &decant_core::Result<SyncReport>,
+) {
+    let Ok(report) = report else { return };
+    if report.ingested == 0 {
+        return; // no-op sync: nothing new, don't wake subscribers.
+    }
+    let last_sync_at = status
+        .snapshot()
+        .last_sync_at
+        .unwrap_or_else(crate::api::envelope::now_rfc3339);
+    events::emit(
+        change_tx,
+        ChangeEvent::archive_updated(report.ingested, last_sync_at),
+    );
 }
 
 /// Best-effort reopen of the write connection after a panic. Retries briefly;

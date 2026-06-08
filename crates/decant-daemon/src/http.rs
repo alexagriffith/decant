@@ -5,6 +5,7 @@ use axum::{
 use tower_http::trace::TraceLayer;
 
 use crate::db::ReadPool;
+use crate::events::ChangeSender;
 use crate::sync_status::SyncStatusHandle;
 
 /// Shared state available to handlers.
@@ -15,6 +16,9 @@ pub struct AppState {
     pub read_pool: ReadPool,
     /// Live ingest status, written by the ingest task.
     pub sync_status: SyncStatusHandle,
+    /// Broadcast sender for the SSE change-stream (Plan 4). The SSE handler
+    /// subscribes a receiver per connection; the ingest task holds a clone.
+    pub events: ChangeSender,
 }
 
 /// Build the router. `/api/v1/health` is public; everything else is gated by
@@ -59,6 +63,9 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/metadata/date-bounds",
             get(crate::metadata::date_bounds),
         )
+        // SSE change-stream (Plan 4). Behind the same guard: Phoenix sends the
+        // bearer token as a normal Authorization header on the SSE request.
+        .route("/api/v1/events", get(crate::events::events))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::middleware::guard,
