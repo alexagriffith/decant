@@ -63,7 +63,13 @@ defmodule Decant.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:contex, "~> 0.5"},
-      {:file_system, "~> 1.0"}
+      {:file_system, "~> 1.0"},
+      # HTTP client for the local decant daemon API (pulls in Finch).
+      {:req, "~> 0.5.18"},
+      # SSE parsing for the daemon change-stream (GET /api/v1/events).
+      {:server_sent_events, "~> 1.1"},
+      # Mock the HTTP layer in tests (no real network connections).
+      {:mimic, "~> 2.3", only: :test}
     ]
   end
 

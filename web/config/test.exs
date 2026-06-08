@@ -10,6 +10,10 @@ config :decant, Decant.Repo,
   database: Path.expand("../test/fixtures/decant.db", __DIR__),
   pool_size: 5
 
+# Don't run the daemon HTTP client pollers in tests — they would open real
+# network connections. Tests mock `Decant.Daemon` directly via Mimic.
+config :decant, daemon_client: false
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :decant, DecantWeb.Endpoint,

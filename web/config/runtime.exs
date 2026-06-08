@@ -11,6 +11,17 @@ unless config_env() == :test do
 
   # Watch the source dirs and keep the archive fresh in realtime.
   config :decant, auto_sync: true
+
+  # Run the daemon HTTP client pollers (health check + SSE change-stream).
+  # Disabled in :test so the suite never opens network connections.
+  config :decant, daemon_client: true
+
+  # Local decant daemon endpoint. Base URL and bearer token are resolved at
+  # request time by `Decant.Daemon` (DECANT_DAEMON_URL / DECANT_DAEMON_TOKEN or
+  # ~/.decant/daemon.token); these are surfaced here for visibility/overrides.
+  config :decant, :daemon,
+    url: System.get_env("DECANT_DAEMON_URL") || "http://127.0.0.1:4577",
+    token: System.get_env("DECANT_DAEMON_TOKEN")
 end
 
 # config/runtime.exs is executed for all environments, including
