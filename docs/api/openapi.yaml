@@ -1,0 +1,749 @@
+openapi: 3.1.0
+info:
+  title: decant daemon API
+  version: "1"
+  description: >
+    Read API for the decant daemon (Plan 3). All endpoints live under `/api/v1`,
+    return the `{data, meta, errors}` envelope, and perform server-side
+    aggregation only — raw rows are never shipped except the messages/blocks of a
+    single session detail. Lists use opaque cursor pagination
+    (`base64({rowid, sort_key})`). Every endpoint except `/health` requires a
+    bearer token and is bound to loopback with a Host-header allowlist
+    (see the architecture design, §4–§5).
+
+    This document is the contract of record. The recommendations endpoints
+    (`/recommendations*`) are defined in a later plan and are intentionally
+    omitted here.
+servers:
+  - url: http://127.0.0.1:4577/api/v1
+    description: Local daemon (default port)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: health
+  - name: sessions
+  - name: search
+  - name: analytics
+  - name: tools
+  - name: metadata
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness + versions
+      description: Unauthenticated liveness probe. Carries the API and DB schema versions.
+      security: []
+      responses:
+        "200":
+          description: Service is up.
+          headers:
+            X-Decant-API-Version:
+              $ref: "#/components/headers/ApiVersion"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          api_version: { type: integer, example: 1 }
+                          db_schema_version: { type: integer, example: 1 }
+                          status: { type: string, example: ok }
+
+  /sessions:
+    get:
+      tags: [sessions]
+      summary: List session summaries
+      description: >
+        Filtered, sorted, cursor-paginated session summaries. `total_count` in
+        `meta.pagination` reflects the filters (not the cursor) and is stable
+        across pages.
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/Model"
+        - $ref: "#/components/parameters/Project"
+        - name: sort
+          in: query
+          description: Sort order.
+          schema:
+            type: string
+            enum: [started_at_desc, started_at_asc, cost_desc]
+            default: started_at_desc
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: A page of session summaries.
+          headers:
+            X-Decant-API-Version: { $ref: "#/components/headers/ApiVersion" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/SessionSummary" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /sessions/{id}:
+    get:
+      tags: [sessions]
+      summary: Session detail
+      description: Summary + computed stats (duration, tokens, cost breakdown) + ordered messages with blocks.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: The session detail.
+          headers:
+            X-Decant-API-Version: { $ref: "#/components/headers/ApiVersion" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SessionDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /search:
+    post:
+      tags: [search]
+      summary: Full-text search over message blocks (FTS5)
+      description: >
+        Ranked FTS5 search over block text/tool_name/tool_input, returning hits
+        with snippets. Uses POST so the query is not URL-limited. A malformed
+        FTS5 query (e.g. unbalanced quotes) returns `400` with code
+        `INVALID_QUERY` and a hint — never a 500. `meta.pagination.total_count`
+        is omitted for search; clients page until `has_more` is false.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [q]
+              properties:
+                q:
+                  type: string
+                  minLength: 1
+                  description: FTS5 query string.
+                  example: auth AND test
+                limit: { $ref: "#/components/schemas/Limit" }
+                cursor: { type: string, nullable: true }
+      responses:
+        "200":
+          description: A page of search hits.
+          headers:
+            X-Decant-API-Version: { $ref: "#/components/headers/ApiVersion" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/SearchHit" }
+        "400":
+          description: Empty query, malformed body, or malformed FTS5 syntax.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorBody" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /analytics/summary:
+    get:
+      tags: [analytics]
+      summary: Totals scoped to filters
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/Model"
+        - $ref: "#/components/parameters/Project"
+      responses:
+        "200":
+          description: Aggregate totals.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Totals" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /analytics/by-dimension:
+    get:
+      tags: [analytics]
+      summary: Ranked rollups by dimension
+      description: Per-dimension rollups ordered by session count desc, paginated for high-cardinality dimensions.
+      parameters:
+        - name: dim
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [tool, model, project, day]
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/Model"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: A page of dimension rows.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/DimensionRow" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /analytics/activity:
+    get:
+      tags: [analytics]
+      summary: Activity histograms (local time)
+      description: >
+        Session counts bucketed by local hour (24) and weekday (7, Sunday=0),
+        computed with SQLite `strftime(..., 'localtime')`. Includes the server's
+        UTC offset label and the peak bucket indices.
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/Model"
+        - $ref: "#/components/parameters/Project"
+      responses:
+        "200":
+          description: Activity histograms.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Activity" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /analytics/model-sparklines:
+    get:
+      tags: [analytics]
+      summary: Per-model daily counts on a shared day axis
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/Model"
+        - $ref: "#/components/parameters/Project"
+      responses:
+        "200":
+          description: Sparkline series.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ModelSparklines" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /tools/usage:
+    get:
+      tags: [tools]
+      summary: Per-tool usage
+      description: Per-tool call/error counts and error rate, most-called first.
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/Model"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Limit"
+        - name: errors_only
+          in: query
+          description: Presence (or `true`/`1`/`yes`) keeps only tools with >0 errors.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Tool usage rows.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/ToolRow" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /tools/mcp-usage:
+    get:
+      tags: [tools]
+      summary: Per-MCP-server usage
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/Model"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: MCP usage rows.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/McpRow" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /metadata/sync-status:
+    get:
+      tags: [metadata]
+      summary: Ingest/sync status
+      responses:
+        "200":
+          description: Current sync status.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/SyncStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /metadata/date-bounds:
+    get:
+      tags: [metadata]
+      summary: Min/max session date
+      responses:
+        "200":
+          description: The archive's date span.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/DateBounds" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        32-byte hex token from `~/.decant/daemon.token` (or `DECANT_DAEMON_TOKEN`).
+        Required on every `/api/*` request except `/health`.
+
+  headers:
+    ApiVersion:
+      description: The API contract version. Clients should validate at startup.
+      schema: { type: string, example: "1" }
+
+  parameters:
+    From:
+      name: from
+      in: query
+      description: Inclusive lower bound on session start date (YYYY-MM-DD).
+      schema: { type: string, format: date }
+    To:
+      name: to
+      in: query
+      description: Inclusive upper bound on session start date (YYYY-MM-DD). The whole day is included.
+      schema: { type: string, format: date }
+    Tool:
+      name: tool
+      in: query
+      description: Exact tool match (e.g. `claude_code`, `codex`).
+      schema: { type: string }
+    Model:
+      name: model
+      in: query
+      description: Exact model match.
+      schema: { type: string }
+    Project:
+      name: project
+      in: query
+      description: Project path (exact match).
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      description: Page size. Defaults to 50, clamped to 200.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque pagination cursor from a previous page's `next_cursor`.
+      schema: { type: string }
+
+  schemas:
+    Limit:
+      type: integer
+      minimum: 1
+      maximum: 200
+      default: 50
+
+    Pagination:
+      type: object
+      properties:
+        next_cursor:
+          type: [string, "null"]
+          description: Cursor for the next page, or null if this is the last page.
+        has_more: { type: boolean }
+        total_count:
+          type: integer
+          description: >
+            Total rows matching the filters (ignores the cursor); stable across
+            pages. Omitted for endpoints where a total would require a second
+            full scan (search).
+        page_size: { type: integer }
+      required: [has_more, page_size]
+
+    Meta:
+      type: object
+      properties:
+        pagination: { $ref: "#/components/schemas/Pagination" }
+        filters_applied:
+          type: object
+          additionalProperties: true
+          description: The subset of filters that were applied (set keys only).
+        timestamp: { type: string, format: date-time }
+      required: [timestamp]
+
+    Envelope:
+      type: object
+      description: The standard success envelope. `data` shape varies by endpoint.
+      properties:
+        data: {}
+        meta: { $ref: "#/components/schemas/Meta" }
+        errors:
+          type: array
+          items: {}
+          description: Always empty on success; reserved for partial-result warnings.
+      required: [data, meta, errors]
+
+    PaginatedEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            meta:
+              type: object
+              properties:
+                pagination: { $ref: "#/components/schemas/Pagination" }
+
+    ApiError:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable error code.
+          enum:
+            - INVALID_REQUEST
+            - INVALID_FILTER
+            - INVALID_QUERY
+            - NOT_FOUND
+            - INTERNAL
+        message: { type: string }
+        hint: { type: [string, "null"] }
+        details: { type: [object, "null"], additionalProperties: true }
+        request_id: { type: string, description: Correlation id for logs.}
+      required: [code, message, request_id]
+
+    ErrorBody:
+      type: object
+      description: >
+        Error response. Mirrors the envelope shape (data null, errors []) and adds
+        a top-level `error` object.
+      properties:
+        data: { type: "null" }
+        meta: { $ref: "#/components/schemas/Meta" }
+        errors:
+          type: array
+          items: {}
+        error: { $ref: "#/components/schemas/ApiError" }
+      required: [error]
+
+    SessionSummary:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        tool: { type: string }
+        source_session_id: { type: string }
+        title: { type: [string, "null"] }
+        model: { type: [string, "null"] }
+        project: { type: [string, "null"] }
+        started_at: { type: [string, "null"], format: date-time }
+        ended_at: { type: [string, "null"], format: date-time }
+        message_count: { type: integer }
+        total_input_tokens: { type: integer }
+        total_output_tokens: { type: integer }
+        total_cache_read_tokens: { type: integer }
+        total_cache_creation_tokens: { type: integer }
+        estimated_cost_usd: { type: number }
+        is_archived: { type: boolean }
+      required:
+        - id
+        - tool
+        - source_session_id
+        - message_count
+        - total_input_tokens
+        - total_output_tokens
+        - total_cache_read_tokens
+        - total_cache_creation_tokens
+        - estimated_cost_usd
+        - is_archived
+
+    CostBreakdown:
+      type: object
+      description: Per-component cost in USD; `total` is the sum.
+      properties:
+        input: { type: number }
+        output: { type: number }
+        cache_read: { type: number }
+        cache_creation: { type: number }
+        total: { type: number }
+      required: [input, output, cache_read, cache_creation, total]
+
+    SessionStats:
+      type: object
+      properties:
+        duration_seconds:
+          type: [integer, "null"]
+          description: Wall-clock seconds between start and end (>= 0), null if unknown.
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        cache_read_tokens: { type: integer }
+        cache_creation_tokens: { type: integer }
+        estimated_cost_usd: { type: number }
+        cost_breakdown: { $ref: "#/components/schemas/CostBreakdown" }
+      required:
+        - input_tokens
+        - output_tokens
+        - cache_read_tokens
+        - cache_creation_tokens
+        - estimated_cost_usd
+        - cost_breakdown
+
+    Block:
+      type: object
+      properties:
+        type: { type: string, description: "Block type: text|thinking|tool_use|tool_result|..." }
+        text: { type: [string, "null"] }
+        tool_name: { type: [string, "null"] }
+        tool_input: { type: [string, "null"] }
+        tool_result: { type: [string, "null"] }
+      required: [type]
+
+    Message:
+      type: object
+      properties:
+        seq: { type: integer }
+        role: { type: string }
+        timestamp: { type: [string, "null"], format: date-time }
+        model: { type: [string, "null"] }
+        input_tokens: { type: [integer, "null"] }
+        output_tokens: { type: [integer, "null"] }
+        blocks:
+          type: array
+          items: { $ref: "#/components/schemas/Block" }
+      required: [seq, role, blocks]
+
+    SessionDetail:
+      type: object
+      properties:
+        summary: { $ref: "#/components/schemas/SessionSummary" }
+        stats: { $ref: "#/components/schemas/SessionStats" }
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/Message" }
+      required: [summary, stats, messages]
+
+    SearchHit:
+      type: object
+      properties:
+        session_id: { type: integer, format: int64 }
+        session_title: { type: [string, "null"] }
+        tool: { type: string }
+        block_id: { type: integer, format: int64 }
+        snippet:
+          type: string
+          description: Matched text with `[`/`]` around hit terms and `…` ellipses.
+      required: [session_id, tool, block_id, snippet]
+
+    Totals:
+      type: object
+      properties:
+        sessions: { type: integer }
+        messages: { type: integer }
+        tool_calls: { type: integer }
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        cache_read_tokens: { type: integer }
+        cache_creation_tokens: { type: integer }
+        estimated_cost_usd: { type: number }
+      required:
+        - sessions
+        - messages
+        - tool_calls
+        - input_tokens
+        - output_tokens
+        - cache_read_tokens
+        - cache_creation_tokens
+        - estimated_cost_usd
+
+    DimensionRow:
+      type: object
+      properties:
+        key:
+          type: string
+          description: The dimension value (tool name, model, project path, or day).
+        sessions: { type: integer }
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        estimated_cost_usd: { type: number }
+      required: [key, sessions, input_tokens, output_tokens, estimated_cost_usd]
+
+    Activity:
+      type: object
+      properties:
+        by_hour:
+          type: array
+          items: { type: integer }
+          minItems: 24
+          maxItems: 24
+          description: Session counts per local hour, index 0..23.
+        by_weekday:
+          type: array
+          items: { type: integer }
+          minItems: 7
+          maxItems: 7
+          description: Session counts per local weekday, index 0..6 (0 = Sunday).
+        timezone:
+          type: string
+          description: Server local UTC-offset label, e.g. "UTC-07:00".
+        peak_hour: { type: [integer, "null"], description: Index of the busiest hour, or null if no data. }
+        peak_weekday: { type: [integer, "null"], description: Index of the busiest weekday, or null if no data. }
+      required: [by_hour, by_weekday, timezone]
+
+    ModelSparklines:
+      type: object
+      properties:
+        models:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: integer }
+          description: Map of model -> per-day session counts, aligned to `days`.
+        days:
+          type: array
+          items: { type: string, format: date }
+          description: Sorted distinct days forming the shared x-axis.
+      required: [models, days]
+
+    ToolRow:
+      type: object
+      properties:
+        tool_name: { type: string }
+        tool_kind: { type: string, description: "builtin|mcp|custom|web_search|tool_search" }
+        mcp_server: { type: [string, "null"] }
+        calls: { type: integer }
+        errors: { type: integer }
+        error_rate: { type: number, description: errors / calls (0 when calls == 0). }
+      required: [tool_name, tool_kind, calls, errors, error_rate]
+
+    McpRow:
+      type: object
+      properties:
+        mcp_server: { type: string }
+        tools: { type: integer, description: Distinct tool names used on this server. }
+        calls: { type: integer }
+        errors: { type: integer }
+        error_rate: { type: number }
+      required: [mcp_server, tools, calls, errors, error_rate]
+
+    SyncStatus:
+      type: object
+      properties:
+        last_sync_at: { type: [string, "null"], format: date-time }
+        in_progress: { type: boolean }
+        last_report: { type: [string, "null"] }
+        last_error: { type: [string, "null"] }
+        ingested_count: { type: [integer, "null"] }
+      required: [in_progress]
+
+    DateBounds:
+      type: object
+      properties:
+        min: { type: [string, "null"], format: date }
+        max: { type: [string, "null"], format: date }
+
+  responses:
+    BadRequest:
+      description: Invalid filter, parameter, or cursor.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    NotFound:
+      description: Resource does not exist.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
