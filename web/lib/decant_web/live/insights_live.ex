@@ -48,6 +48,7 @@ defmodule DecantWeb.InsightsLive do
       active={:insights}
       page_title="Insights"
       syncing={@syncing}
+      daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >
       <div class="space-y-8">

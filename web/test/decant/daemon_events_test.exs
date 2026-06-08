@@ -5,9 +5,8 @@ defmodule Decant.DaemonEventsTest do
   and we drive its message handlers directly.
 
   The critical invariant: on an `archive_updated` SSE event it must broadcast
-  `{:archive_updated, report}` on the `"archive"` PubSub topic — the same message
-  and topic `Decant.AutoSync` uses — so `DecantWeb.SyncHook` keeps working
-  unchanged.
+  `{:archive_updated, report}` on the `"archive"` PubSub topic that
+  `DecantWeb.SyncHook` subscribes to, so the dashboard live-reloads.
   """
   use ExUnit.Case, async: true
 

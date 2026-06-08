@@ -27,6 +27,7 @@ defmodule DecantWeb.Layouts do
   attr :active, :atom, default: nil, doc: "the active nav key"
   attr :page_title, :string, default: nil, doc: "title shown in the top bar"
   attr :syncing, :boolean, default: false, doc: "whether a sync is in progress"
+  attr :daemon_ready, :boolean, default: true, doc: "whether the decant daemon is reachable"
   attr :metrics, :map, default: nil, doc: "archive snapshot for the sidebar footer"
   attr :current_scope, :map, default: nil
   slot :inner_block, required: true
@@ -146,7 +147,23 @@ defmodule DecantWeb.Layouts do
         </header>
 
         <main class="flex-1 px-4 py-6 sm:px-6 lg:px-8">
-          <div class="mx-auto w-full max-w-6xl">
+          <div class="mx-auto w-full max-w-6xl space-y-4">
+            <div
+              :if={!@daemon_ready}
+              role="status"
+              class="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-fg"
+            >
+              <.icon name="hero-exclamation-triangle" class="mt-0.5 size-4 shrink-0 text-warning" />
+              <div>
+                <p class="font-medium">decant service isn't running</p>
+                <p class="mt-0.5 text-muted">
+                  Start it with
+                  <code class="rounded bg-elevated px-1 py-0.5 font-mono text-xs text-fg">
+                    decant daemon serve
+                  </code>
+                </p>
+              </div>
+            </div>
             {render_slot(@inner_block)}
           </div>
         </main>

@@ -1,15 +1,24 @@
 defmodule Decant.ArchiveTest do
   @moduledoc """
-  Behavior tests for the read-only archive context against the committed
-  fixture DB (test/fixtures/decant.db). These tests only read; they must never
-  mutate the fixture.
+  Behavior tests for the read-only archive context. `Decant.Archive` now reads
+  through the daemon HTTP client (`Decant.Daemon`), so these tests stub the
+  client with `Decant.DaemonStubs` (canned payloads equivalent to the old
+  fixture: 2 sessions) and assert the context maps them into the atom-keyed
+  shapes the LiveViews consume. All `Archive` calls happen in this test process,
+  so private Mimic stubs (async-safe) are sufficient.
   """
-  use Decant.DataCase, async: true
+  use ExUnit.Case, async: true
+  use Mimic
 
   alias Decant.Archive
 
+  setup do
+    Decant.DaemonStubs.install()
+    :ok
+  end
+
   describe "list_sessions/0,1" do
-    test "returns all sessions in the fixture, newest first" do
+    test "returns all sessions, newest first" do
       sessions = Archive.list_sessions()
 
       assert length(sessions) == 2
@@ -32,10 +41,16 @@ defmodule Decant.ArchiveTest do
       assert s1.message_count == 4
       assert s1.cost > 0
       assert s1.project == "/Users/dev/proj"
+      assert s1.source_session_id == "sess-claude-1"
     end
 
     test "honors the limit argument" do
       assert [%{id: 2}] = Archive.list_sessions(%{}, 1)
+    end
+
+    test "returns an empty list when the daemon is unreachable" do
+      stub(Decant.Daemon, :list_sessions, fn _opts -> {:error, :service_unavailable} end)
+      assert Archive.list_sessions() == []
     end
   end
 
@@ -74,7 +89,7 @@ defmodule Decant.ArchiveTest do
       assert detail.summary.id == 1
       assert detail.summary.title == "Fix the failing auth test"
 
-      # Fixture: session 1 has 4 messages.
+      # Session 1 has 4 messages.
       assert length(detail.messages) == 4
 
       # Every message is a map with a role and a list of blocks.
@@ -94,6 +109,14 @@ defmodule Decant.ArchiveTest do
       assert block_text =~ "auth"
     end
 
+    test "exposes stats with token totals and duration" do
+      detail = Archive.get_session(1)
+
+      assert detail.stats.input_tokens == 1200
+      assert detail.stats.output_tokens == 800
+      assert detail.stats.duration_seconds == 1200
+    end
+
     test "accepts a string id (as passed from route params)" do
       detail = Archive.get_session("1")
       assert detail.summary.id == 1
@@ -101,6 +124,11 @@ defmodule Decant.ArchiveTest do
 
     test "returns nil for an unknown id" do
       assert Archive.get_session(999_999) == nil
+    end
+
+    test "returns nil when the daemon is unreachable" do
+      stub(Decant.Daemon, :get_session, fn _id -> {:error, :service_unavailable} end)
+      assert Archive.get_session(1) == nil
     end
   end
 
@@ -140,6 +168,19 @@ defmodule Decant.ArchiveTest do
       assert totals.input_tokens > 0
       assert totals.output_tokens > 0
     end
+
+    test "returns zeroed totals when the daemon is unreachable" do
+      stub(Decant.Daemon, :analytics_summary, fn _opts -> {:error, :service_unavailable} end)
+
+      assert Archive.totals() == %{
+               sessions: 0,
+               messages: 0,
+               tool_calls: 0,
+               input_tokens: 0,
+               output_tokens: 0,
+               cost: 0.0
+             }
+    end
   end
 
   describe "by_dimension/1" do
@@ -171,6 +212,11 @@ defmodule Decant.ArchiveTest do
       assert "2026-05-01" in keys
       assert "2026-05-02" in keys
     end
+
+    test "returns an empty list when the daemon is unreachable" do
+      stub(Decant.Daemon, :by_dimension, fn _dim, _opts -> {:error, :service_unavailable} end)
+      assert Archive.by_dimension(:model) == []
+    end
   end
 
   describe "activity/0,1" do
@@ -186,6 +232,14 @@ defmodule Decant.ArchiveTest do
     test "scopes to filters" do
       a = Archive.activity(%{tool: "codex"})
       assert Enum.sum(a.by_hour) == 1
+    end
+
+    test "returns zeroed buckets when the daemon is unreachable" do
+      stub(Decant.Daemon, :activity, fn _opts -> {:error, :service_unavailable} end)
+      a = Archive.activity()
+      assert length(a.by_hour) == 24
+      assert length(a.by_weekday) == 7
+      assert Enum.sum(a.by_hour) == 0
     end
   end
 
@@ -216,12 +270,6 @@ defmodule Decant.ArchiveTest do
   describe "mcp_usage/0" do
     test "is empty because the fixture has no MCP tool calls" do
       assert Archive.mcp_usage() == []
-    end
-  end
-
-  describe "db_path/0" do
-    test "points at the committed fixture database" do
-      assert Archive.db_path() =~ "test/fixtures/decant.db"
     end
   end
 end

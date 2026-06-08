@@ -70,6 +70,7 @@ defmodule DecantWeb.SessionLive.Index do
       active={:sessions}
       page_title="Sessions"
       syncing={@syncing}
+      daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >
       <div class="space-y-5">

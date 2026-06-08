@@ -1,306 +1,240 @@
 defmodule Decant.Archive do
   @moduledoc """
-  Read-only access to the decant SQLite archive. The schema is owned and written
-  by the Rust `decant` CLI; this module only reads it (raw SQL → plain maps).
+  Read access to the decant archive, served by the local `decant` daemon's HTTP
+  read API (`Decant.Daemon`). This module is the dashboard's data context: it
+  calls the daemon, maps the JSON envelope into the plain atom-keyed maps the
+  LiveViews already expect, and degrades gracefully when the daemon is down.
 
-  Most read functions accept a `filters` map so the whole dashboard can scope by
-  date range and drill down by dimension:
+  Every public function accepts the same `filters` map the dashboard builds, so
+  pages can scope by date range and drill down by dimension:
 
       %{from: ~D[2026-06-01], to: ~D[2026-06-07], tool: "codex", model: "gpt-5.5", project: "/path"}
 
   Any key may be omitted or nil. `from`/`to` accept a `Date` or an ISO date
-  string; the range is inclusive of both endpoints.
+  string. The daemon treats both bounds as inclusive whole days.
+
+  When the daemon is unreachable (or returns an error) every function returns a
+  safe empty default of the right shape — an empty list, zeroed totals,
+  `%{min: nil, max: nil}`, and so on — so pages still render instead of crashing.
   """
-  alias Decant.Repo
+  alias Decant.Daemon
 
-  @doc "List sessions matching `filters`, newest first."
+  @doc "List sessions matching `filters`, newest first. `limit` caps the page size."
   def list_sessions(filters \\ %{}, limit \\ 200) do
-    {where, params} = where_clause(filters)
+    params = to_params(filters) ++ [limit: limit]
 
-    sql = """
-    SELECT s.id, s.tool, s.title, s.model, s.message_count,
-           s.estimated_cost_usd, s.started_at, p.path, s.source_session_id
-    FROM session s
-    LEFT JOIN project p ON p.id = s.project_id
-    WHERE #{where}
-    ORDER BY s.started_at DESC
-    LIMIT ?
-    """
-
-    Repo.query!(sql, params ++ [limit]).rows |> Enum.map(&to_summary/1)
+    case Daemon.list_sessions(params) do
+      {:ok, rows, _meta} when is_list(rows) -> Enum.map(rows, &to_summary/1)
+      _ -> []
+    end
   end
 
-  defp to_summary([id, tool, title, model, mc, cost, started, path, source_id]) do
+  # Map an API SessionSummary (string keys) to the dashboard's atom-keyed shape.
+  defp to_summary(s) do
     %{
-      id: id,
-      tool: tool,
-      title: title,
-      model: model,
-      message_count: mc || 0,
-      cost: cost || 0.0,
-      started_at: started,
-      project: path,
-      source_session_id: source_id
+      id: s["id"],
+      tool: s["tool"],
+      title: s["title"],
+      model: s["model"],
+      message_count: s["message_count"] || 0,
+      cost: s["estimated_cost_usd"] || 0.0,
+      started_at: s["started_at"],
+      project: s["project"],
+      source_session_id: s["source_session_id"]
     }
   end
 
-  @doc "Full session detail: summary + ordered messages, each with its blocks."
+  @doc """
+  Full session detail: summary + computed stats + ordered messages, each with
+  its blocks. Returns `nil` when the session does not exist or the daemon is
+  unreachable.
+  """
   def get_session(id) do
-    summary_sql = """
-    SELECT s.id, s.tool, s.title, s.model, s.message_count, s.estimated_cost_usd,
-           s.started_at, p.path, s.source_session_id
-    FROM session s
-    LEFT JOIN project p ON p.id = s.project_id
-    WHERE s.id = ?
-    """
-
-    case Repo.query!(summary_sql, [id]).rows do
-      [row] ->
-        rows =
-          Repo.query!(
-            """
-            SELECT m.id, m.role, b.type, b.text, b.tool_name, b.tool_input, b.tool_result
-            FROM message m
-            LEFT JOIN block b ON b.message_id = m.id
-            WHERE m.session_id = ?
-            ORDER BY m.seq, b.ordinal
-            """,
-            [id]
-          ).rows
-
-        %{summary: to_summary(row), messages: group_messages(rows), stats: session_stats(id)}
+    case Daemon.get_session(id) do
+      {:ok, %{"summary" => summary} = detail} ->
+        %{
+          summary: to_summary(summary),
+          messages: detail |> Map.get("messages", []) |> Enum.map(&to_message/1),
+          stats: to_stats(Map.get(detail, "stats", %{}))
+        }
 
       _ ->
         nil
     end
   end
 
-  # Token totals and wall-clock duration for the transcript header.
-  defp session_stats(id) do
-    sql = """
-    SELECT started_at, ended_at, total_input_tokens, total_output_tokens,
-           total_cache_read_tokens, total_cache_creation_tokens
-    FROM session WHERE id = ?
-    """
-
-    case Repo.query!(sql, [id]).rows do
-      [[started, ended, intok, outtok, cread, ccreate]] ->
-        %{
-          input_tokens: intok || 0,
-          output_tokens: outtok || 0,
-          cache_tokens: (cread || 0) + (ccreate || 0),
-          duration_seconds: duration_seconds(started, ended)
-        }
-
-      _ ->
-        %{input_tokens: 0, output_tokens: 0, cache_tokens: 0, duration_seconds: nil}
-    end
+  # The transcript header stats. Cache tokens are summed (read + creation) to
+  # preserve the historical `cache_tokens` field; the UI reads input/output and
+  # duration.
+  defp to_stats(stats) do
+    %{
+      input_tokens: stats["input_tokens"] || 0,
+      output_tokens: stats["output_tokens"] || 0,
+      cache_tokens: (stats["cache_read_tokens"] || 0) + (stats["cache_creation_tokens"] || 0),
+      duration_seconds: stats["duration_seconds"]
+    }
   end
 
-  defp duration_seconds(a, b) when is_binary(a) and is_binary(b) do
-    with {:ok, da, _} <- DateTime.from_iso8601(a),
-         {:ok, db, _} <- DateTime.from_iso8601(b) do
-      max(0, DateTime.diff(db, da, :second))
-    else
-      _ -> nil
-    end
+  defp to_message(m) do
+    %{
+      role: m["role"] || "unknown",
+      blocks: m |> Map.get("blocks", []) |> Enum.map(&to_block/1)
+    }
   end
 
-  defp duration_seconds(_, _), do: nil
-
-  defp group_messages(rows) do
-    rows
-    |> Enum.chunk_by(fn [mid | _] -> mid end)
-    |> Enum.map(fn chunk ->
-      [[_mid, role | _] | _] = chunk
-
-      blocks =
-        chunk
-        |> Enum.reject(fn [_, _, type | _] -> is_nil(type) end)
-        |> Enum.map(fn [_, _, type, text, tool_name, tool_input, tool_result] ->
-          %{
-            type: type,
-            text: text,
-            tool_name: tool_name,
-            tool_input: tool_input,
-            tool_result: tool_result
-          }
-        end)
-
-      %{role: role || "unknown", blocks: blocks}
-    end)
+  defp to_block(b) do
+    %{
+      type: b["type"],
+      text: b["text"],
+      tool_name: b["tool_name"],
+      tool_input: b["tool_input"],
+      tool_result: b["tool_result"]
+    }
   end
 
   @doc "Full-text search over blocks (FTS5). Returns ranked hits with snippets."
   def search(query, limit \\ 50) do
-    sql = """
-    SELECT b.session_id, s.title, s.tool,
-           snippet(block_fts, 0, '[', ']', '…', 12) AS snip
-    FROM block_fts
-    JOIN block b ON b.id = block_fts.rowid
-    JOIN session s ON s.id = b.session_id
-    WHERE block_fts MATCH ?
-    ORDER BY bm25(block_fts)
-    LIMIT ?
-    """
+    case Daemon.search(query, limit: limit) do
+      {:ok, hits, _meta} when is_list(hits) ->
+        Enum.map(hits, fn h ->
+          %{
+            session_id: h["session_id"],
+            title: h["session_title"],
+            tool: h["tool"],
+            snippet: h["snippet"]
+          }
+        end)
 
-    Repo.query!(sql, [query, limit]).rows
-    |> Enum.map(fn [sid, title, tool, snip] ->
-      %{session_id: sid, title: title, tool: tool, snippet: snip}
-    end)
+      _ ->
+        []
+    end
   end
 
   @doc "Whole-archive rollup, scoped to `filters`."
   def totals(filters \\ %{}) do
-    {where, params} = where_clause(filters)
+    case Daemon.analytics_summary(to_params(filters)) do
+      {:ok, t} when is_map(t) ->
+        %{
+          sessions: t["sessions"] || 0,
+          messages: t["messages"] || 0,
+          tool_calls: t["tool_calls"] || 0,
+          input_tokens: t["input_tokens"] || 0,
+          output_tokens: t["output_tokens"] || 0,
+          cost: t["estimated_cost_usd"] || 0.0
+        }
 
-    [[sessions, intok, outtok, cost]] =
-      Repo.query!(
-        "SELECT COUNT(*), COALESCE(SUM(s.total_input_tokens),0), " <>
-          "COALESCE(SUM(s.total_output_tokens),0), COALESCE(SUM(s.estimated_cost_usd),0.0) " <>
-          "FROM session s WHERE #{where}",
-        params
-      ).rows
+      _ ->
+        empty_totals()
+    end
+  end
 
-    [[messages]] =
-      Repo.query!(
-        "SELECT COUNT(*) FROM message m JOIN session s ON s.id = m.session_id WHERE #{where}",
-        params
-      ).rows
-
-    [[tool_calls]] =
-      Repo.query!(
-        "SELECT COUNT(*) FROM tool_call tc JOIN session s ON s.id = tc.session_id WHERE #{where}",
-        params
-      ).rows
-
-    %{
-      sessions: sessions,
-      messages: messages,
-      tool_calls: tool_calls,
-      input_tokens: intok,
-      output_tokens: outtok,
-      cost: cost
-    }
+  defp empty_totals do
+    %{sessions: 0, messages: 0, tool_calls: 0, input_tokens: 0, output_tokens: 0, cost: 0.0}
   end
 
   @doc "Per-dimension rollup within `filters`. `dim` is :tool | :model | :project | :day."
   def by_dimension(dim, filters \\ %{}) when dim in [:tool, :model, :project, :day] do
-    {where, params} = where_clause(filters)
+    case Daemon.by_dimension(dim, to_params(filters)) do
+      {:ok, rows, _meta} when is_list(rows) ->
+        Enum.map(rows, fn r ->
+          %{
+            key: r["key"] || "",
+            sessions: r["sessions"] || 0,
+            input_tokens: r["input_tokens"] || 0,
+            output_tokens: r["output_tokens"] || 0,
+            cost: r["estimated_cost_usd"] || 0.0
+          }
+        end)
 
-    {expr, join} =
-      case dim do
-        :tool -> {"s.tool", ""}
-        :model -> {"COALESCE(s.model, '(unknown)')", ""}
-        :project -> {"COALESCE(p.path, '(none)')", "LEFT JOIN project p ON p.id = s.project_id"}
-        :day -> {"substr(s.started_at, 1, 10)", ""}
-      end
-
-    sql =
-      "SELECT #{expr} AS k, COUNT(*), COALESCE(SUM(s.total_input_tokens),0), " <>
-        "COALESCE(SUM(s.total_output_tokens),0), COALESCE(SUM(s.estimated_cost_usd),0.0) " <>
-        "FROM session s #{join} WHERE #{where} GROUP BY k ORDER BY 2 DESC"
-
-    Repo.query!(sql, params).rows
-    |> Enum.map(fn [k, sessions, intok, outtok, cost] ->
-      %{key: k || "", sessions: sessions, input_tokens: intok, output_tokens: outtok, cost: cost}
-    end)
+      _ ->
+        []
+    end
   end
 
   @doc """
   Per-model daily session counts, aligned to a shared day axis (Tufte small
-  multiples / sparklines). Returns `%{model => [count_per_day]}` where each list
-  is ordered by the sorted distinct days present in `filters`.
+  multiples / sparklines). Returns `%{model => [count_per_day]}` ordered by the
+  sorted distinct days present in `filters`.
   """
   def model_sparklines(filters \\ %{}) do
-    {where, params} = where_clause(filters)
-
-    rows =
-      Repo.query!(
-        "SELECT COALESCE(s.model,'(unknown)') k, substr(s.started_at,1,10) d, COUNT(*) c " <>
-          "FROM session s WHERE #{where} AND s.started_at IS NOT NULL GROUP BY k, d",
-        params
-      ).rows
-
-    days = rows |> Enum.map(fn [_, d, _] -> d end) |> Enum.uniq() |> Enum.sort()
-
-    rows
-    |> Enum.group_by(fn [k | _] -> k end)
-    |> Map.new(fn {k, krows} ->
-      by_day = Map.new(krows, fn [_, d, c] -> {d, c} end)
-      {k, Enum.map(days, fn d -> Map.get(by_day, d, 0) end)}
-    end)
+    case Daemon.model_sparklines(to_params(filters)) do
+      {:ok, %{"models" => models}} when is_map(models) -> models
+      _ -> %{}
+    end
   end
 
   @doc """
   When sessions happen, for "busiest hour / day" reporting. Returns
-  `%{by_hour: [24 counts], by_weekday: [7 counts]}` in the server's local time
-  (timestamps are stored UTC). `by_hour` is indexed 0..23, `by_weekday` 0..6
-  with 0 = Sunday.
+  `%{by_hour: [24 counts], by_weekday: [7 counts]}` in the server's local time.
+  `by_hour` is indexed 0..23, `by_weekday` 0..6 with 0 = Sunday.
   """
   def activity(filters \\ %{}) do
-    {where, params} = where_clause(filters)
-    hours = activity_counts("strftime('%H', s.started_at, 'localtime')", where, params)
-    wdays = activity_counts("strftime('%w', s.started_at, 'localtime')", where, params)
+    case Daemon.activity(to_params(filters)) do
+      {:ok, a} when is_map(a) ->
+        %{
+          by_hour: counts(a["by_hour"], 24),
+          by_weekday: counts(a["by_weekday"], 7)
+        }
 
-    %{
-      by_hour: Enum.map(0..23, fn h -> Map.get(hours, pad2(h), 0) end),
-      by_weekday: Enum.map(0..6, fn d -> Map.get(wdays, Integer.to_string(d), 0) end)
-    }
+      _ ->
+        %{by_hour: List.duplicate(0, 24), by_weekday: List.duplicate(0, 7)}
+    end
   end
 
-  defp activity_counts(expr, where, params) do
-    Repo.query!(
-      "SELECT #{expr} AS k, COUNT(*) FROM session s " <>
-        "WHERE #{where} AND s.started_at IS NOT NULL GROUP BY k",
-      params
-    ).rows
-    |> Map.new(fn [k, c] -> {k, c} end)
+  # Normalize a histogram to exactly `size` integer buckets (pad/truncate so the
+  # UI's 0..size-1 indexing is always safe, even on a malformed payload).
+  defp counts(list, size) when is_list(list) do
+    list = Enum.map(list, &(&1 || 0))
+    Enum.map(0..(size - 1), fn i -> Enum.at(list, i, 0) end)
   end
 
-  defp pad2(n), do: n |> Integer.to_string() |> String.pad_leading(2, "0")
+  defp counts(_other, size), do: List.duplicate(0, size)
 
   @doc "Per-tool usage (built-in vs MCP) within `filters`, most-called first."
   def tool_usage(filters \\ %{}, limit \\ 50) do
-    {where, params} = where_clause(filters)
+    params = to_params(filters) ++ [limit: limit]
 
-    Repo.query!(
-      "SELECT tc.tool_name, tc.tool_kind, tc.mcp_server, COUNT(*), " <>
-        "COALESCE(SUM(CASE WHEN tc.is_error = 1 THEN 1 ELSE 0 END), 0) " <>
-        "FROM tool_call tc JOIN session s ON s.id = tc.session_id WHERE #{where} " <>
-        "GROUP BY tc.tool_name, tc.tool_kind, tc.mcp_server ORDER BY 4 DESC LIMIT ?",
-      params ++ [limit]
-    ).rows
-    |> Enum.map(fn [n, k, srv, calls, errs] ->
-      %{tool_name: n || "", kind: k || "", server: srv, calls: calls, errors: errs}
-    end)
+    case Daemon.tools_usage(params) do
+      {:ok, rows, _meta} when is_list(rows) ->
+        Enum.map(rows, fn r ->
+          %{
+            tool_name: r["tool_name"] || "",
+            kind: r["tool_kind"] || "",
+            server: r["mcp_server"],
+            calls: r["calls"] || 0,
+            errors: r["errors"] || 0
+          }
+        end)
+
+      _ ->
+        []
+    end
   end
 
   @doc "Per-MCP-server usage within `filters`, most-called first."
   def mcp_usage(filters \\ %{}, limit \\ 50) do
-    {where, params} = where_clause(filters)
+    params = to_params(filters) ++ [limit: limit]
 
-    Repo.query!(
-      "SELECT tc.mcp_server, COUNT(DISTINCT tc.tool_name), COUNT(*), " <>
-        "COALESCE(SUM(CASE WHEN tc.is_error = 1 THEN 1 ELSE 0 END), 0) " <>
-        "FROM tool_call tc JOIN session s ON s.id = tc.session_id " <>
-        "WHERE #{where} AND tc.tool_kind = 'mcp' AND tc.mcp_server IS NOT NULL " <>
-        "GROUP BY tc.mcp_server ORDER BY 3 DESC LIMIT ?",
-      params ++ [limit]
-    ).rows
-    |> Enum.map(fn [srv, tools, calls, errs] ->
-      %{server: srv || "", tools: tools, calls: calls, errors: errs}
-    end)
+    case Daemon.mcp_usage(params) do
+      {:ok, rows, _meta} when is_list(rows) ->
+        Enum.map(rows, fn r ->
+          %{
+            server: r["mcp_server"] || "",
+            tools: r["tools"] || 0,
+            calls: r["calls"] || 0,
+            errors: r["errors"] || 0
+          }
+        end)
+
+      _ ->
+        []
+    end
   end
 
-  @doc "Min/max session dates (YYYY-MM-DD) for the date-range picker. nil if empty."
+  @doc "Min/max session dates (YYYY-MM-DD) for the date-range picker. nil if empty/unreachable."
   def date_bounds do
-    case Repo.query!(
-           "SELECT MIN(substr(started_at,1,10)), MAX(substr(started_at,1,10)) " <>
-             "FROM session WHERE started_at IS NOT NULL",
-           []
-         ).rows do
-      [[mn, mx]] -> %{min: mn, max: mx}
+    case Daemon.date_bounds() do
+      {:ok, b} when is_map(b) -> %{min: b["min"], max: b["max"]}
       _ -> %{min: nil, max: nil}
     end
   end
@@ -314,40 +248,24 @@ defmodule Decant.Archive do
     %{sessions: t.sessions, cost: t.cost, last_activity: date_bounds().max}
   end
 
-  @doc "Resolved path of the archive DB (from the Repo config), for shelling out to `decant`."
-  def db_path do
-    Application.get_env(:decant, Decant.Repo)[:database]
-  end
-
-  # Build a parameterized WHERE fragment (on session alias `s`) from a filters map.
-  defp where_clause(filters) do
-    specs = [
-      {:from, "s.started_at >= ?", &iso_date/1},
-      {:to, "s.started_at < ?", &day_after/1},
-      {:tool, "s.tool = ?", & &1},
-      {:model, "s.model = ?", & &1},
-      {:project, "s.project_id = (SELECT id FROM project WHERE path = ?)", & &1}
+  # Build the daemon's query params (string values) from a filters map. `from`
+  # and `to` become `YYYY-MM-DD`; nils are dropped by the client.
+  defp to_params(filters) do
+    [
+      from: iso_date(Map.get(filters, :from)),
+      to: iso_date(Map.get(filters, :to)),
+      tool: present(Map.get(filters, :tool)),
+      model: present(Map.get(filters, :model)),
+      project: present(Map.get(filters, :project))
     ]
-
-    {clauses, params} =
-      Enum.reduce(specs, {[], []}, fn {key, frag, transform}, {cs, ps} ->
-        case Map.get(filters, key) do
-          val when val in [nil, ""] -> {cs, ps}
-          val -> {[frag | cs], [transform.(val) | ps]}
-        end
-      end)
-
-    where = if clauses == [], do: "1=1", else: clauses |> Enum.reverse() |> Enum.join(" AND ")
-    {where, Enum.reverse(params)}
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
   end
 
+  defp iso_date(nil), do: nil
+  defp iso_date(""), do: nil
   defp iso_date(%Date{} = d), do: Date.to_string(d)
   defp iso_date(s) when is_binary(s), do: s
 
-  defp day_after(date) do
-    date |> to_date() |> Date.add(1) |> Date.to_string()
-  end
-
-  defp to_date(%Date{} = d), do: d
-  defp to_date(s) when is_binary(s), do: Date.from_iso8601!(s)
+  defp present(v) when v in [nil, ""], do: nil
+  defp present(v), do: v
 end

@@ -9,9 +9,6 @@ unless config_env() == :test do
 
   config :decant, Decant.Repo, database: decant_db, pool_size: 5
 
-  # Watch the source dirs and keep the archive fresh in realtime.
-  config :decant, auto_sync: true
-
   # Run the daemon HTTP client pollers (health check + SSE change-stream).
   # Disabled in :test so the suite never opens network connections.
   config :decant, daemon_client: true

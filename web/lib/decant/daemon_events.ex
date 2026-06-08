@@ -5,10 +5,9 @@ defmodule Decant.DaemonEvents do
   event to the rest of the app.
 
   On every `archive_updated` event it broadcasts `{:archive_updated, report}` on
-  the `"archive"` `Phoenix.PubSub` topic — the *same* message and topic that
-  `Decant.AutoSync` uses — so `DecantWeb.SyncHook` live-reloads connected
-  LiveViews without any change. `report` is a short human string derived from the
-  event (its `ingested` count and `last_sync_at`).
+  the `"archive"` `Phoenix.PubSub` topic that `DecantWeb.SyncHook` subscribes to,
+  so it live-reloads connected LiveViews. `report` is a short human string
+  derived from the event (its `ingested` count and `last_sync_at`).
 
   The actual streaming runs in a monitored, *unlinked* worker process (a
   blocking `Req.get` with `into:` a chunk handler that feeds `ServerSentEvents`).
@@ -35,7 +34,7 @@ defmodule Decant.DaemonEvents do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @doc "PubSub topic broadcast to on archive updates (shared with `Decant.AutoSync`)."
+  @doc "PubSub topic broadcast to on archive updates (subscribed by `DecantWeb.SyncHook`)."
   def topic, do: @topic
 
   @impl true

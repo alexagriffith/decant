@@ -1,7 +1,15 @@
 defmodule DecantWeb.ToolsLiveTest do
-  use DecantWeb.ConnCase, async: true
+  use DecantWeb.ConnCase, async: false
+  use Mimic
 
   import Phoenix.LiveViewTest
+
+  setup :set_mimic_global
+
+  setup do
+    Decant.DaemonStubs.install()
+    :ok
+  end
 
   test "renders the tool usage table with the fixture's built-in tools", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/tools")

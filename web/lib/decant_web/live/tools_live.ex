@@ -49,6 +49,7 @@ defmodule DecantWeb.ToolsLive do
       active={:tools}
       page_title="Tools & MCP"
       syncing={@syncing}
+      daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >
       <div class="space-y-5">

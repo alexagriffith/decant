@@ -1,7 +1,15 @@
 defmodule DecantWeb.SessionLive.SearchTest do
-  use DecantWeb.ConnCase, async: true
+  use DecantWeb.ConnCase, async: false
+  use Mimic
 
   import Phoenix.LiveViewTest
+
+  setup :set_mimic_global
+
+  setup do
+    Decant.DaemonStubs.install()
+    :ok
+  end
 
   test "renders the empty search form", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/search")

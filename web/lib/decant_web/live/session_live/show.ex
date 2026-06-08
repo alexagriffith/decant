@@ -48,6 +48,7 @@ defmodule DecantWeb.SessionLive.Show do
       active={:sessions}
       page_title={@detail.summary.title || "Session"}
       syncing={@syncing}
+      daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >
       <div class="sticky top-14 z-10 -mx-4 border-b border-line bg-canvas/85 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">

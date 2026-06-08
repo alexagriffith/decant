@@ -115,6 +115,7 @@ defmodule DecantWeb.AnalyticsLive do
       active={:analytics}
       page_title="Analytics"
       syncing={@syncing}
+      daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >
       <div class="space-y-5">

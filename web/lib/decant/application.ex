@@ -16,9 +16,7 @@ defmodule Decant.Application do
         {DNSCluster, query: Application.get_env(:decant, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Decant.PubSub},
         # HTTP connection pool for the local decant daemon API.
-        {Finch, name: Decant.Finch},
-        # Realtime: watch the source dirs and keep the archive fresh.
-        Decant.AutoSync
+        {Finch, name: Decant.Finch}
       ] ++
         daemon_client_children() ++
         [
@@ -46,8 +44,8 @@ defmodule Decant.Application do
   end
 
   # The daemon-backed pollers (health + SSE) only run when the client is
-  # enabled. Gated off in :test so the suite never opens network connections
-  # (mirrors how AutoSync is gated via `config :decant, auto_sync`).
+  # enabled. Gated off in :test (via `config :decant, :daemon_client`) so the
+  # suite never opens network connections.
   defp daemon_client_children do
     if Application.get_env(:decant, :daemon_client, false) do
       [Decant.HealthCheck, Decant.DaemonEvents]

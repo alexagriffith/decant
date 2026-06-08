@@ -36,6 +36,7 @@ defmodule DecantWeb.SettingsLive do
       active={:settings}
       page_title="Settings"
       syncing={@syncing}
+      daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >
       <div class="mx-auto max-w-2xl space-y-6">

@@ -1,7 +1,15 @@
 defmodule DecantWeb.SessionLive.ShowTest do
-  use DecantWeb.ConnCase, async: true
+  use DecantWeb.ConnCase, async: false
+  use Mimic
 
   import Phoenix.LiveViewTest
+
+  setup :set_mimic_global
+
+  setup do
+    Decant.DaemonStubs.install()
+    :ok
+  end
 
   test "shows a session's summary and message/block content", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/sessions/1")

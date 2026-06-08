@@ -29,6 +29,7 @@ defmodule DecantWeb.SessionLive.Search do
       active={:search}
       page_title="Search"
       syncing={@syncing}
+      daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >
       <div class="mx-auto max-w-3xl space-y-6">
