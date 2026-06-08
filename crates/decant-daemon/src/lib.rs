@@ -1,5 +1,6 @@
 //! decant-daemon: the long-running service that owns the archive and serves the HTTP API.
 
+pub mod api;
 pub mod auth;
 pub mod config;
 pub mod db;

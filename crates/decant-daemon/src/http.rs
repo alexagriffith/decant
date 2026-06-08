@@ -1,4 +1,7 @@
-use axum::{routing::get, Router};
+use axum::{
+    routing::{get, post},
+    Router,
+};
 use tower_http::trace::TraceLayer;
 
 use crate::db::ReadPool;
@@ -22,9 +25,39 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/ping",
             get(|| async { axum::Json(serde_json::json!({})) }),
         )
+        // Sessions
+        .route("/api/v1/sessions", get(crate::api::sessions::list))
+        .route("/api/v1/sessions/:id", get(crate::api::sessions::detail))
+        // Search
+        .route("/api/v1/search", post(crate::api::search::search))
+        // Analytics
+        .route(
+            "/api/v1/analytics/summary",
+            get(crate::api::analytics::summary),
+        )
+        .route(
+            "/api/v1/analytics/by-dimension",
+            get(crate::api::analytics::by_dimension),
+        )
+        .route(
+            "/api/v1/analytics/activity",
+            get(crate::api::analytics::activity),
+        )
+        .route(
+            "/api/v1/analytics/model-sparklines",
+            get(crate::api::analytics::model_sparklines),
+        )
+        // Tools
+        .route("/api/v1/tools/usage", get(crate::api::tools::usage))
+        .route("/api/v1/tools/mcp-usage", get(crate::api::tools::mcp_usage))
+        // Metadata
         .route(
             "/api/v1/metadata/sync-status",
             get(crate::metadata::sync_status),
+        )
+        .route(
+            "/api/v1/metadata/date-bounds",
+            get(crate::metadata::date_bounds),
         )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
