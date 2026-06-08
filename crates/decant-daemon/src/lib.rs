@@ -2,6 +2,8 @@
 
 pub mod auth;
 pub mod config;
+pub mod health;
+pub mod http;
 pub mod lock;
 
 /// HTTP API contract version, surfaced in the `X-Decant-API-Version` header and `/health`.
