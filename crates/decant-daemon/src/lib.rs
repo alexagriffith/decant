@@ -5,6 +5,7 @@ pub mod config;
 pub mod health;
 pub mod http;
 pub mod lock;
+pub mod middleware;
 
 /// HTTP API contract version, surfaced in the `X-Decant-API-Version` header and `/health`.
 pub const API_VERSION: u32 = 1;

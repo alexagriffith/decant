@@ -22,3 +22,36 @@ async fn health_is_open_and_reports_version() {
     let body: serde_json::Value = res.json().await.unwrap();
     assert_eq!(body["data"]["api_version"], 1);
 }
+
+#[tokio::test]
+async fn protected_route_requires_token_and_good_host() {
+    let (base, _h) = spawn("secret-token").await;
+    let client = reqwest::Client::new();
+
+    // Missing token -> 401
+    let r = client
+        .get(format!("{base}/api/v1/ping"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+
+    // Good token -> 200
+    let r = client
+        .get(format!("{base}/api/v1/ping"))
+        .header("authorization", "Bearer secret-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+
+    // Bad Host header -> 403 (DNS-rebinding defense)
+    let r = client
+        .get(format!("{base}/api/v1/ping"))
+        .header("authorization", "Bearer secret-token")
+        .header("host", "evil.example.com")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403);
+}
