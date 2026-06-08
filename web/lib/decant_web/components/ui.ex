@@ -137,8 +137,8 @@ defmodule DecantWeb.Components.UI do
     """
   end
 
-  # Brand tone for a model id: Claude family -> clay, OpenAI family -> mono.
-  defp brand_tone(model) do
+  @doc "Brand tone for a model id: Claude family -> clay, OpenAI family -> mono, else neutral."
+  def brand_tone(model) do
     case DecantWeb.Components.Icons.brand(model) do
       :claude -> :claude
       :openai -> :openai
@@ -308,16 +308,16 @@ defmodule DecantWeb.Components.UI do
         phx-click="launch"
         phx-value-agent={@default}
         phx-value-prompt={@prompt}
-        class="inline-flex items-center gap-1.5 rounded-l-lg bg-accent px-3 py-1.5 text-sm font-medium text-on-accent transition-colors hover:bg-accent-hover"
+        class="inline-flex items-center gap-1.5 rounded-l-lg border border-r-0 border-line bg-surface px-3 py-1.5 text-sm font-medium text-fg transition-colors hover:bg-elevated"
       >
-        <.icon name="hero-rocket-launch" class="size-4" /> Run in {@default_label}
+        <.tool_icon tool={agent_tool(@default)} class="size-4" /> Run in {@default_label}
       </button>
       <button
         type="button"
         phx-click={JS.toggle(to: "##{@id}-menu")}
         aria-haspopup="true"
         aria-label="Choose another agent"
-        class="grid place-items-center rounded-r-lg border-l border-on-accent/25 bg-accent px-1.5 text-on-accent transition-colors hover:bg-accent-hover"
+        class="grid place-items-center rounded-r-lg border border-line bg-surface px-1.5 text-muted transition-colors hover:bg-elevated hover:text-fg"
       >
         <.icon name="hero-chevron-down" class="size-4" />
       </button>
@@ -473,6 +473,8 @@ defmodule DecantWeb.Components.UI do
     end
   end
 
+  defp spark_color(:claude), do: "text-claude"
+  defp spark_color(:openai), do: "text-muted"
   defp spark_color(:success), do: "text-success"
   defp spark_color(:warning), do: "text-warning"
   defp spark_color(:danger), do: "text-danger"
@@ -480,21 +482,6 @@ defmodule DecantWeb.Components.UI do
   defp spark_color(_), do: "text-accent"
 
   ## tone helpers
-
-  def model_tone(nil), do: :neutral
-
-  def model_tone(model) do
-    m = String.downcase(model)
-
-    cond do
-      String.contains?(m, "opus") -> :accent
-      String.contains?(m, "sonnet") -> :info
-      String.contains?(m, "haiku") -> :success
-      String.contains?(m, "codex") -> :warning
-      String.contains?(m, "gpt") -> :warning
-      true -> :neutral
-    end
-  end
 
   defp tone_soft(:accent), do: "bg-accent/10 text-accent"
   defp tone_soft(:success), do: "bg-success/10 text-success"
@@ -505,6 +492,8 @@ defmodule DecantWeb.Components.UI do
   defp tone_soft(:openai), do: "bg-elevated text-fg"
   defp tone_soft(_), do: "bg-elevated text-muted"
 
+  defp tone_bar(:claude), do: "bg-claude"
+  defp tone_bar(:openai), do: "bg-muted"
   defp tone_bar(:success), do: "bg-success"
   defp tone_bar(:warning), do: "bg-warning"
   defp tone_bar(:danger), do: "bg-danger"

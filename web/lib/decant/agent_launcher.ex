@@ -3,8 +3,8 @@ defmodule Decant.AgentLauncher do
   Turns an Insight into action: opens a coding agent (Claude Code or Codex) in
   the user's preferred terminal, seeded with a prompt, so they can codify a
   Skill on the spot. Also opens a project in the preferred IDE. macOS only
-  (uses `osascript`); elsewhere callers fall back to the copy-able command from
-  `command/2`.
+  (uses `osascript` and `open`); elsewhere callers fall back to the copy-able
+  command from `command/2`.
 
   The seeded prompt is written to a temp file and read with `$(cat …)` so prompt
   text never passes through AppleScript/shell parsing. Agent names, terminals,
@@ -16,7 +16,16 @@ defmodule Decant.AgentLauncher do
     "codex" => %{bin: "codex", label: "Codex"}
   }
 
-  @terminals %{"terminal" => "Terminal", "iterm" => "iTerm"}
+  # Ordered so the settings dropdown is stable. Terminal.app and iTerm are
+  # driven with AppleScript; the rest are launched through their CLI exec flags.
+  @terminals [
+    {"terminal", "Terminal"},
+    {"iterm", "iTerm"},
+    {"ghostty", "Ghostty"},
+    {"wezterm", "WezTerm"},
+    {"kitty", "kitty"},
+    {"alacritty", "Alacritty"}
+  ]
 
   @ides %{
     "vscode" => %{app: "Visual Studio Code", label: "VS Code"},
@@ -30,7 +39,7 @@ defmodule Decant.AgentLauncher do
   def agents, do: Enum.map(@agents, fn {k, %{label: l}} -> {k, l} end)
 
   @doc "Terminals offered in settings: [{key, label}]."
-  def terminals, do: Enum.map(@terminals, fn {k, l} -> {k, l} end)
+  def terminals, do: @terminals
 
   @doc "IDEs offered in settings: [{key, label}]."
   def ides, do: Enum.map(@ides, fn {k, %{label: l}} -> {k, l} end)
@@ -84,13 +93,23 @@ defmodule Decant.AgentLauncher do
     cmd =
       "cd #{shell_quote(dir)} && #{bin} \"$(cat #{shell_quote(tmp)}; rm -f #{shell_quote(tmp)})\""
 
-    terminal = Decant.Settings.value(:terminal, "terminal")
-
-    run("osascript", ["-e", terminal_script(terminal, cmd)])
+    launch_in(Decant.Settings.value(:terminal, "terminal"), cmd)
   end
 
-  # iTerm gets a tailored script; everything else uses Terminal.app.
-  defp terminal_script("iterm", cmd) do
+  # Terminal.app and iTerm are scripted with AppleScript; CLI-capable emulators
+  # run the command through their exec flags via `open -na <App> --args …`.
+  defp launch_in("iterm", cmd), do: run("osascript", ["-e", iterm_script(cmd)])
+  defp launch_in("ghostty", cmd), do: open_args("Ghostty", ["-e", shell(), "-lc", cmd])
+  defp launch_in("alacritty", cmd), do: open_args("Alacritty", ["-e", shell(), "-lc", cmd])
+  defp launch_in("kitty", cmd), do: open_args("kitty", [shell(), "-lc", cmd])
+  defp launch_in("wezterm", cmd), do: open_args("WezTerm", ["start", "--", shell(), "-lc", cmd])
+  defp launch_in(_terminal, cmd), do: run("osascript", ["-e", terminal_app_script(cmd)])
+
+  defp open_args(app, args), do: run("open", ["-na", app, "--args" | args])
+
+  defp shell, do: System.get_env("SHELL") || "/bin/zsh"
+
+  defp iterm_script(cmd) do
     """
     tell application "iTerm"
       activate
@@ -100,7 +119,7 @@ defmodule Decant.AgentLauncher do
     """
   end
 
-  defp terminal_script(_terminal, cmd) do
+  defp terminal_app_script(cmd) do
     """
     tell application "Terminal"
       activate

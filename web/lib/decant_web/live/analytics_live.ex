@@ -258,7 +258,7 @@ defmodule DecantWeb.AnalyticsLive do
                   <td class="px-4 py-2.5">
                     <.sparkline
                       values={@sparks[r.key] || []}
-                      tone={model_tone(r.key)}
+                      tone={brand_tone(r.key)}
                       class="h-6 w-28"
                     />
                   </td>
@@ -271,7 +271,7 @@ defmodule DecantWeb.AnalyticsLive do
                   </td>
                   <td class="px-4 py-2.5 text-right tabular-nums">{money(r.cost)}</td>
                   <td class="w-40 px-4 py-2.5">
-                    <.bar fraction={(r.cost || 0) / @max_cost} tone={model_tone(r.key)} />
+                    <.bar fraction={(r.cost || 0) / @max_cost} tone={brand_tone(r.key)} />
                   </td>
                 </tr>
               </tbody>

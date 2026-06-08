@@ -13,7 +13,7 @@ defmodule Decant.Settings do
   """
 
   @valid_agents ~w(claude codex)
-  @valid_terminals ~w(terminal iterm)
+  @valid_terminals ~w(terminal iterm ghostty wezterm kitty alacritty)
   @valid_ides ~w(vscode cursor zed sublime intellij)
 
   @doc "Effective settings: inferred defaults overlaid with any saved choices."
@@ -50,7 +50,13 @@ defmodule Decant.Settings do
   ## inference
 
   defp detect_terminal do
-    if System.get_env("TERM_PROGRAM") == "iTerm.app", do: "iterm", else: "terminal"
+    case System.get_env("TERM_PROGRAM") do
+      "iTerm.app" -> "iterm"
+      "ghostty" -> "ghostty"
+      "WezTerm" -> "wezterm"
+      "Apple_Terminal" -> "terminal"
+      _ -> if System.get_env("TERM") == "xterm-kitty", do: "kitty", else: "terminal"
+    end
   end
 
   defp detect_ide do
