@@ -2,8 +2,21 @@ use decant_daemon::config::Config;
 
 async fn spawn(token: &str) -> (String, tokio::task::JoinHandle<()>) {
     let cfg = Config::from_values(Some("0".into()), None, None); // port 0 = OS-assigned
+
+    // A real (migrated) temp DB + read pool so AppState is fully built. Leak the
+    // tempdir so the DB outlives the spawned server for the duration of the test.
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let db_path = dir.path().join("d.db");
+    {
+        let conn = decant_core::db::open(&db_path).unwrap();
+        decant_core::schema::migrate(&conn).unwrap();
+    }
+    let read_pool = decant_daemon::db::read_pool(&db_path, 4).unwrap();
+
     let app = decant_daemon::http::router(decant_daemon::http::AppState {
         token: token.to_string(),
+        read_pool,
+        sync_status: decant_daemon::sync_status::SyncStatusHandle::new(),
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
