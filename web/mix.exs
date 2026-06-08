@@ -63,7 +63,8 @@ defmodule Decant.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:contex, "~> 0.5"},
-      {:file_system, "~> 1.0"}
+      {:file_system, "~> 1.0"},
+      {:junit_formatter, "~> 3.4", only: :test, runtime: false}
     ]
   end
 

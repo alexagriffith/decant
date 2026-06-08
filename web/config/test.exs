@@ -30,3 +30,12 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Emit a JUnit XML report for CI test reporting. The file is written to
+# web/report/junit.xml and surfaced in the GitHub UI by the test-reporter step.
+config :junit_formatter,
+  report_dir: Path.expand("../report", __DIR__),
+  report_file: "junit.xml",
+  print_report_file: true,
+  include_filename?: true,
+  include_file_line?: true
