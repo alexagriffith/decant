@@ -8,6 +8,7 @@ pub mod export;
 pub mod ingest;
 pub mod model;
 pub mod query;
+pub mod recommendations;
 pub mod schema;
 pub mod sources;
 pub mod stats;
