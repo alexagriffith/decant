@@ -1,14 +1,8 @@
 import Config
 
-# decant: read the Rust-owned SQLite archive (override with DECANT_DB).
-# This is the data contract between the `decant` CLI (writer) and this app (reader).
+# decant: read all data from the local decant daemon HTTP API. This app never
+# opens SQLite directly (no Ecto, no Repo); the daemon owns the archive.
 unless config_env() == :test do
-  decant_db =
-    System.get_env("DECANT_DB") ||
-      Path.expand("~/Library/Application Support/decant/decant.db")
-
-  config :decant, Decant.Repo, database: decant_db, pool_size: 5
-
   # Run the daemon HTTP client pollers (health check + SSE change-stream).
   # Disabled in :test so the suite never opens network connections.
   config :decant, daemon_client: true
@@ -45,17 +39,6 @@ config :decant, DecantWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
 if config_env() == :prod do
-  database_path =
-    System.get_env("DATABASE_PATH") ||
-      raise """
-      environment variable DATABASE_PATH is missing.
-      For example: /etc/decant/decant.db
-      """
-
-  config :decant, Decant.Repo,
-    database: database_path,
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5")
-
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
   # want to use a different value for prod and you most likely don't want

@@ -8,7 +8,6 @@
 import Config
 
 config :decant,
-  ecto_repos: [Decant.Repo],
   generators: [timestamp_type: :utc_datetime]
 
 # Configure the endpoint

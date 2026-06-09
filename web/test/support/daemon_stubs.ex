@@ -1,8 +1,7 @@
 defmodule Decant.DaemonStubs do
   @moduledoc """
-  Shared Mimic stubs for `Decant.Daemon`, returning canned API payloads
-  equivalent to the committed fixture archive (the same two sessions the old
-  `DataCase`-against-SQLite tests asserted on):
+  Shared Mimic stubs for `Decant.Daemon`, returning canned API payloads for two
+  synthetic sessions the web tests assert on:
 
     * id 1 — "Fix the failing auth test", `claude_code` / `claude-opus-4-7`,
       started 2026-05-01, project `/Users/dev/proj`, 4 messages, one builtin

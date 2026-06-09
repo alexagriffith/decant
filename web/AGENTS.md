@@ -5,20 +5,24 @@ app.
 
 ## decant web app (read this first)
 
-- **Read-only.** This `:decant` app only *reads* the SQLite archive that the
-  Rust CLI owns and writes. Do not write to the DB and do not add Ecto
-  migrations for the archive tables — the schema lives in
-  `crates/decant-core/src/schema_v1.sql`. `Decant.Archive` issues raw SQL and
-  returns plain maps; follow that pattern rather than defining Ecto schemas.
-- **DB location.** `config/runtime.exs` reads `DECANT_DB` (default
-  `~/Library/Application Support/decant/decant.db`) and intentionally skips the
-  Repo config in `:test`. Tests are wired in `config/test.exs` to point
-  `Decant.Repo` at the committed fixture `test/fixtures/decant.db` (a tiny
-  synthetic archive — regenerate it with the CLI; never point tests at a real
-  archive).
+- **Daemon-backed, never opens SQLite.** This `:decant` app reads *all* of its
+  data from the local decant daemon over HTTP — `Decant.Daemon` is the only
+  data source and `Decant.Archive` calls it and returns plain maps. There is no
+  Ecto and no `Decant.Repo`; the daemon owns the SQLite archive (schema in
+  `crates/decant-core/src/schema_v1.sql`). Do not add Ecto, a Repo, or any
+  direct DB access here — keep the "Phoenix never opens SQLite" invariant.
+- **Daemon location.** `config/runtime.exs` enables the daemon HTTP pollers
+  outside `:test` and configures `config :decant, :daemon` from
+  `DECANT_DAEMON_URL` (default `http://127.0.0.1:4577`) and
+  `DECANT_DAEMON_TOKEN` (or `~/.decant/daemon.token`).
+- **Tests** mock `Decant.Daemon` directly via Mimic (`Decant.DaemonStubs`,
+  installed from a test's `setup`); there is no fixture DB and no sandbox. The
+  daemon pollers are disabled in `:test` (`config :decant, daemon_client:
+  false`) so the suite never opens a network connection.
 - **Commands** (from `web/`): `mix deps.get`, `mix test`,
   `mix format --check-formatted`, `mix compile --warnings-as-errors`,
-  `DECANT_DB=/path/decant.db mix phx.server`.
+  `mix phx.server` (point it at a running daemon via `DECANT_DAEMON_URL` /
+  `DECANT_DAEMON_TOKEN` as needed).
 - Don't trigger the "Sync now" button in tests; it shells out to the `decant`
   binary via `System.cmd`. The analytics chart (contex SVG) degrades to `nil`;
   don't assert on the SVG.
@@ -143,18 +147,6 @@ custom classes must fully style the input
 
 - `Phoenix.View` no longer is needed or included with Phoenix, don't use it
 <!-- phoenix:phoenix-end -->
-
-<!-- phoenix:ecto-start -->
-## Ecto Guidelines
-
-- **Always** preload Ecto associations in queries when they'll be accessed in templates, ie a message that needs to reference the `message.user.email`
-- Remember `import Ecto.Query` and other supporting modules when you write `seeds.exs`
-- `Ecto.Schema` fields always use the `:string` type, even for `:text`, columns, ie: `field :name, :string`
-- `Ecto.Changeset.validate_number/2` **DOES NOT SUPPORT the `:allow_nil` option**. By default, Ecto validations only run if a change for the given field exists and the change value is not nil, so such as option is never needed
-- You **must** use `Ecto.Changeset.get_field(changeset, :field)` to access changeset fields
-- Fields which are set programmatically, such as `user_id`, must not be listed in `cast` calls or similar for security purposes. Instead they must be explicitly set when creating the struct
-- **Always** invoke `mix ecto.gen.migration migration_name_using_underscores` when generating migration files, so the correct timestamp and conventions are applied
-<!-- phoenix:ecto-end -->
 
 <!-- phoenix:html-start -->
 ## Phoenix HTML guidelines

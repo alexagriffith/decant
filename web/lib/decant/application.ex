@@ -10,9 +10,6 @@ defmodule Decant.Application do
     children =
       [
         DecantWeb.Telemetry,
-        Decant.Repo,
-        {Ecto.Migrator,
-         repos: Application.fetch_env!(:decant, :ecto_repos), skip: skip_migrations?()},
         {DNSCluster, query: Application.get_env(:decant, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Decant.PubSub},
         # HTTP connection pool for the local decant daemon API.
@@ -36,11 +33,6 @@ defmodule Decant.Application do
   def config_change(changed, _new, removed) do
     DecantWeb.Endpoint.config_change(changed, removed)
     :ok
-  end
-
-  defp skip_migrations?() do
-    # By default, sqlite migrations are run when using a release
-    System.get_env("RELEASE_NAME") == nil
   end
 
   # The daemon-backed pollers (health + SSE) only run when the client is

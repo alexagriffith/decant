@@ -1,17 +1,9 @@
 import Config
 
-# Configure the database.
-#
-# The archive schema is owned and written by the external Rust `decant` CLI;
-# this app only reads it. Tests run against a committed read-only fixture DB,
-# so we use a normal pool (NOT Ecto.Adapters.SQL.Sandbox) — there are no
-# Ecto-managed migrations and no writes to roll back.
-config :decant, Decant.Repo,
-  database: Path.expand("../test/fixtures/decant.db", __DIR__),
-  pool_size: 5
-
-# Don't run the daemon HTTP client pollers in tests — they would open real
-# network connections. Tests mock `Decant.Daemon` directly via Mimic.
+# This app reads everything from the local decant daemon HTTP API; it never
+# opens SQLite (no Ecto, no Repo). Don't run the daemon HTTP client pollers in
+# tests — they would open real network connections. Tests mock `Decant.Daemon`
+# directly via Mimic.
 config :decant, daemon_client: false
 
 # We don't run a server during test. If one is required,

@@ -5,13 +5,13 @@ defmodule DecantWeb.ConnCase do
 
   Such tests rely on `Phoenix.ConnTest` and also
   import other functionality to make it easier
-  to build common data structures and query the data layer.
+  to build common data structures.
 
-  The archive DB is an external, read-only SQLite fixture (its schema is owned
-  by the Rust `decant` CLI). This app only reads it, so there is no Ecto SQL
-  Sandbox to set up or tear down — tests share the same read-only connection
-  pool. Because every test only reads the fixture, cases may safely run with
-  `async: true`.
+  This app reads all its data from the local decant daemon HTTP API and never
+  opens SQLite (no Ecto, no Repo). Tests stub `Decant.Daemon` via Mimic (see
+  `Decant.DaemonStubs`), so there is no database connection or sandbox to set
+  up. Cases that install the stub in synchronous (global) Mimic mode must use
+  `async: false`; otherwise they may run with `async: true`.
   """
 
   use ExUnit.CaseTemplate

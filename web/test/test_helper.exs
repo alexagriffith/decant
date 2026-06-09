@@ -1,6 +1,6 @@
 ExUnit.start()
-# The archive DB is an external, read-only SQLite fixture (schema owned by the
-# Rust `decant` CLI). Tests only read, so we do NOT use the Ecto SQL Sandbox.
+# This app reads all its data from the local decant daemon HTTP API; it never
+# opens SQLite (no Ecto, no Repo), so there is no database sandbox to set up.
 
 # Mimic: make these modules mockable so the daemon-client tests can stub the
 # HTTP layer (and `Decant.Daemon.health/0`) without any network access.
