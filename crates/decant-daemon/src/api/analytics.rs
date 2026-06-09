@@ -77,7 +77,7 @@ pub async fn by_dimension(
     let filters_json = filters.as_json();
 
     let page = with_read_conn(&state.read_pool, move |conn| {
-        query::by_dimension(conn, dim, &filters, limit, cursor)
+        query::by_dimension(conn, dim, &filters, limit, cursor, None)
     })
     .await?;
 

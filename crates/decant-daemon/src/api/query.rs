@@ -603,6 +603,14 @@ pub struct DimRow {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub estimated_cost_usd: f64,
+    /// Rolled-up project rows only: number of distinct worktrees folded in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_count: Option<i64>,
+    /// Per-worktree leaf rows only (project dimension with `root` set).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_tool: Option<String>,
 }
 
 #[derive(Debug)]
@@ -627,22 +635,39 @@ pub fn parse_dimension(s: Option<&str>) -> Result<Dimension, ApiError> {
 /// Per-dimension rollup scoped to `filters`, ordered by session count desc, then
 /// key asc as a stable tie-breaker for offset pagination of high-cardinality
 /// dimensions (project/day/model). The cursor carries the offset in `rowid`.
+///
+/// The project dimension rolls worktrees up under their resolved `root_path` and
+/// reports how many were folded in; passing `root` switches to the per-worktree
+/// leaf breakdown scoped to that root (one row per project path under it).
 pub fn by_dimension(
     conn: &Connection,
     dim: Dimension,
     filters: &Filters,
     limit: i64,
     cursor: Option<Cursor>,
+    root: Option<&str>,
 ) -> Result<DimPage, ApiError> {
-    let (expr, join) = match dim {
-        Dimension::Tool => ("s.tool", ""),
-        Dimension::Model => ("COALESCE(s.model, '(unknown)')", ""),
-        Dimension::Project => (
+    let project_leaf = matches!(dim, Dimension::Project) && root.is_some();
+
+    // (group expr, join, three trailing select columns, optional leading predicate)
+    let (expr, join, extra_cols, root_pred): (&str, &str, &str, &str) = match dim {
+        Dimension::Tool => ("s.tool", "", "NULL, NULL, NULL", ""),
+        Dimension::Model => ("COALESCE(s.model, '(unknown)')", "", "NULL, NULL, NULL", ""),
+        Dimension::Project if project_leaf => (
             "COALESCE(p.path, '(none)')",
-            "LEFT JOIN project p ON p.id = s.project_id",
+            "JOIN project p ON p.id = s.project_id",
+            "NULL, MAX(p.worktree_label), MAX(p.worktree_tool)",
+            "p.root_path = ? AND ",
         ),
-        Dimension::Day => ("substr(s.started_at, 1, 10)", ""),
+        Dimension::Project => (
+            "COALESCE(p.root_path, p.path, '(none)')",
+            "LEFT JOIN project p ON p.id = s.project_id",
+            "COUNT(DISTINCT CASE WHEN p.is_worktree = 1 THEN p.id END), NULL, NULL",
+            "",
+        ),
+        Dimension::Day => ("substr(s.started_at, 1, 10)", "", "NULL, NULL, NULL", ""),
     };
+
     let where_c = filters.where_clause();
     let offset = cursor.as_ref().map(|c| c.rowid.max(0)).unwrap_or(0);
 
@@ -650,12 +675,18 @@ pub fn by_dimension(
         "SELECT {expr} AS k, COUNT(*) AS sessions, \
                 COALESCE(SUM(s.total_input_tokens),0), \
                 COALESCE(SUM(s.total_output_tokens),0), \
-                COALESCE(SUM(s.estimated_cost_usd),0.0) \
-         FROM session s {join} WHERE {} \
+                COALESCE(SUM(s.estimated_cost_usd),0.0), \
+                {extra_cols} \
+         FROM session s {join} WHERE {root_pred}{} \
          GROUP BY k ORDER BY sessions DESC, k ASC LIMIT ? OFFSET ?",
         where_c.sql
     );
-    let mut params: Vec<SqlValue> = where_c.params.clone();
+
+    let mut params: Vec<SqlValue> = Vec::new();
+    if project_leaf {
+        params.push(SqlValue::Text(root.unwrap().to_string()));
+    }
+    params.extend(where_c.params.clone());
     params.push(SqlValue::Integer(limit + 1));
     params.push(SqlValue::Integer(offset));
 
@@ -668,6 +699,9 @@ pub fn by_dimension(
                 input_tokens: r.get(2)?,
                 output_tokens: r.get(3)?,
                 estimated_cost_usd: r.get(4)?,
+                worktree_count: r.get::<_, Option<i64>>(5)?,
+                worktree_label: r.get::<_, Option<String>>(6)?,
+                worktree_tool: r.get::<_, Option<String>>(7)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -682,14 +716,19 @@ pub fn by_dimension(
         None
     };
 
-    // Distinct-group total for the dimension under the filters.
+    // Distinct-group total for the dimension under the same scope.
     let total_sql = format!(
-        "SELECT COUNT(*) FROM (SELECT {expr} AS k FROM session s {join} WHERE {} GROUP BY k)",
+        "SELECT COUNT(*) FROM (SELECT {expr} AS k FROM session s {join} WHERE {root_pred}{} GROUP BY k)",
         where_c.sql
     );
+    let mut total_params: Vec<SqlValue> = Vec::new();
+    if project_leaf {
+        total_params.push(SqlValue::Text(root.unwrap().to_string()));
+    }
+    total_params.extend(where_c.params.clone());
     let total_count: i64 = conn.query_row(
         &total_sql,
-        rusqlite::params_from_iter(where_c.params.iter()),
+        rusqlite::params_from_iter(total_params.iter()),
         |r| r.get(0),
     )?;
 
@@ -1136,7 +1175,8 @@ mod tests {
     #[test]
     fn by_dimension_tool_rollup() {
         let conn = seeded();
-        let page = by_dimension(&conn, Dimension::Tool, &Filters::default(), 50, None).unwrap();
+        let page =
+            by_dimension(&conn, Dimension::Tool, &Filters::default(), 50, None, None).unwrap();
         assert_eq!(page.total_count, 2);
         let keys: Vec<_> = page.rows.iter().map(|r| r.key.as_str()).collect();
         assert!(keys.contains(&"codex"));
@@ -1184,5 +1224,82 @@ mod tests {
         let b = date_bounds(&conn).unwrap();
         assert_eq!(b.min.as_deref(), Some("2026-05-01"));
         assert_eq!(b.max.as_deref(), Some("2026-05-02"));
+    }
+}
+
+#[cfg(test)]
+mod worktree_tests {
+    use super::*;
+    use decant_core::{db, schema};
+
+    fn seed() -> Connection {
+        let conn = db::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO project(id, path, name, is_worktree, root_path, worktree_label, worktree_tool, root_source)
+             VALUES
+               (1, '/home/x/dosu/dosu', 'dosu', 0, '/home/x/dosu/dosu', NULL, NULL, 'self'),
+               (2, '/home/x/.warp-worktrees/dosu-agate-spire', 'dosu-agate-spire', 1,
+                   '/home/x/dosu/dosu', 'agate-spire', 'warp', 'namematch');
+             INSERT INTO session(id, tool, source_session_id, project_id, started_at,
+                                 total_input_tokens, total_output_tokens, estimated_cost_usd)
+             VALUES
+               (1, 'claude_code', 's1', 1, '2026-06-01', 10, 5, 1.0),
+               (2, 'claude_code', 's2', 2, '2026-06-02', 20, 10, 2.0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn project_dim_rolls_worktrees_under_root() {
+        let conn = seed();
+        let page = by_dimension(
+            &conn,
+            Dimension::Project,
+            &Filters::default(),
+            50,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(page.rows.len(), 1, "two paths collapse into one root row");
+        let row = &page.rows[0];
+        assert_eq!(row.key, "/home/x/dosu/dosu");
+        assert_eq!(row.sessions, 2);
+        assert!((row.estimated_cost_usd - 3.0).abs() < 1e-9);
+        assert_eq!(row.worktree_count, Some(1));
+        assert_eq!(row.worktree_label, None);
+    }
+
+    #[test]
+    fn project_dim_root_param_lists_per_worktree_leaves() {
+        let conn = seed();
+        let page = by_dimension(
+            &conn,
+            Dimension::Project,
+            &Filters::default(),
+            50,
+            None,
+            Some("/home/x/dosu/dosu"),
+        )
+        .unwrap();
+        assert_eq!(page.rows.len(), 2, "root checkout + one worktree");
+        let wt = page
+            .rows
+            .iter()
+            .find(|r| r.key.contains("agate-spire"))
+            .unwrap();
+        assert_eq!(wt.worktree_label.as_deref(), Some("agate-spire"));
+        assert_eq!(wt.worktree_tool.as_deref(), Some("warp"));
+        assert_eq!(wt.worktree_count, None);
+    }
+
+    #[test]
+    fn non_project_dim_has_no_worktree_fields() {
+        let conn = seed();
+        let page =
+            by_dimension(&conn, Dimension::Tool, &Filters::default(), 50, None, None).unwrap();
+        assert!(page.rows.iter().all(|r| r.worktree_count.is_none()));
     }
 }
