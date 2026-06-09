@@ -231,6 +231,7 @@ paths:
         - $ref: "#/components/parameters/Tool"
         - $ref: "#/components/parameters/Model"
         - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Root"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -576,6 +577,14 @@ components:
       in: query
       description: Project path (exact match).
       schema: { type: string }
+    Root:
+      name: root
+      in: query
+      description: >
+        Project dimension only. When set, scope the rollup to this resolved root
+        project path and return one row per worktree (the root checkout plus each
+        worktree) instead of the rolled-up root row.
+      schema: { type: string }
     Limit:
       name: limit
       in: query
@@ -812,11 +821,20 @@ components:
       properties:
         key:
           type: string
-          description: The dimension value (tool name, model, project path, or day).
+          description: The dimension value (tool, model, day, or — for project — the resolved root path / per-worktree leaf path).
         sessions: { type: integer }
         input_tokens: { type: integer }
         output_tokens: { type: integer }
         estimated_cost_usd: { type: number }
+        worktree_count:
+          type: integer
+          description: Project dimension rolled-up rows only — distinct worktrees folded into this root (0 when none). Omitted for other dimensions and for leaf rows.
+        worktree_label:
+          type: string
+          description: Project dimension leaf rows only (with `root` set) — the worktree's label. Omitted otherwise.
+        worktree_tool:
+          type: string
+          description: Project dimension leaf rows only — the worktree tool (warp|t3|conductor|claude|git). Omitted otherwise.
       required: [key, sessions, input_tokens, output_tokens, estimated_cost_usd]
 
     Activity:
