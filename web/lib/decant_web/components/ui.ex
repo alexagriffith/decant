@@ -297,13 +297,20 @@ defmodule DecantWeb.Components.UI do
     default: nil,
     doc: "recommendation key to mark implemented after launch"
 
+  attr :compact, :boolean, default: false, doc: "denser button for inline list rows"
+
   def agent_cta(assigns) do
     assigns =
-      assign(
-        assigns,
+      assigns
+      |> assign(
         :default_label,
         Enum.find_value(assigns.agents, "agent", fn {k, l} -> if k == assigns.default, do: l end)
       )
+      # Recommendation keys carry colons ("signal:error:Bash"), and "#id" with a
+      # colon is an invalid CSS selector — JS.toggle/JS.hide would throw and the
+      # menu would never open. Sanitize to [A-Za-z0-9_-] before it ever reaches a
+      # selector; the element id and every selector below derive from this.
+      |> assign(:safe_id, String.replace(assigns.id, ~r/[^A-Za-z0-9_-]/, "-"))
 
     ~H"""
     <div :if={@can_launch} class="relative inline-flex">
@@ -313,30 +320,33 @@ defmodule DecantWeb.Components.UI do
         phx-value-agent={@default}
         phx-value-prompt={@prompt}
         phx-value-key={@mark_key}
-        class="inline-flex items-center gap-1.5 rounded-l-lg border border-r-0 border-line bg-surface px-3 py-1.5 text-sm font-medium text-fg transition-colors hover:bg-elevated"
+        class={[
+          "inline-flex items-center gap-1.5 rounded-l-lg border border-r-0 border-line bg-surface font-medium text-fg transition-colors hover:bg-elevated",
+          (@compact && "px-2.5 py-1 text-xs") || "px-3 py-1.5 text-sm"
+        ]}
       >
-        <.tool_icon tool={agent_tool(@default)} class="size-4" /> Run in {@default_label}
+        <.tool_icon tool={agent_tool(@default)} class={(@compact && "size-3.5") || "size-4"} />
+        {(@compact && "Run") || "Run in #{@default_label}"}
       </button>
       <button
         type="button"
-        phx-click={JS.toggle(to: "##{@id}-menu")}
+        phx-click={JS.toggle(to: "##{@safe_id}-menu")}
         aria-haspopup="true"
         aria-label="Choose another agent"
         class="grid place-items-center rounded-r-lg border border-line bg-surface px-1.5 text-muted transition-colors hover:bg-elevated hover:text-fg"
       >
-        <.icon name="hero-chevron-down" class="size-4" />
+        <.icon name="hero-chevron-down" class={(@compact && "size-3.5") || "size-4"} />
       </button>
       <div
-        id={"#{@id}-menu"}
-        hidden
-        phx-click-away={JS.hide(to: "##{@id}-menu")}
-        class="absolute top-full right-0 z-20 mt-1 w-44 overflow-hidden rounded-lg border border-line bg-overlay py-1 shadow-lg"
+        id={"#{@safe_id}-menu"}
+        phx-click-away={JS.hide(to: "##{@safe_id}-menu")}
+        class="absolute top-full right-0 z-20 mt-1 hidden w-44 overflow-hidden rounded-lg border border-line bg-overlay py-1 shadow-lg"
       >
         <button
           :for={{key, label} <- @agents}
           type="button"
           phx-click={
-            JS.hide(to: "##{@id}-menu")
+            JS.hide(to: "##{@safe_id}-menu")
             |> JS.push("launch", value: %{agent: key, prompt: @prompt, key: @mark_key})
           }
           class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-fg hover:bg-elevated"
@@ -348,14 +358,13 @@ defmodule DecantWeb.Components.UI do
 
     <.copy_button
       :if={!@can_launch}
-      id={"#{@id}-copy"}
+      id={"#{@safe_id}-copy"}
       text={@prompt}
       title="Copy the setup prompt"
     />
     """
   end
 
-  # Map an agent key to the tool id its brand mark is keyed on.
   defp agent_tool("claude"), do: "claude_code"
   defp agent_tool(_), do: "codex"
 
@@ -486,8 +495,6 @@ defmodule DecantWeb.Components.UI do
   defp spark_color(:danger), do: "text-danger"
   defp spark_color(:info), do: "text-info"
   defp spark_color(_), do: "text-accent"
-
-  ## tone helpers
 
   defp tone_soft(:accent), do: "bg-accent/10 text-accent"
   defp tone_soft(:success), do: "bg-success/10 text-success"
