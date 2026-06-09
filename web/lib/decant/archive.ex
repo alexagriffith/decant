@@ -141,7 +141,10 @@ defmodule Decant.Archive do
             sessions: r["sessions"] || 0,
             input_tokens: r["input_tokens"] || 0,
             output_tokens: r["output_tokens"] || 0,
-            cost: r["estimated_cost_usd"] || 0.0
+            cost: r["estimated_cost_usd"] || 0.0,
+            worktree_count: r["worktree_count"],
+            worktree_label: r["worktree_label"],
+            worktree_tool: r["worktree_tool"]
           }
         end)
 
@@ -253,7 +256,8 @@ defmodule Decant.Archive do
       to: iso_date(Map.get(filters, :to)),
       tool: present(Map.get(filters, :tool)),
       model: present(Map.get(filters, :model)),
-      project: present(Map.get(filters, :project))
+      project: present(Map.get(filters, :project)),
+      root: present(Map.get(filters, :root))
     ]
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
   end
