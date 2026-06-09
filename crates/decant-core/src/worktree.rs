@@ -7,6 +7,8 @@
 //! `resolve_worktree_roots` (added in later tasks) are the only parts that touch
 //! the filesystem / DB.
 
+use std::path::Path;
+
 /// Confidence tier of a root resolution; also the value stored in
 /// `project.root_source`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +203,50 @@ fn strip_codename(tool: &str, leaf: &str) -> String {
     }
 }
 
+/// Authoritative resolution for a *live* worktree: if `<dir>/.git` is a regular
+/// file pointing at `<root>/.git/worktrees/<name>`, return that root. Returns
+/// `None` for a main checkout (`.git` is a directory), a missing dir, or a
+/// non-worktree pointer (e.g. a submodule). Touches the filesystem.
+pub fn resolve_git_root(dir: &Path) -> Option<Resolution> {
+    let dotgit = dir.join(".git");
+    if !dotgit.is_file() {
+        return None; // .git dir = main checkout; absent = not a repo
+    }
+    let content = std::fs::read_to_string(&dotgit).ok()?;
+    let target = content
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("gitdir:"))?
+        .trim();
+    let marker = "/.git/worktrees/";
+    let idx = target.rfind(marker)?;
+    let root_path = target[..idx].to_string();
+    let name = target[idx + marker.len()..].trim_end_matches('/');
+    if root_path.is_empty() || name.is_empty() {
+        return None;
+    }
+    Some(Resolution {
+        is_worktree: true,
+        root_path,
+        worktree_label: Some(name.to_string()),
+        worktree_tool: Some(infer_tool(&dir.to_string_lossy()).to_string()),
+        source: RootSource::Git,
+    })
+}
+
+/// Infer the worktree tool from the worktree's own path (container or in-tree
+/// segment), defaulting to plain `git`.
+pub fn infer_tool(path: &str) -> &'static str {
+    if let Some((tool, _)) = external_container(path) {
+        return tool;
+    }
+    let (_, segs) = segments(path);
+    if segs.contains(&".claude-worktrees") {
+        "claude"
+    } else {
+        "git"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,5 +428,38 @@ mod tests {
         assert_eq!(basename("/u/x/dosu/"), "dosu");
         assert_eq!(basename("dosu"), "dosu");
         assert_eq!(basename(""), "");
+    }
+
+    #[test]
+    fn git_pointer_file_resolves_authoritative_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wt = tmp.path().join("agate-spire");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(
+            wt.join(".git"),
+            "gitdir: /Users/onlydole/dosu/dosu/.git/worktrees/agate-spire\n",
+        )
+        .unwrap();
+        let r = resolve_git_root(&wt).unwrap();
+        assert!(r.is_worktree);
+        assert_eq!(r.root_path, "/Users/onlydole/dosu/dosu");
+        assert_eq!(r.worktree_label.as_deref(), Some("agate-spire"));
+        assert_eq!(r.source, RootSource::Git);
+    }
+
+    #[test]
+    fn git_directory_is_main_checkout_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        assert!(resolve_git_root(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn missing_or_non_worktree_git_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(resolve_git_root(tmp.path()).is_none()); // no .git at all
+                                                         // a submodule-style pointer is not a worktree we roll up
+        std::fs::write(tmp.path().join(".git"), "gitdir: ../.git/modules/foo\n").unwrap();
+        assert!(resolve_git_root(tmp.path()).is_none());
     }
 }
