@@ -7,6 +7,8 @@
 //! `resolve_worktree_roots` (added in later tasks) are the only parts that touch
 //! the filesystem / DB.
 
+use crate::Result;
+use rusqlite::{params, Connection};
 use std::path::Path;
 
 /// Confidence tier of a root resolution; also the value stored in
@@ -239,6 +241,135 @@ pub fn resolve_git_root(dir: &Path) -> Option<Resolution> {
     })
 }
 
+/// Resolve and persist root/worktree identity for every project. Idempotent;
+/// operates on the `project` table plus cheap per-path filesystem stats. Rows
+/// already locked at `root_source = 'git'` are left untouched (the worktree may
+/// since have been deleted; we trust the earlier authoritative read).
+pub fn resolve_worktree_roots(conn: &Connection) -> Result<()> {
+    struct Proj {
+        id: i64,
+        path: String,
+        is_worktree: i64,
+        root_path: Option<String>,
+        source: Option<String>,
+        sessions: i64,
+        last_seen: Option<String>,
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.path, p.is_worktree, p.root_path, p.root_source,
+                COUNT(s.id), MAX(s.started_at)
+         FROM project p LEFT JOIN session s ON s.project_id = p.id
+         GROUP BY p.id",
+    )?;
+    let projs: Vec<Proj> = stmt
+        .query_map([], |r| {
+            Ok(Proj {
+                id: r.get(0)?,
+                path: r.get(1)?,
+                is_worktree: r.get(2)?,
+                root_path: r.get(3)?,
+                source: r.get(4)?,
+                sessions: r.get(5)?,
+                last_seen: r.get(6)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    // Pass A: git / intree / self; defer externals. Accumulate known roots from
+    // every non-deferred project's resolved root_path (so a root discovered only
+    // via an in-tree/git worktree is still a name-match target).
+    let mut writes: Vec<(i64, Resolution)> = Vec::new();
+    let mut deferred: Vec<(i64, String, &'static str, String)> = Vec::new();
+    let mut roots: std::collections::HashMap<String, (i64, Option<String>)> =
+        std::collections::HashMap::new();
+    let mut note_root = |rp: &str, sessions: i64, last: &Option<String>| {
+        let e = roots.entry(rp.to_string()).or_insert((0, None));
+        e.0 += sessions;
+        if last > &e.1 {
+            e.1 = last.clone();
+        }
+    };
+
+    for p in &projs {
+        // Locked authoritative result: contribute its root, never rewrite.
+        if p.source.as_deref() == Some("git") {
+            let rp = p.root_path.clone().unwrap_or_else(|| p.path.clone());
+            note_root(&rp, p.sessions, &p.last_seen);
+            continue;
+        }
+        if let Some(res) = resolve_git_root(Path::new(&p.path)) {
+            note_root(&res.root_path, p.sessions, &p.last_seen);
+            writes.push((p.id, res));
+            continue;
+        }
+        if let Some(res) = classify_intree(&p.path) {
+            note_root(&res.root_path, p.sessions, &p.last_seen);
+            writes.push((p.id, res));
+            continue;
+        }
+        if let Some((tool, leaf)) = external_container(&p.path) {
+            deferred.push((p.id, p.path.clone(), tool, leaf));
+            continue;
+        }
+        // Self root.
+        note_root(&p.path, p.sessions, &p.last_seen);
+        writes.push((
+            p.id,
+            Resolution {
+                is_worktree: false,
+                root_path: p.path.clone(),
+                worktree_label: None,
+                worktree_tool: None,
+                source: RootSource::SelfRoot,
+            },
+        ));
+    }
+
+    let known: Vec<KnownRoot> = roots
+        .into_iter()
+        .map(|(path, (sessions, last_seen))| KnownRoot {
+            basename: basename(&path),
+            path,
+            sessions,
+            last_seen,
+        })
+        .collect();
+
+    // Pass B: external worktrees, now that roots are known.
+    for (id, path, tool, leaf) in &deferred {
+        writes.push((*id, classify_external(tool, leaf, path, &known)));
+    }
+
+    // Write back. Skip no-op writes to keep this cheap on steady-state DBs.
+    let tx = conn.unchecked_transaction()?;
+    for (id, res) in &writes {
+        let p = projs.iter().find(|p| p.id == *id).unwrap();
+        let unchanged = p.is_worktree == res.is_worktree as i64
+            && p.root_path.as_deref() == Some(res.root_path.as_str())
+            && p.source.as_deref() == Some(res.source.as_str());
+        if unchanged {
+            continue;
+        }
+        tx.execute(
+            "UPDATE project
+                SET is_worktree = ?2, root_path = ?3, worktree_label = ?4,
+                    worktree_tool = ?5, root_source = ?6
+              WHERE id = ?1",
+            params![
+                id,
+                res.is_worktree as i64,
+                res.root_path,
+                res.worktree_label,
+                res.worktree_tool,
+                res.source.as_str(),
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Infer the worktree tool from the worktree's own path (container or in-tree
 /// segment), defaulting to plain `git`.
 pub fn infer_tool(path: &str) -> &'static str {
@@ -256,6 +387,7 @@ pub fn infer_tool(path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{db, schema};
 
     #[test]
     fn intree_claude_worktree_recovers_root_and_label() {
@@ -504,5 +636,43 @@ mod tests {
         let r = resolve_git_root(&wt).unwrap();
         assert_eq!(r.root_path, "/Users/x/repo");
         assert_eq!(r.worktree_label.as_deref(), Some("wt"));
+    }
+
+    #[test]
+    fn resolve_links_intree_and_external_worktrees_to_roots() {
+        let conn = db::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        // Synthetic, guaranteed-nonexistent paths so git resolution is skipped
+        // and the string heuristics drive the result.
+        conn.execute_batch(
+            "INSERT INTO project(path, name) VALUES ('/home/x/dosu/dosu', 'dosu');
+             INSERT INTO project(path, name) VALUES
+               ('/home/x/dosu/dosu/.claude-worktrees/teedole-ops-39', 'teedole-ops-39');
+             INSERT INTO project(path, name) VALUES
+               ('/home/x/.warp-worktrees/dosu-agate-spire', 'dosu-agate-spire');",
+        )
+        .unwrap();
+
+        resolve_worktree_roots(&conn).unwrap();
+
+        let row = |path: &str| -> (i64, String, Option<String>, Option<String>) {
+            conn.query_row(
+                "SELECT is_worktree, root_path, worktree_tool, root_source FROM project WHERE path = ?1",
+                [path],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            row("/home/x/dosu/dosu"),
+            (0, "/home/x/dosu/dosu".into(), None, Some("self".into()))
+        );
+        let (iw, rp, tool, src) = row("/home/x/dosu/dosu/.claude-worktrees/teedole-ops-39");
+        assert_eq!((iw, rp.as_str(), tool.as_deref(), src.as_deref()),
+                   (1, "/home/x/dosu/dosu", Some("claude"), Some("intree")));
+        let (iw2, rp2, tool2, src2) = row("/home/x/.warp-worktrees/dosu-agate-spire");
+        assert_eq!((iw2, rp2.as_str(), tool2.as_deref(), src2.as_deref()),
+                   (1, "/home/x/dosu/dosu", Some("warp"), Some("namematch")));
     }
 }

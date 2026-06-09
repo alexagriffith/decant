@@ -3,7 +3,12 @@ CREATE TABLE IF NOT EXISTS project (
   path TEXT UNIQUE NOT NULL,
   name TEXT,
   first_seen_at TEXT,
-  last_seen_at TEXT
+  last_seen_at TEXT,
+  is_worktree INTEGER NOT NULL DEFAULT 0,
+  root_path TEXT,
+  worktree_label TEXT,
+  worktree_tool TEXT,
+  root_source TEXT
 );
 
 CREATE TABLE IF NOT EXISTS session (
