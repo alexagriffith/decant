@@ -160,7 +160,10 @@ then `root_path = <X>`, `worktree_label = <name>`, `is_worktree = true`,
 `source = Git`. (`worktree_tool` is inferred from `dir`'s container, else `git`.) If
 `<dir>/.git` is a directory, `dir` is a main checkout → root (`is_worktree = false`).
 If `<dir>` does not exist or has no `.git`, returns `None` and the orchestrator falls
-back to the string classifiers (`classify_intree` / `external_container`).
+back to the string classifiers (`classify_intree` / `external_container`). Relative
+`gitdir:` targets (git ≥ 2.48 `worktree.useRelativePaths`) also return `None` — a
+relative root would be a junk grouping key, so heuristics handle those worktrees
+instead.
 
 ### 4.3 Orchestrator
 

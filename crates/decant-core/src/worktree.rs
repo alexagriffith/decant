@@ -217,6 +217,12 @@ pub fn resolve_git_root(dir: &Path) -> Option<Resolution> {
         .lines()
         .find_map(|l| l.trim().strip_prefix("gitdir:"))?
         .trim();
+    // git ≥ 2.48 can write relative pointers (worktree.useRelativePaths); a
+    // relative root would be a junk grouping key, so fall back to the string
+    // classifiers instead of locking it in as authoritative.
+    if !Path::new(target).is_absolute() {
+        return None;
+    }
     let marker = "/.git/worktrees/";
     let idx = target.rfind(marker)?;
     let root_path = target[..idx].to_string();
@@ -444,6 +450,7 @@ mod tests {
         assert!(r.is_worktree);
         assert_eq!(r.root_path, "/Users/onlydole/dosu/dosu");
         assert_eq!(r.worktree_label.as_deref(), Some("agate-spire"));
+        assert_eq!(r.worktree_tool.as_deref(), Some("git"));
         assert_eq!(r.source, RootSource::Git);
     }
 
@@ -461,5 +468,41 @@ mod tests {
                                                          // a submodule-style pointer is not a worktree we roll up
         std::fs::write(tmp.path().join(".git"), "gitdir: ../.git/modules/foo\n").unwrap();
         assert!(resolve_git_root(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn git_pointer_in_external_container_infers_container_tool() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wt = tmp.path().join(".warp-worktrees/dosu-agate-spire");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(
+            wt.join(".git"),
+            "gitdir: /Users/onlydole/dosu/dosu/.git/worktrees/agate-spire\n",
+        )
+        .unwrap();
+        let r = resolve_git_root(&wt).unwrap();
+        assert_eq!(r.worktree_tool.as_deref(), Some("warp"));
+        assert_eq!(r.root_path, "/Users/onlydole/dosu/dosu");
+    }
+
+    #[test]
+    fn git_pointer_relative_or_unusual_forms() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+
+        // Relative pointer (git worktree.useRelativePaths) → None, not junk.
+        std::fs::write(wt.join(".git"), "gitdir: ../main/.git/worktrees/wt\n").unwrap();
+        assert!(resolve_git_root(&wt).is_none());
+
+        // No-space and CRLF forms still parse.
+        std::fs::write(
+            wt.join(".git"),
+            "gitdir:/Users/x/repo/.git/worktrees/wt\r\n",
+        )
+        .unwrap();
+        let r = resolve_git_root(&wt).unwrap();
+        assert_eq!(r.root_path, "/Users/x/repo");
+        assert_eq!(r.worktree_label.as_deref(), Some("wt"));
     }
 }

@@ -435,6 +435,12 @@ pub fn resolve_git_root(dir: &Path) -> Option<Resolution> {
         .lines()
         .find_map(|l| l.trim().strip_prefix("gitdir:"))?
         .trim();
+    // git ≥ 2.48 can write relative pointers (worktree.useRelativePaths); a
+    // relative root would be a junk grouping key, so fall back to the string
+    // classifiers instead of locking it in as authoritative.
+    if !Path::new(target).is_absolute() {
+        return None;
+    }
     let marker = "/.git/worktrees/";
     let idx = target.rfind(marker)?;
     let root_path = target[..idx].to_string();
