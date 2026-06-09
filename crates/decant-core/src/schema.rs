@@ -4,7 +4,7 @@ use rusqlite::Connection;
 pub const SCHEMA_V1: &str = include_str!("schema_v1.sql");
 
 /// The latest schema version `migrate` brings a database to.
-pub const LATEST_VERSION: i64 = 2;
+pub const LATEST_VERSION: i64 = 3;
 
 /// v2: the `recommendation` table (signals + evergreen catalog, materialized
 /// with state by `recommendations::regenerate`). `CREATE TABLE IF NOT EXISTS`
@@ -53,6 +53,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if current < 2 {
         apply(conn, 2, MIGRATION_V2)?;
     }
+    if current < 3 {
+        apply_v3(conn)?;
+    }
     Ok(())
 }
 
@@ -66,6 +69,40 @@ fn apply(conn: &Connection, version: i64, sql: &str) -> Result<()> {
         [version],
     )?;
     tx.commit()?;
+    Ok(())
+}
+
+/// v3: add worktree roll-up columns to `project` (ALTER lacks IF NOT EXISTS, so
+/// each is PRAGMA-guarded — harmless on a fresh DB where `schema_v1.sql` already
+/// created them), then backfill the resolution for existing rows. The backfill
+/// runs after the column-add commits because it opens its own statements and
+/// reads the filesystem.
+fn apply_v3(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    add_column_if_missing(&tx, "is_worktree", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(&tx, "root_path", "TEXT")?;
+    add_column_if_missing(&tx, "worktree_label", "TEXT")?;
+    add_column_if_missing(&tx, "worktree_tool", "TEXT")?;
+    add_column_if_missing(&tx, "root_source", "TEXT")?;
+    tx.execute(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES (3, datetime('now'))",
+        [],
+    )?;
+    tx.commit()?;
+    crate::worktree::resolve_worktree_roots(conn)?;
+    Ok(())
+}
+
+/// Add a column to `project` only if it does not already exist.
+fn add_column_if_missing(conn: &Connection, col: &str, decl: &str) -> Result<()> {
+    let exists = conn
+        .prepare("PRAGMA table_info(project)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|x| x.ok())
+        .any(|name| name == col);
+    if !exists {
+        conn.execute(&format!("ALTER TABLE project ADD COLUMN {col} {decl}"), [])?;
+    }
     Ok(())
 }
 
@@ -107,7 +144,7 @@ mod tests {
         let versions: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(versions, 2, "each migration recorded exactly once");
+        assert_eq!(versions, 3, "each migration recorded exactly once");
         let max: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
                 r.get(0)
@@ -153,7 +190,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(max, 2);
+        assert_eq!(max, 3);
     }
 
     #[test]
@@ -178,5 +215,67 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hits, 1);
+    }
+
+    #[test]
+    fn v3_adds_project_worktree_columns_idempotently() {
+        let conn = db::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap(); // idempotent
+
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(project)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for c in [
+            "is_worktree",
+            "root_path",
+            "worktree_label",
+            "worktree_tool",
+            "root_source",
+        ] {
+            assert!(cols.contains(&c.to_string()), "missing column {c}");
+        }
+        let max: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(max, 3);
+    }
+
+    #[test]
+    fn v3_backfills_existing_worktree_rows_on_a_v2_db() {
+        // Model a DB at v2: project table WITHOUT the new columns + a minimal
+        // session table for the resolve query's join.
+        let conn = db::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+             CREATE TABLE project(id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, name TEXT,
+                                  first_seen_at TEXT, last_seen_at TEXT);
+             CREATE TABLE session(id INTEGER PRIMARY KEY, project_id INTEGER, started_at TEXT);
+             INSERT INTO schema_migrations(version, applied_at) VALUES (2, datetime('now'));
+             INSERT INTO project(path, name) VALUES ('/home/x/dosu/dosu', 'dosu');
+             INSERT INTO project(path, name) VALUES ('/home/x/.warp-worktrees/dosu-agate-spire', 'dosu-agate-spire');",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let (is_wt, root): (i64, String) = conn
+            .query_row(
+                "SELECT is_worktree, root_path FROM project WHERE path = '/home/x/.warp-worktrees/dosu-agate-spire'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(is_wt, 1);
+        assert_eq!(
+            root, "/home/x/dosu/dosu",
+            "warp worktree name-matched to root"
+        );
     }
 }
