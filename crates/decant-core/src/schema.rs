@@ -74,9 +74,11 @@ fn apply(conn: &Connection, version: i64, sql: &str) -> Result<()> {
 
 /// v3: add worktree roll-up columns to `project` (ALTER lacks IF NOT EXISTS, so
 /// each is PRAGMA-guarded — harmless on a fresh DB where `schema_v1.sql` already
-/// created them), then backfill the resolution for existing rows. The backfill
-/// runs after the column-add commits because it opens its own statements and
-/// reads the filesystem.
+/// created them), then backfill the resolution for existing rows. The version is
+/// recorded only after the backfill succeeds: if the backfill errors or the
+/// process dies mid-way, the next `migrate` re-runs v3 from the top (the column
+/// guards and the resolver are both idempotent), so a partial v3 always
+/// self-heals instead of being recorded as done.
 fn apply_v3(conn: &Connection) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     add_column_if_missing(&tx, "is_worktree", "INTEGER NOT NULL DEFAULT 0")?;
@@ -84,12 +86,12 @@ fn apply_v3(conn: &Connection) -> Result<()> {
     add_column_if_missing(&tx, "worktree_label", "TEXT")?;
     add_column_if_missing(&tx, "worktree_tool", "TEXT")?;
     add_column_if_missing(&tx, "root_source", "TEXT")?;
-    tx.execute(
+    tx.commit()?;
+    crate::worktree::resolve_worktree_roots(conn)?;
+    conn.execute(
         "INSERT INTO schema_migrations(version, applied_at) VALUES (3, datetime('now'))",
         [],
     )?;
-    tx.commit()?;
-    crate::worktree::resolve_worktree_roots(conn)?;
     Ok(())
 }
 

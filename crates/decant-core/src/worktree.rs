@@ -252,12 +252,15 @@ pub fn resolve_worktree_roots(conn: &Connection) -> Result<()> {
         is_worktree: i64,
         root_path: Option<String>,
         source: Option<String>,
+        worktree_label: Option<String>,
+        worktree_tool: Option<String>,
         sessions: i64,
         last_seen: Option<String>,
     }
 
     let mut stmt = conn.prepare(
         "SELECT p.id, p.path, p.is_worktree, p.root_path, p.root_source,
+                p.worktree_label, p.worktree_tool,
                 COUNT(s.id), MAX(s.started_at)
          FROM project p LEFT JOIN session s ON s.project_id = p.id
          GROUP BY p.id",
@@ -270,8 +273,10 @@ pub fn resolve_worktree_roots(conn: &Connection) -> Result<()> {
                 is_worktree: r.get(2)?,
                 root_path: r.get(3)?,
                 source: r.get(4)?,
-                sessions: r.get(5)?,
-                last_seen: r.get(6)?,
+                worktree_label: r.get(5)?,
+                worktree_tool: r.get(6)?,
+                sessions: r.get(7)?,
+                last_seen: r.get(8)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -347,7 +352,9 @@ pub fn resolve_worktree_roots(conn: &Connection) -> Result<()> {
         let p = projs.iter().find(|p| p.id == *id).unwrap();
         let unchanged = p.is_worktree == res.is_worktree as i64
             && p.root_path.as_deref() == Some(res.root_path.as_str())
-            && p.source.as_deref() == Some(res.source.as_str());
+            && p.source.as_deref() == Some(res.source.as_str())
+            && p.worktree_label == res.worktree_label
+            && p.worktree_tool == res.worktree_tool;
         if unchanged {
             continue;
         }
@@ -669,10 +676,62 @@ mod tests {
             (0, "/home/x/dosu/dosu".into(), None, Some("self".into()))
         );
         let (iw, rp, tool, src) = row("/home/x/dosu/dosu/.claude-worktrees/teedole-ops-39");
-        assert_eq!((iw, rp.as_str(), tool.as_deref(), src.as_deref()),
-                   (1, "/home/x/dosu/dosu", Some("claude"), Some("intree")));
+        assert_eq!(
+            (iw, rp.as_str(), tool.as_deref(), src.as_deref()),
+            (1, "/home/x/dosu/dosu", Some("claude"), Some("intree"))
+        );
         let (iw2, rp2, tool2, src2) = row("/home/x/.warp-worktrees/dosu-agate-spire");
-        assert_eq!((iw2, rp2.as_str(), tool2.as_deref(), src2.as_deref()),
-                   (1, "/home/x/dosu/dosu", Some("warp"), Some("namematch")));
+        assert_eq!(
+            (iw2, rp2.as_str(), tool2.as_deref(), src2.as_deref()),
+            (1, "/home/x/dosu/dosu", Some("warp"), Some("namematch"))
+        );
+    }
+
+    #[test]
+    fn resolve_preserves_git_locked_rows_and_uses_them_as_targets() {
+        let conn = db::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        // A locked authoritative row whose dir no longer exists, plus an
+        // external sibling that should name-match against the locked row's root.
+        conn.execute_batch(
+            "INSERT INTO project(path, name, is_worktree, root_path, worktree_label, worktree_tool, root_source)
+             VALUES ('/gone/wt', 'wt', 1, '/real/dosu', 'wt', 'git', 'git');
+             INSERT INTO project(path, name) VALUES ('/home/x/.warp-worktrees/dosu-agate-spire', 'dosu-agate-spire');",
+        )
+        .unwrap();
+
+        resolve_worktree_roots(&conn).unwrap();
+        resolve_worktree_roots(&conn).unwrap(); // second run: steady state, zero writes
+
+        let locked: (i64, String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT is_worktree, root_path, worktree_label, root_source FROM project WHERE path = '/gone/wt'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            locked,
+            (
+                1,
+                "/real/dosu".into(),
+                Some("wt".into()),
+                Some("git".into())
+            ),
+            "heuristics must never rewrite an authoritative row"
+        );
+
+        let (root, src): (String, String) = conn
+            .query_row(
+                "SELECT root_path, root_source FROM project WHERE path = '/home/x/.warp-worktrees/dosu-agate-spire'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            root, "/real/dosu",
+            "locked row's root is a name-match target"
+        );
+        assert_eq!(src, "namematch");
     }
 }

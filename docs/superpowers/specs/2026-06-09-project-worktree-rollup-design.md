@@ -76,7 +76,7 @@ already has the columns is a no-op.
 | Column | Type | Meaning |
 |---|---|---|
 | `is_worktree` | `INTEGER NOT NULL DEFAULT 0` | 1 if this project is a worktree of another repo. |
-| `root_path` | `TEXT` | Resolved root project key. For a non-worktree, equals `path`. For a worktree, the root repo path (real path when known) or a synthetic repo key. Defaults to `path` until resolved. |
+| `root_path` | `TEXT` | Resolved root project key. For a non-worktree, equals `path`. For a worktree, the root repo path (real path when known) or a synthetic repo key. NULL until resolved; readers COALESCE to `path`. |
 | `worktree_label` | `TEXT` | Human label for the worktree (e.g. `agate-spire`, `ops-39-docs-are-dead`). Null for roots. |
 | `worktree_tool` | `TEXT` | `warp` \| `t3` \| `conductor` \| `claude` \| `git`. Null for roots. |
 | `root_source` | `TEXT` | `self` \| `git` \| `intree` \| `namematch` \| `synthetic`. Confidence tier and lock signal. |
