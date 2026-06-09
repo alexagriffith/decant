@@ -508,3 +508,33 @@ async fn recommendations_endpoints_require_auth() {
         .unwrap();
     assert_eq!(r.status(), 401);
 }
+
+#[tokio::test]
+async fn analytics_by_dimension_project_rollup_exposes_worktree_count_and_root_param() {
+    let base = spawn().await;
+
+    // Rolled-up project dimension: rows carry worktree_count (0 for the
+    // worktree-free fixtures) — proves the DimRow change reaches HTTP.
+    let body = get_ok(&base, "/api/v1/analytics/by-dimension?dim=project").await;
+    let rows = body["data"].as_array().unwrap();
+    assert!(!rows.is_empty(), "project rollup has rows");
+    assert!(
+        rows[0].get("worktree_count").is_some(),
+        "rolled project rows expose worktree_count"
+    );
+
+    // The leaf breakdown for that root returns 200 with at least the root itself.
+    let key = rows[0]["key"].as_str().unwrap();
+    let enc = key.replace('/', "%2F");
+    let leaf = get_ok(
+        &base,
+        &format!("/api/v1/analytics/by-dimension?dim=project&root={enc}"),
+    )
+    .await;
+    let leaf_rows = leaf["data"].as_array().unwrap();
+    assert!(!leaf_rows.is_empty());
+    assert!(
+        leaf_rows.iter().all(|r| r.get("worktree_count").is_none()),
+        "leaf rows must not carry worktree_count (proves root param reached the query)"
+    );
+}

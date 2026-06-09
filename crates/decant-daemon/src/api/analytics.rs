@@ -51,6 +51,7 @@ pub struct ByDimensionParams {
     pub tool: Option<String>,
     pub model: Option<String>,
     pub project: Option<String>,
+    pub root: Option<String>,
     pub limit: Option<i64>,
     pub cursor: Option<String>,
 }
@@ -62,6 +63,7 @@ pub async fn by_dimension(
     Query(params): Query<ByDimensionParams>,
 ) -> Result<Envelope<serde_json::Value>, ApiError> {
     let dim = query::parse_dimension(params.dim.as_deref())?;
+    let root = params.root.clone();
     let filters = Filters::parse(
         params.from,
         params.to,
@@ -77,7 +79,7 @@ pub async fn by_dimension(
     let filters_json = filters.as_json();
 
     let page = with_read_conn(&state.read_pool, move |conn| {
-        query::by_dimension(conn, dim, &filters, limit, cursor, None)
+        query::by_dimension(conn, dim, &filters, limit, cursor, root.as_deref())
     })
     .await?;
 
