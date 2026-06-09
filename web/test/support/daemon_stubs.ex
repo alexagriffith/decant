@@ -59,6 +59,120 @@ defmodule Decant.DaemonStubs do
   # (8 messages, 2 tool calls across the two sessions).
   @tool_calls %{1 => 1, 2 => 1}
 
+  # Representative recommendations the Insights page asserts on: two open
+  # signals, a catalog spread across categories (the first Foundations entry is
+  # the spotlight), and one already-implemented entry.
+  @recommendations [
+    %{
+      "key" => "signal:error:Read",
+      "kind" => "signal",
+      "category" => nil,
+      "title" => "Read fails 20% of the time",
+      "detail" => "4 errors across 20 calls.",
+      "suggestion" => "Codify the recovery path as a Skill.",
+      "prompt" => "The Read tool is failing often. Investigate and codify a Skill.",
+      "url" => "https://code.claude.com/docs/en/skills",
+      "link_label" => "Skills guide",
+      "icon" => "hero-exclamation-triangle",
+      "tone" => "danger",
+      "score" => 4.0,
+      "status" => "open",
+      "status_source" => nil,
+      "note" => nil,
+      "implemented_at" => nil
+    },
+    %{
+      "key" => "signal:heavy-server:claude_ai_Exa",
+      "kind" => "signal",
+      "category" => nil,
+      "title" => "Heavy reliance on the claude_ai_Exa MCP server",
+      "detail" => "120 calls across 6 tools.",
+      "suggestion" => "Package the common workflows into a Skill.",
+      "prompt" => "We rely heavily on claude_ai_Exa. Create a reusable Skill.",
+      "url" => "https://code.claude.com/docs/en/skills",
+      "link_label" => "Skills guide",
+      "icon" => "hero-cpu-chip",
+      "tone" => "accent",
+      "score" => 60.0,
+      "status" => "open",
+      "status_source" => nil,
+      "note" => nil,
+      "implemented_at" => nil
+    },
+    %{
+      "key" => "catalog:agents-md",
+      "kind" => "catalog",
+      "category" => "Foundations",
+      "title" => "AGENTS.md at the repo root",
+      "detail" => "One machine-readable contract every agent reads first.",
+      "suggestion" => nil,
+      "prompt" => "Create a high-quality AGENTS.md at this repo root.",
+      "url" => "https://agents.md",
+      "link_label" => "agents.md standard",
+      "icon" => "hero-document-text",
+      "tone" => nil,
+      "score" => 0,
+      "status" => "open",
+      "status_source" => nil,
+      "note" => nil,
+      "implemented_at" => nil
+    },
+    %{
+      "key" => "catalog:claude-md",
+      "kind" => "catalog",
+      "category" => "Foundations",
+      "title" => "Project memory (CLAUDE.md)",
+      "detail" => "Persistent facts every session loads automatically.",
+      "suggestion" => nil,
+      "prompt" => "Create a concise CLAUDE.md capturing durable facts.",
+      "url" => "https://code.claude.com/docs/en/memory",
+      "link_label" => "Memory guide",
+      "icon" => "hero-book-open",
+      "tone" => nil,
+      "score" => 0,
+      "status" => "open",
+      "status_source" => nil,
+      "note" => nil,
+      "implemented_at" => nil
+    },
+    %{
+      "key" => "catalog:skills",
+      "kind" => "catalog",
+      "category" => "Reusable workflows",
+      "title" => "Skills",
+      "detail" => "Capture a repeated procedure once as a SKILL.md.",
+      "suggestion" => nil,
+      "prompt" => "Scaffold a reusable Skill for a workflow I repeat often.",
+      "url" => "https://code.claude.com/docs/en/skills",
+      "link_label" => "Skills guide",
+      "icon" => "hero-sparkles",
+      "tone" => nil,
+      "score" => 0,
+      "status" => "open",
+      "status_source" => nil,
+      "note" => nil,
+      "implemented_at" => nil
+    },
+    %{
+      "key" => "catalog:hooks",
+      "kind" => "catalog",
+      "category" => "Connect and automate",
+      "title" => "Hooks that keep the tree green",
+      "detail" => "Run format, lint, and tests automatically on agent events.",
+      "suggestion" => nil,
+      "prompt" => "Set up Claude Code hooks to run format, lint, and tests.",
+      "url" => "https://code.claude.com/docs/en/hooks-guide",
+      "link_label" => "Hooks guide",
+      "icon" => "hero-bolt",
+      "tone" => nil,
+      "score" => 0,
+      "status" => "implemented",
+      "status_source" => "agent",
+      "note" => nil,
+      "implemented_at" => "2026-05-03T10:00:00Z"
+    }
+  ]
+
   @messages_1 [
     %{
       "seq" => 0,
@@ -133,12 +247,16 @@ defmodule Decant.DaemonStubs do
     stub(Decant.Daemon, :tools_usage, &tools_usage/1)
     stub(Decant.Daemon, :mcp_usage, &mcp_usage/1)
     stub(Decant.Daemon, :date_bounds, &date_bounds/0)
+    stub(Decant.Daemon, :recommendations, &recommendations/1)
     stub(Decant.Daemon, :health, fn -> {:ok, %{"status" => "ok"}} end)
     :ok
   end
 
   @doc "The canned sessions (API SessionSummary shape), for tests that want the raw payloads."
   def sessions, do: @sessions
+
+  @doc "The canned recommendations (API Recommendation shape), for tests that want the raw payloads."
+  def recommendations, do: @recommendations
 
   # --- stub implementations --------------------------------------------------
 
@@ -262,6 +380,17 @@ defmodule Decant.DaemonStubs do
   defp mcp_usage(_opts), do: {:ok, [], paginated_meta()}
 
   defp date_bounds, do: {:ok, %{"min" => "2026-05-01", "max" => "2026-05-02"}}
+
+  defp recommendations(status) do
+    rows =
+      case to_string(status) do
+        "open" -> Enum.filter(@recommendations, &(&1["status"] == "open"))
+        "implemented" -> Enum.filter(@recommendations, &(&1["status"] == "implemented"))
+        _ -> @recommendations
+      end
+
+    {:ok, rows}
+  end
 
   # --- helpers ---------------------------------------------------------------
 

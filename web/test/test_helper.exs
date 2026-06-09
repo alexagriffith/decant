@@ -6,3 +6,4 @@ ExUnit.start()
 # HTTP layer (and `Decant.Daemon.health/0`) without any network access.
 Mimic.copy(Req)
 Mimic.copy(Decant.Daemon)
+Mimic.copy(Decant.AgentLauncher)

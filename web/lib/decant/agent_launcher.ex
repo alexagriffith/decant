@@ -55,12 +55,30 @@ defmodule Decant.AgentLauncher do
 
   @doc "Open `agent` in the preferred terminal seeded with `prompt`. :ok | {:error, msg}."
   def launch(agent, prompt) when is_binary(agent) and is_binary(prompt) do
+    launch(agent, prompt, nil)
+  end
+
+  @doc """
+  Like `launch/2`, but threads a recommendation `key` so the seeded prompt ends
+  with an instruction to record the recommendation implemented once the agent
+  has finished and verified the work. A `nil` key behaves exactly like `launch/2`.
+  """
+  def launch(agent, prompt, key) when is_binary(agent) and is_binary(prompt) do
     cond do
       not Map.has_key?(@agents, agent) -> {:error, "Unknown agent."}
       not can_launch?() -> {:error, "Opening a terminal is only supported on macOS right now."}
-      true -> do_launch(@agents[agent].bin, prompt)
+      true -> do_launch(@agents[agent].bin, with_mark_instruction(prompt, key))
     end
   end
+
+  # Append the mark-implemented handoff line so the agent records the
+  # recommendation as done once it has finished and verified the work.
+  defp with_mark_instruction(prompt, key) when is_binary(key) and key != "" do
+    prompt <>
+      "\n\nWhen you have completed and verified this, run: decant recommendations mark #{key}"
+  end
+
+  defp with_mark_instruction(prompt, _key), do: prompt
 
   @doc "Open `dir` in the preferred IDE. :ok | {:error, msg}."
   def open_ide(dir) when is_binary(dir) do

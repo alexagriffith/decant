@@ -293,6 +293,10 @@ defmodule DecantWeb.Components.UI do
   attr :default, :string, required: true, doc: "preferred agent key"
   attr :can_launch, :boolean, default: false
 
+  attr :mark_key, :string,
+    default: nil,
+    doc: "recommendation key to mark implemented after launch"
+
   def agent_cta(assigns) do
     assigns =
       assign(
@@ -308,6 +312,7 @@ defmodule DecantWeb.Components.UI do
         phx-click="launch"
         phx-value-agent={@default}
         phx-value-prompt={@prompt}
+        phx-value-key={@mark_key}
         class="inline-flex items-center gap-1.5 rounded-l-lg border border-r-0 border-line bg-surface px-3 py-1.5 text-sm font-medium text-fg transition-colors hover:bg-elevated"
       >
         <.tool_icon tool={agent_tool(@default)} class="size-4" /> Run in {@default_label}
@@ -331,7 +336,8 @@ defmodule DecantWeb.Components.UI do
           :for={{key, label} <- @agents}
           type="button"
           phx-click={
-            JS.hide(to: "##{@id}-menu") |> JS.push("launch", value: %{agent: key, prompt: @prompt})
+            JS.hide(to: "##{@id}-menu")
+            |> JS.push("launch", value: %{agent: key, prompt: @prompt, key: @mark_key})
           }
           class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-fg hover:bg-elevated"
         >

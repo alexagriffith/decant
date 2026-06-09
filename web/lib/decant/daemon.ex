@@ -118,6 +118,18 @@ defmodule Decant.Daemon do
   end
 
   @doc """
+  List recommendations (data-derived signals + the evergreen catalog) with
+  lifecycle state. `status` is one of `"open"`, `"implemented"`, or `"all"`.
+  Returns `{:ok, list}` of string-keyed rec maps, or an `{:error, ...}` tuple.
+  """
+  def recommendations(status \\ "open") do
+    case request(:get, "/recommendations", params: [status: status]) do
+      {:ok, data, _meta} -> {:ok, data}
+      error -> error
+    end
+  end
+
+  @doc """
   Unauthenticated liveness probe. Returns `{:ok, data}` with `api_version` /
   `db_schema_version` / `status`, or an `{:error, ...}` tuple. Note the daemon's
   `/health` does not require a token, but we still send the headers; they are
