@@ -8,20 +8,25 @@ symlink to this file; tool-specific files should stay thin and defer here.
 
 **decant** extracts Claude Code (`~/.claude/projects/*.jsonl`) and Codex
 (`~/.codex/sessions/rollout-*.jsonl`) CLI sessions into a normalized,
-full-text-searchable SQLite archive (WAL + FTS5), exposed via a Rust CLI and a
-Phoenix LiveView web app.
+full-text-searchable SQLite archive (WAL + FTS5). A long-running Rust **daemon**
+(`decant-daemon`) owns that archive — it watches the source directories, ingests
+automatically, and serves a versioned HTTP+JSON API on `127.0.0.1:4577`. The
+`decant` CLI runs/manages the daemon and provides a scriptable interface, and a
+Phoenix LiveView web app is a pure HTTP client of the daemon API.
 
 ## Layout
 
 | Path | Responsibility |
 |---|---|
 | `crates/decant-core/` | Library: parsing, schema, ingest, cost, queries, stats, export. **UI-agnostic.** |
-| `crates/decant-cli/` | Binary `decant`: argument parsing (clap) + all I/O/printing. |
-| `crates/decant-core/src/schema_v1.sql` | The SQLite schema. **The data contract** between CLI (writer) and web (reader). |
+| `crates/decant-daemon/` | The long-running service: watcher + ingest task (single SQLite writer), `axum` HTTP API, SSE, auth/lock. **Owns the DB.** |
+| `crates/decant-cli/` | Binary `decant`: argument parsing (clap) + all I/O/printing; runs the daemon (`daemon serve`) and manages it (`install`/`status`/…). |
+| `docs/api/openapi.yaml` | The HTTP+JSON API (OpenAPI 3.1). **The data contract** between the daemon (server) and its clients (web, CLI). Also served at `/api/v1/openapi.yaml`. |
+| `crates/decant-core/src/schema_v1.sql` | The SQLite schema — private to the daemon (an internal detail, no longer the cross-process contract). |
 | `crates/decant-core/src/sources/` | Per-tool parsers: `claude.rs`, `codex.rs`. |
-| `web/` | Phoenix 1.8 LiveView app (OTP app `:decant`); **reads the DB read-only**. |
+| `web/` | Phoenix 1.8 LiveView app (OTP app `:decant`); **a pure HTTP client of the daemon — never opens SQLite**. |
 | `fixtures/` | Tiny synthetic session files used by Rust tests. |
-| `web/test/fixtures/decant.db` | Tiny synthetic archive DB for web tests (the only DB in git). |
+| `web/test/fixtures/decant.db` | Tiny synthetic archive DB for daemon/core tests (the only DB in git). |
 | `docs/superpowers/` | Design specs and implementation plans. |
 
 ## Setup
@@ -40,23 +45,30 @@ cargo test --workspace                        # all Rust tests
 cargo fmt --all -- --check                    # format check (drop --check to fix)
 cargo clippy --all-targets -- -D warnings     # lint; warnings are errors
 
-# CLI (binary is `decant`; or `cargo run -p decant-cli -- <args>`)
-cargo run -p decant-cli -- sync               # ingest sessions into the archive
+# Daemon (the service that owns the archive; binary `decant`)
+cargo run -p decant-cli -- daemon serve       # run the daemon in the foreground (dev)
+cargo run -p decant-cli -- daemon install     # install + load a macOS LaunchAgent (background)
+cargo run -p decant-cli -- daemon status      # running? + health + last sync
+cargo run -p decant-cli -- daemon logs -f     # tail the daemon log
+
+# CLI read commands (binary is `decant`; or `cargo run -p decant-cli -- <args>`)
 cargo run -p decant-cli -- ls                 # list sessions
 cargo run -p decant-cli -- search "<query>"   # full-text search
-cargo run -p decant-cli -- --db /tmp/x.db sync # use a specific DB
+cargo run -p decant-cli -- --db /tmp/x.db ls  # read a specific DB file directly (headless)
 
-# Web (run inside web/)
-cd web && mix test                            # LiveView + context tests
+# Web (run inside web/; needs a running daemon — start `daemon serve` first)
+cd web && mix test                            # LiveView + context tests (mock the daemon; no live one needed)
 cd web && mix format --check-formatted        # format check
 cd web && mix compile --warnings-as-errors    # compile clean
-DECANT_DB=/path/to/decant.db mix phx.server   # dev server at http://localhost:4000
+mix phx.server                                # dev server at http://localhost:4000 (talks to the daemon)
 ```
 
-Config (CLI): `--db` flag > `DECANT_DB` env > platform default
-(`~/Library/Application Support/decant/decant.db` on macOS,
-`~/.local/share/decant/decant.db` on Linux). Source dirs override with
-`DECANT_CLAUDE_DIR` / `DECANT_CODEX_DIR`. The web app reads `DECANT_DB`.
+Config: the **daemon** owns the DB at `~/.decant/decant.db` (`DECANT_DB`), the
+loopback port `4577` (`DECANT_DAEMON_PORT`), and the token/lock under `~/.decant`
+(`DECANT_CONFIG_DIR`); source dirs override with `DECANT_CLAUDE_DIR` /
+`DECANT_CODEX_DIR`. The **web app** reaches the daemon via `DECANT_DAEMON_URL`
+(default `http://127.0.0.1:4577`) + `DECANT_DAEMON_TOKEN` (else
+`~/.decant/daemon.token`). CLI read commands accept `--db` / `DECANT_DB`.
 
 ## Definition of done
 
@@ -68,16 +80,17 @@ A change is ready when, for the area you touched:
 
 ## Project invariants (do not break)
 
-1. **`decant-core` is UI-agnostic.** No `println!`, `eprintln!`, `print!`, or direct stdout/stderr in `crates/decant-core`. All output and exit-code policy lives in `decant-cli` (see its `output` module). Core returns data and `Result`s.
-2. **Rust owns the schema; the web app is read-only.** Schema changes go in `crates/decant-core/src/schema_v1.sql` + a migration in `schema.rs`. Do **not** add Ecto migrations for the archive tables, and do not write to the DB from `web/`.
-3. **Costs are computed at ingest** (`cost::estimate_cost`) and stored in `session.estimated_cost_usd`. `sync` skips files whose size+mtime are unchanged, so editing pricing does **not** retroactively update existing rows — rebuild the DB (delete it and re-`sync`) to recompute. Model strings are normalized in `cost::canonical_model` (handles Bedrock ARNs, date/`[1m]` suffixes, aliases).
-4. **WAL mode** lets the web app read while the CLI writes. Don't change journal mode in the writer.
+1. **`decant-core` is UI-agnostic.** No `println!`, `eprintln!`, `print!`, or direct stdout/stderr in `crates/decant-core`. All output and exit-code policy lives in `decant-cli` (see its `output` module). Core returns data and `Result`s. (The daemon likewise emits no stdout/stderr beyond `tracing` logs.)
+2. **The daemon is the single owner of SQLite; the web app is a pure HTTP client.** Only `decant-daemon` opens the database — it is the only writer (one exclusive write connection, owned by the ingest task) *and* the only reader (an r2d2 read pool for handlers). The data contract is the **versioned HTTP+JSON API** (`docs/api/openapi.yaml`), not the SQLite schema. Schema changes still go in `crates/decant-core/src/schema_v1.sql` + a migration in `schema.rs`, but the schema is now an internal detail. **Phoenix never opens SQLite** — no Ecto, no `Decant.Repo`, no direct DB access in `web/`; add new data needs as daemon API endpoints and consume them over HTTP.
+3. **Costs are computed at ingest** (`cost::estimate_cost`) and stored in `session.estimated_cost_usd`. Ingest skips files whose size+mtime are unchanged, so editing pricing does **not** retroactively update existing rows — rebuild the DB (delete it and let the daemon re-ingest) to recompute. Model strings are normalized in `cost::canonical_model` (handles Bedrock ARNs, date/`[1m]` suffixes, aliases).
+4. **WAL mode** lets the daemon's read pool serve requests while its single writer ingests. Don't change journal mode in the writer.
+5. **The daemon is local-first and loopback-only.** It binds `127.0.0.1` only, guards Host/Origin, and requires the bearer token; don't widen the bind address or add outbound network calls.
 
 ## Security & data privacy
 
 - **Never commit secrets** (API keys, tokens, `.env`). `detect-private-key` runs in pre-commit, but don't rely on it.
 - **Never commit real session data or a personal archive DB.** `~/.claude` and `~/.codex` hold private transcripts. The only DB in git is the tiny synthetic `web/test/fixtures/decant.db`. Generate fixtures from synthetic data only.
-- Don't add network calls to `decant-core` or the CLI; decant is a local-first, offline tool.
+- Don't add **outbound/remote** network calls anywhere; decant is local-first and offline. The only networking is the daemon's loopback HTTP API (`127.0.0.1`) and the CLI/web clients talking to it over loopback. `decant-core` stays I/O-policy-free (no networking at all).
 
 ## Conventions
 

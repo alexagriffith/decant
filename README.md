@@ -21,7 +21,9 @@ transcripts never leave your machine.
   estimates (Claude and GPT-5 families, including Bedrock-style model ids).
 - **Tool & MCP insights** — built-in vs MCP tool usage, per-server leaderboards, error rates.
 - **Export** transcripts to Markdown or JSON.
-- **Web UI** — a Phoenix LiveView app to browse, read, search, and visualize, reading the same DB.
+- **Background daemon** — a long-running Rust service watches `~/.claude` + `~/.codex`,
+  ingests automatically, and serves a local HTTP+JSON API (no manual sync).
+- **Web UI** — a Phoenix LiveView app to browse, read, search, and visualize, talking to the daemon over HTTP.
 - **Stable, scriptable CLI** — `--json` everywhere, shell completions, sensible exit codes.
 
 Validated on a real corpus of ~1,500 sessions / 185k messages / 60k tool calls.
@@ -44,49 +46,84 @@ cargo build --release
 ./target/release/decant completion zsh       # shell completion script (bash|zsh|fish)
 ```
 
-## Web app
+## The daemon + web app
 
-A Phoenix LiveView UI in `web/` reads the same SQLite archive (read-only):
+decant runs as a local background **daemon** that owns the SQLite archive: it
+watches `~/.claude` and `~/.codex`, ingests changes automatically (no manual
+`sync`), and exposes a versioned HTTP+JSON API on `127.0.0.1:4577`. The Phoenix
+web app is a **pure client** of that API — it never opens SQLite.
+
+Run the daemon, then the web app:
 
 ```bash
+cargo run -p decant-cli -- daemon serve      # run the daemon in the foreground (dev)
+# …or run it in the background as a macOS LaunchAgent (starts at login):
+cargo run -p decant-cli -- daemon install
+cargo run -p decant-cli -- daemon status     # is it running? health + last sync
+
 cd web && mix setup
-DECANT_DB=/path/to/decant.db mix phx.server   # then open http://localhost:4000
+mix phx.server                               # then open http://localhost:4000
 ```
+
+The web app finds the daemon via `DECANT_DAEMON_URL` (default
+`http://127.0.0.1:4577`) and authenticates with the bearer token the daemon
+writes to `~/.decant/daemon.token` (override with `DECANT_DAEMON_TOKEN`). If the
+daemon isn't running, the UI shows a clear "service isn't running" state.
 
 Routes: sessions at `/`, a transcript at `/sessions/:id`, full-text search at
 `/search`, usage/cost charts at `/analytics`, and tool/MCP usage at `/tools`.
-The "Sync now" button reruns ingestion; or run `decant sync` from the CLI.
+Ingestion is automatic; the API contract is documented in
+[`docs/api/openapi.yaml`](docs/api/openapi.yaml) (also served live at
+`/api/v1/openapi.yaml`).
+
+Manage the service with `decant daemon install | uninstall | start | stop |
+status | logs [-f]` (macOS for now; Linux `systemd` is a documented future add).
 
 ## Configuration
 
-Flags or env vars (precedence: flag > env > platform default):
-`--db` / `DECANT_DB`, `--claude-dir` / `DECANT_CLAUDE_DIR`, `--codex-dir` / `DECANT_CODEX_DIR`.
-The default database lives under your platform data dir (macOS:
-`~/Library/Application Support/decant/decant.db`; Linux: `~/.local/share/decant/decant.db`).
+**Daemon** (the owner of the archive): the private SQLite DB defaults to
+`~/.decant/decant.db` (override with `DECANT_DB`); the loopback port defaults to
+`4577` (override with `DECANT_DAEMON_PORT`). The bearer token and single-instance
+lock live under `~/.decant/` (`daemon.token`, `daemon.lock`; the dir is
+overridable with `DECANT_CONFIG_DIR`). Source directories override with
+`DECANT_CLAUDE_DIR` / `DECANT_CODEX_DIR`.
+
+**Web app**: `DECANT_DAEMON_URL` (default `http://127.0.0.1:4577`) and
+`DECANT_DAEMON_TOKEN` (else read from `~/.decant/daemon.token`).
+
+**CLI read commands** (`ls`, `search`, …) accept `--db` / `DECANT_DB` for
+ad-hoc/headless use against a database file directly.
 
 Global flags: `--json`, `-q/--quiet`, `--no-color` (honors `NO_COLOR`).
 
 ## How it works
 
 ```
-~/.claude, ~/.codex  ──►  decant CLI (Rust)  ──►  SQLite (WAL + FTS5)  ──►  Phoenix web UI
-   JSONL logs            parse · normalize          the data contract          read-only
-                          · ingest · cost
+~/.claude, ~/.codex ─►  decant-daemon (Rust)  ─►  SQLite (WAL + FTS5, private)
+   JSONL logs            watch · ingest · cost          owned by the daemon
+                              │  HTTP+JSON API (127.0.0.1:4577) + SSE
+                              ▼
+                         Phoenix web UI  ·  decant CLI  (HTTP clients)
 ```
 
-- **The SQLite schema is the contract.** The Rust CLI owns and writes it
-  (`crates/decant-core/src/schema_v1.sql`); the web app only reads. WAL mode lets
-  the UI read while the CLI writes.
-- **Sync is idempotent** — re-running only re-ingests files whose size/mtime
-  changed. Malformed JSON lines are recorded in the `ingest_issue` table
-  (non-fatal); exit code `3` signals "completed with parse issues" for CI.
+- **The HTTP+JSON API is the contract.** The daemon (`crates/decant-daemon`) is
+  the single owner of SQLite — the only reader *and* the only writer — and
+  exposes a versioned API (OpenAPI 3.1, [`docs/api/openapi.yaml`](docs/api/openapi.yaml)).
+  Phoenix never opens the database; it is a pure HTTP client. WAL mode lets the
+  daemon's read pool serve requests while its single writer ingests.
+- **Ingestion is automatic and idempotent** — the daemon watches the source
+  directories and re-ingests only files whose size/mtime changed (a periodic
+  fallback sync covers any missed filesystem events). Malformed JSON lines are
+  recorded in the `ingest_issue` table (non-fatal).
 - **Costs are estimated at ingest** from published per-model rates and stored on
-  each session. Because sync skips unchanged files, refreshing rates after an
-  upgrade won't rewrite existing rows — rebuild the DB (delete it and re-`sync`)
-  to recompute historical costs.
+  each session. Because ingest skips unchanged files, refreshing rates after an
+  upgrade won't rewrite existing rows — rebuild the DB (delete it and let the
+  daemon re-ingest) to recompute historical costs.
 
-The workspace is two crates: `decant-core` (a UI-agnostic library: parsing,
-schema, ingest, cost, queries) and `decant-cli` (the `decant` binary).
+The workspace is three crates: `decant-core` (a UI-agnostic library: parsing,
+schema, ingest, cost, queries), `decant-daemon` (the long-running service that
+owns the archive and serves the API), and `decant-cli` (the `decant` binary,
+which runs the daemon and provides the scriptable CLI).
 
 ## Development
 
