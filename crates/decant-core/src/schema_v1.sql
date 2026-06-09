@@ -117,6 +117,31 @@ CREATE TABLE IF NOT EXISTS model_pricing (
   updated_at TEXT
 );
 
+-- Recommendations: data-derived signals + the evergreen catalog, materialized
+-- with state by `recommendations::regenerate` at each sync. Rust-owns this
+-- table (the daemon writes; the web app is a read-only HTTP client). Stable
+-- `key`s let state (status/source/note/implemented_at) survive re-sync.
+CREATE TABLE IF NOT EXISTS recommendation (
+  key            TEXT PRIMARY KEY,
+  kind           TEXT NOT NULL,      -- 'signal' | 'catalog'
+  category       TEXT,
+  title          TEXT NOT NULL,
+  detail         TEXT,
+  suggestion     TEXT,
+  prompt         TEXT,
+  url            TEXT,
+  link_label     TEXT,
+  icon           TEXT,
+  tone           TEXT,
+  score          REAL,
+  status         TEXT NOT NULL DEFAULT 'open',   -- 'open' | 'implemented'
+  status_source  TEXT,               -- 'agent' | 'activity' | 'manual'
+  note           TEXT,
+  first_seen_at  TEXT,
+  updated_at     TEXT,
+  implemented_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_session_project ON session(project_id);
 CREATE INDEX IF NOT EXISTS idx_session_tool ON session(tool);
 CREATE INDEX IF NOT EXISTS idx_session_started ON session(started_at);
