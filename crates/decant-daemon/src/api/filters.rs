@@ -74,7 +74,12 @@ impl Filters {
             params.push(SqlValue::Text(model.clone()));
         }
         if let Some(project) = &self.project {
-            clauses.push("s.project_id = (SELECT id FROM project WHERE path = ?)");
+            // A "project" value is a resolved root_path: match the root row and
+            // every worktree that rolls up under it (plus a path fallback for any
+            // not-yet-resolved row).
+            clauses
+                .push("s.project_id IN (SELECT id FROM project WHERE root_path = ? OR path = ?)");
+            params.push(SqlValue::Text(project.clone()));
             params.push(SqlValue::Text(project.clone()));
         }
 
@@ -166,8 +171,8 @@ mod tests {
         assert!(w.sql.contains("s.started_at < ?"));
         assert!(w.sql.contains("s.tool = ?"));
         assert!(w.sql.contains("s.model = ?"));
-        assert!(w.sql.contains("project WHERE path = ?"));
-        assert_eq!(w.params.len(), 5);
+        assert!(w.sql.contains("project WHERE root_path = ? OR path = ?"));
+        assert_eq!(w.params.len(), 6);
     }
 
     #[test]
