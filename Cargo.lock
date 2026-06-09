@@ -438,6 +438,7 @@ dependencies = [
  "comfy-table",
  "decant-core",
  "decant-daemon",
+ "libc",
  "predicates",
  "reqwest",
  "serde",

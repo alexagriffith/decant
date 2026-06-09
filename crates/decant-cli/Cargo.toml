@@ -20,6 +20,10 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 
+# Unix-only: PID-alive checks (`kill(pid, 0)`) and SIGTERM for daemon lifecycle.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 assert_cmd = "2.2.2"
 predicates = "3.1.4"
