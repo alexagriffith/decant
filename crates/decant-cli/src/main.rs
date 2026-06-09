@@ -66,6 +66,9 @@ pub enum Commands {
     /// Run the background daemon: `daemon serve`.
     #[command(subcommand)]
     Daemon(commands::daemon::DaemonCmd),
+    /// Recommendations: `recommendations mark <key>`.
+    #[command(subcommand)]
+    Recommendations(commands::recommendations::RecommendationsCmd),
 }
 
 impl Cli {
@@ -102,6 +105,7 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
         Commands::Db(cmd) => commands::db::run(cli, cmd),
         Commands::Project(cmd) => commands::project::run(cli, cmd),
         Commands::Daemon(cmd) => commands::daemon::run(cli, cmd),
+        Commands::Recommendations(cmd) => commands::recommendations::run(cli, cmd),
     }
 }
 

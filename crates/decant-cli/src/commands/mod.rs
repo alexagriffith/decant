@@ -4,6 +4,7 @@ pub mod db;
 pub mod export;
 pub mod mcp;
 pub mod project;
+pub mod recommendations;
 pub mod search;
 pub mod session;
 pub mod stats;
