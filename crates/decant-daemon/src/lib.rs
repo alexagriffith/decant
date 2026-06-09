@@ -41,9 +41,12 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         std::fs::create_dir_all(parent).ok();
     }
 
-    // Single exclusive write connection (owned by the ingest task) + read pool.
-    let write = db::open_write(&core_cfg.db_path)?;
-    decant_core::schema::migrate(&write)?;
+    // Single exclusive write connection, shared behind a mutex: the ingest task
+    // and the recommendations write endpoint each hold a clone, and the mutex
+    // serializes them so there is only ever one writer. Plus the read pool.
+    let write_conn = db::open_write(&core_cfg.db_path)?;
+    decant_core::schema::migrate(&write_conn)?;
+    let write = db::shared_write(write_conn);
     let read_pool = db::read_pool(&core_cfg.db_path, READ_POOL_SIZE)
         .map_err(|e| anyhow::anyhow!("could not build read pool: {e}"))?;
 
@@ -82,7 +85,7 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
     // sync that ingests new data broadcasts a change event.
     let ingest_shutdown = wait_for_shutdown(shutdown_rx.clone());
     let ingest_handle = tokio::spawn(ingest::run_loop(
-        write,
+        write.clone(),
         core_cfg.clone(),
         sync_status.clone(),
         change_tx.clone(),
@@ -94,6 +97,7 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
     let app = http::router(http::AppState {
         token,
         read_pool,
+        write,
         sync_status,
         events: change_tx,
     });

@@ -12,6 +12,7 @@ pub mod filters;
 pub mod query;
 
 pub mod analytics;
+pub mod recommendations;
 pub mod search;
 pub mod sessions;
 pub mod tools;

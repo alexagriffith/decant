@@ -12,10 +12,12 @@ async fn spawn(token: &str) -> (String, tokio::task::JoinHandle<()>) {
         decant_core::schema::migrate(&conn).unwrap();
     }
     let read_pool = decant_daemon::db::read_pool(&db_path, 4).unwrap();
+    let write = decant_daemon::db::shared_write(decant_daemon::db::open_write(&db_path).unwrap());
 
     let app = decant_daemon::http::router(decant_daemon::http::AppState {
         token: token.to_string(),
         read_pool,
+        write,
         sync_status: decant_daemon::sync_status::SyncStatusHandle::new(),
         events: decant_daemon::events::channel(),
     });

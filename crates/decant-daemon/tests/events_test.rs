@@ -25,11 +25,13 @@ async fn spawn() -> (String, ChangeSender) {
         decant_core::schema::migrate(&conn).unwrap();
     }
     let read_pool = decant_daemon::db::read_pool(&db_path, 4).unwrap();
+    let write = decant_daemon::db::shared_write(decant_daemon::db::open_write(&db_path).unwrap());
 
     let events = decant_daemon::events::channel();
     let app = decant_daemon::http::router(decant_daemon::http::AppState {
         token: TOKEN.to_string(),
         read_pool,
+        write,
         sync_status: SyncStatusHandle::new(),
         events: events.clone(),
     });

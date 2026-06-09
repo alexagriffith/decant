@@ -48,18 +48,22 @@ async fn spawn() -> String {
         codex_dir,
     };
 
-    // Run one real sync to populate the DB (the same path the daemon uses).
-    let mut write = decant_core::db::open(&db_path).unwrap();
-    decant_core::schema::migrate(&write).unwrap();
+    // Run one real sync to populate the DB (the same path the daemon uses). This
+    // also regenerates recommendations, so the `recommendation` table is seeded.
+    let mut conn = decant_core::db::open(&db_path).unwrap();
+    decant_core::schema::migrate(&conn).unwrap();
     let status = SyncStatusHandle::new();
-    let report = decant_daemon::ingest::run_sync_once(&mut write, &core_cfg, &status).unwrap();
+    let report = decant_daemon::ingest::run_sync_once(&mut conn, &core_cfg, &status).unwrap();
     assert_eq!(report.ingested, 2, "both fixtures must ingest");
-    drop(write);
+    // Keep the connection alive as the shared writer for the mark-implemented
+    // endpoint (the daemon shares this exact connection with the ingest task).
+    let write = decant_daemon::db::shared_write(conn);
 
     let read_pool = decant_daemon::db::read_pool(&db_path, 4).unwrap();
     let app = decant_daemon::http::router(decant_daemon::http::AppState {
         token: TOKEN.to_string(),
         read_pool,
+        write,
         sync_status: status,
         events: decant_daemon::events::channel(),
     });
@@ -367,4 +371,160 @@ async fn responses_carry_api_version_header() {
         .await
         .unwrap();
     assert_eq!(r.headers().get("x-decant-api-version").unwrap(), "1");
+}
+
+// --- Recommendations (Plan 6a) ---------------------------------------------
+
+/// POST mark-implemented with the bearer token; return (status, body).
+async fn post_mark(
+    base: &str,
+    body: serde_json::Value,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let r = client()
+        .post(format!("{base}/api/v1/recommendations/mark-implemented"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = r.status();
+    (status, r.json().await.unwrap())
+}
+
+#[tokio::test]
+async fn recommendations_list_returns_envelope_with_catalog() {
+    let base = spawn().await;
+    let body = get_ok(&base, "/api/v1/recommendations").await;
+    assert_envelope(&body);
+    let rows = body["data"].as_array().unwrap();
+    // The evergreen catalog (7 entries) is always materialized by the sync's
+    // regeneration; default status filter is `open`.
+    let keys: Vec<&str> = rows.iter().map(|r| r["key"].as_str().unwrap()).collect();
+    assert!(
+        keys.contains(&"catalog:agents-md"),
+        "catalog must be present"
+    );
+    assert!(keys.contains(&"catalog:hooks"));
+    assert!(rows.iter().all(|r| r["status"] == "open"));
+    // Default filter is reflected in meta.
+    assert_eq!(body["meta"]["filters_applied"]["status"], "open");
+    // Each row carries the content + state fields.
+    let agents = rows
+        .iter()
+        .find(|r| r["key"] == "catalog:agents-md")
+        .unwrap();
+    assert_eq!(agents["kind"], "catalog");
+    assert_eq!(agents["title"], "AGENTS.md at the repo root");
+    assert!(agents["first_seen_at"].is_string());
+}
+
+#[tokio::test]
+async fn mark_implemented_flips_status_and_is_visible_under_implemented_filter() {
+    let base = spawn().await;
+    // Not implemented yet.
+    let before = get_ok(&base, "/api/v1/recommendations?status=implemented").await;
+    assert!(before["data"].as_array().unwrap().is_empty());
+
+    // Mark a catalog entry implemented.
+    let (status, body) = post_mark(
+        &base,
+        serde_json::json!({"key": "catalog:agents-md", "source": "agent", "note": "wired it up"}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["data"]["key"], "catalog:agents-md");
+    assert_eq!(body["data"]["status"], "implemented");
+    assert_eq!(body["data"]["status_source"], "agent");
+
+    // It now appears under ?status=implemented and is gone from the open list.
+    let after = get_ok(&base, "/api/v1/recommendations?status=implemented").await;
+    let impl_rows = after["data"].as_array().unwrap();
+    assert_eq!(impl_rows.len(), 1);
+    assert_eq!(impl_rows[0]["key"], "catalog:agents-md");
+    assert_eq!(impl_rows[0]["status_source"], "agent");
+    assert_eq!(impl_rows[0]["note"], "wired it up");
+    assert!(impl_rows[0]["implemented_at"].is_string());
+
+    let open = get_ok(&base, "/api/v1/recommendations?status=open").await;
+    assert!(!open["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["key"] == "catalog:agents-md"));
+
+    // ?status=all shows both open and implemented.
+    let all = get_ok(&base, "/api/v1/recommendations?status=all").await;
+    assert!(all["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["key"] == "catalog:agents-md" && r["status"] == "implemented"));
+}
+
+#[tokio::test]
+async fn mark_implemented_is_idempotent() {
+    let base = spawn().await;
+    let (s1, _) = post_mark(&base, serde_json::json!({"key": "catalog:skills"})).await;
+    assert_eq!(s1, 200);
+    // Marking again returns 200 (idempotent), source defaults to manual.
+    let (s2, body2) = post_mark(
+        &base,
+        serde_json::json!({"key": "catalog:skills", "source": "manual"}),
+    )
+    .await;
+    assert_eq!(s2, 200);
+    assert_eq!(body2["data"]["status"], "implemented");
+    // Still exactly one implemented row for that key.
+    let implemented = get_ok(&base, "/api/v1/recommendations?status=implemented").await;
+    let n = implemented["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["key"] == "catalog:skills")
+        .count();
+    assert_eq!(n, 1);
+}
+
+#[tokio::test]
+async fn mark_implemented_unknown_key_is_404() {
+    let base = spawn().await;
+    let (status, body) = post_mark(&base, serde_json::json!({"key": "catalog:nope"})).await;
+    assert_eq!(status, 404);
+    assert_eq!(body["error"]["code"], "NOT_FOUND");
+    assert!(body["error"]["request_id"].is_string());
+}
+
+#[tokio::test]
+async fn recommendations_unknown_status_is_400() {
+    let base = spawn().await;
+    let r = client()
+        .get(format!("{base}/api/v1/recommendations?status=bogus"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400);
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "INVALID_FILTER");
+}
+
+#[tokio::test]
+async fn recommendations_endpoints_require_auth() {
+    let base = spawn().await;
+    // GET without token -> 401.
+    let r = client()
+        .get(format!("{base}/api/v1/recommendations"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+
+    // POST without token -> 401 (never reaches the write).
+    let r = client()
+        .post(format!("{base}/api/v1/recommendations/mark-implemented"))
+        .json(&serde_json::json!({"key": "catalog:agents-md"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
 }

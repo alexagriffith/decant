@@ -11,13 +11,28 @@
 //! `decant-core` pins, and adding one would link a second `libsqlite3-sys`.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 
-/// Open the single exclusive write connection owned by the ingest task.
+/// The single exclusive write connection, shared behind a mutex.
+///
+/// There is exactly **one** write `Connection` for the whole daemon. The ingest
+/// task holds a clone for its sync loop; the recommendations write endpoint
+/// holds another clone. The mutex (not SQLite's file lock) serializes the two,
+/// so we never introduce a second uncoordinated writer that could fight the WAL
+/// lock — at most one task ever holds the connection at a time.
+pub type WriteConn = Arc<Mutex<Connection>>;
+
+/// Open the single exclusive write connection and wrap it for sharing.
 /// Reuses decant-core's open/configure (WAL + `busy_timeout` + foreign keys).
 pub fn open_write(path: &Path) -> decant_core::Result<Connection> {
     decant_core::db::open(path)
+}
+
+/// Wrap an owned write [`Connection`] as a shareable [`WriteConn`].
+pub fn shared_write(conn: Connection) -> WriteConn {
+    Arc::new(Mutex::new(conn))
 }
 
 /// An `r2d2` pool of read connections to the archive at `path`.

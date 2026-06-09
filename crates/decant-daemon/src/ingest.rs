@@ -18,6 +18,7 @@ use decant_core::ingest::{self as core_ingest, SyncReport};
 use rusqlite::Connection;
 use tokio::sync::mpsc;
 
+use crate::db::WriteConn;
 use crate::events::{self, ChangeEvent, ChangeSender};
 use crate::sync_status::SyncStatusHandle;
 
@@ -75,6 +76,11 @@ pub fn run_sync_once(
                 failed = report.failed,
                 "sync complete"
             );
+            // Regenerate recommendations off the same write connection now that
+            // the ingest transaction has committed. This is best-effort: a
+            // regeneration failure must NOT fail the sync (the archive is already
+            // updated), so we log and carry on (spec §6).
+            regenerate_recommendations(write);
             status.finish_ok(report.ingested, summary);
             Ok(report)
         }
@@ -83,6 +89,14 @@ pub fn run_sync_once(
             status.finish_err(e.to_string());
             Err(e)
         }
+    }
+}
+
+/// Regenerate the recommendation set from the freshly-synced archive. Best-
+/// effort: errors are logged and swallowed so they never fail the sync.
+fn regenerate_recommendations(write: &Connection) {
+    if let Err(e) = decant_core::recommendations::regenerate(write) {
+        tracing::error!(error = %e, "recommendation regeneration failed (sync still succeeded)");
     }
 }
 
@@ -96,7 +110,7 @@ pub fn run_sync_once(
 /// `change_tx` broadcasts a [`ChangeEvent`] to SSE subscribers after each sync
 /// that ingested new data; no-op syncs do not emit (spec §7).
 pub async fn run_loop(
-    mut write: Connection,
+    write: WriteConn,
     cfg: CoreConfig,
     status: SyncStatusHandle,
     change_tx: ChangeSender,
@@ -105,7 +119,7 @@ pub async fn run_loop(
     shutdown: impl std::future::Future<Output = ()>,
 ) {
     // Initial sync on boot.
-    write = sync_blocking(write, &cfg, &status, &change_tx).await;
+    sync_blocking(&write, &cfg, &status, &change_tx).await;
 
     let mut tick = tokio::time::interval(interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -126,14 +140,14 @@ pub async fn run_loop(
                 break;
             }
             _ = tick.tick() => {
-                write = sync_blocking(write, &cfg, &status, &change_tx).await;
+                sync_blocking(&write, &cfg, &status, &change_tx).await;
             }
             recv = trigger.recv(), if watcher_alive => {
                 match recv {
                     Some(()) => {
                         // Coalesce any backlog of triggers into this one sync.
                         while trigger.try_recv().is_ok() {}
-                        write = sync_blocking(write, &cfg, &status, &change_tx).await;
+                        sync_blocking(&write, &cfg, &status, &change_tx).await;
                     }
                     None => {
                         // All trigger senders dropped (watcher gone). Fall back to
@@ -147,38 +161,42 @@ pub async fn run_loop(
     }
 }
 
-/// Run one sync on a blocking thread, handing ownership of the connection in and
-/// back out so the loop keeps its single exclusive writer. A panic inside the
-/// blocking sync is caught here and recorded — the task never aborts.
+/// Run one sync on a blocking thread, locking the shared write connection for
+/// the duration so the mark-implemented endpoint cannot write concurrently. A
+/// panic inside the blocking sync is caught here and recorded — the task never
+/// aborts. A poisoned lock (a prior panic mid-write) is recovered rather than
+/// propagated, so the loop keeps running.
 ///
 /// After a successful sync that ingested new data, broadcasts a [`ChangeEvent`]
 /// to SSE subscribers; a no-op sync (nothing newly ingested) is silent.
 async fn sync_blocking(
-    write: Connection,
+    write: &WriteConn,
     cfg: &CoreConfig,
     status: &SyncStatusHandle,
     change_tx: &ChangeSender,
-) -> Connection {
+) {
     let cfg_task = cfg.clone();
     let status_task = status.clone();
+    let write_task = write.clone();
     let join = tokio::task::spawn_blocking(move || {
-        let mut write = write;
-        let report = run_sync_once(&mut write, &cfg_task, &status_task);
-        (write, report)
+        // Recover from a poisoned mutex: a previous sync may have panicked while
+        // holding the lock, but the connection itself is still usable.
+        let mut guard = write_task
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        run_sync_once(&mut guard, &cfg_task, &status_task)
     })
     .await;
     match join {
-        Ok((conn, report)) => {
+        Ok(report) => {
             maybe_emit_change(change_tx, status, &report);
-            conn
         }
         Err(e) => {
-            // The blocking sync panicked; the connection was moved into the
-            // panicking task and is gone. Re-open a fresh write connection so
-            // the loop can keep going.
-            tracing::error!(error = %e, "sync task panicked; reopening write connection");
+            // The blocking sync panicked. The connection lives behind the Arc and
+            // is recovered on the next `lock()` (see above), so there is nothing
+            // to reopen — just record the failure and keep going.
+            tracing::error!(error = %e, "sync task panicked");
             status.finish_err(format!("sync task panicked: {e}"));
-            reopen_write(&cfg.db_path, status)
         }
     }
 }
@@ -205,21 +223,6 @@ fn maybe_emit_change(
         change_tx,
         ChangeEvent::archive_updated(report.ingested, last_sync_at),
     );
-}
-
-/// Best-effort reopen of the write connection after a panic. Retries briefly;
-/// if it cannot reopen it returns an in-memory connection so the loop stays
-/// alive (subsequent syncs will fail and be recorded, but the daemon serves on).
-fn reopen_write(db_path: &Path, status: &SyncStatusHandle) -> Connection {
-    match crate::db::open_write(db_path) {
-        Ok(conn) => conn,
-        Err(e) => {
-            tracing::error!(error = %e, "could not reopen write connection");
-            status.finish_err(format!("could not reopen write connection: {e}"));
-            // Fall back to an in-memory connection; never panic the loop.
-            rusqlite::Connection::open_in_memory().expect("in-memory sqlite always opens")
-        }
-    }
 }
 
 #[cfg(test)]

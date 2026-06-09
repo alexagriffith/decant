@@ -87,10 +87,12 @@ async fn sync_status_endpoint_returns_envelope() {
         decant_core::schema::migrate(&conn).unwrap();
     }
     let pool = decant_daemon::db::read_pool(&db_path, 4).unwrap();
+    let write = decant_daemon::db::shared_write(decant_daemon::db::open_write(&db_path).unwrap());
 
     let app = decant_daemon::http::router(decant_daemon::http::AppState {
         token: token.to_string(),
         read_pool: pool,
+        write,
         sync_status: status.clone(),
         events: decant_daemon::events::channel(),
     });
@@ -135,8 +137,9 @@ async fn run_loop_syncs_then_stops_on_shutdown() {
     let dir = tempfile::tempdir().unwrap();
     let core_cfg = seed_core_config(dir.path());
 
-    let write = decant_core::db::open(&core_cfg.db_path).unwrap();
-    decant_core::schema::migrate(&write).unwrap();
+    let conn = decant_core::db::open(&core_cfg.db_path).unwrap();
+    decant_core::schema::migrate(&conn).unwrap();
+    let write = decant_daemon::db::shared_write(conn);
 
     let status = SyncStatusHandle::new();
     let (trigger_tx, trigger_rx) = tokio::sync::mpsc::channel::<()>(8);
@@ -209,8 +212,9 @@ async fn run_loop_broadcasts_change_event_on_ingest_but_not_on_noop() {
     let dir = tempfile::tempdir().unwrap();
     let core_cfg = seed_core_config(dir.path());
 
-    let write = decant_core::db::open(&core_cfg.db_path).unwrap();
-    decant_core::schema::migrate(&write).unwrap();
+    let conn = decant_core::db::open(&core_cfg.db_path).unwrap();
+    decant_core::schema::migrate(&conn).unwrap();
+    let write = decant_daemon::db::shared_write(conn);
 
     let status = SyncStatusHandle::new();
     // Subscribe BEFORE booting the loop so the boot sync's event is captured.

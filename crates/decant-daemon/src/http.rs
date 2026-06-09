@@ -4,7 +4,7 @@ use axum::{
 };
 use tower_http::trace::TraceLayer;
 
-use crate::db::ReadPool;
+use crate::db::{ReadPool, WriteConn};
 use crate::events::ChangeSender;
 use crate::sync_status::SyncStatusHandle;
 
@@ -14,6 +14,11 @@ pub struct AppState {
     pub token: String,
     /// r2d2 pool of read connections for handlers (Plan 3 reads use this).
     pub read_pool: ReadPool,
+    /// The shared single write connection (Plan 6a): the recommendations
+    /// mark-implemented endpoint locks this, the same connection the ingest task
+    /// syncs on, so writes are serialized by the mutex rather than racing the
+    /// WAL lock.
+    pub write: WriteConn,
     /// Live ingest status, written by the ingest task.
     pub sync_status: SyncStatusHandle,
     /// Broadcast sender for the SSE change-stream (Plan 4). The SSE handler
@@ -54,6 +59,15 @@ pub fn router(state: AppState) -> Router {
         // Tools
         .route("/api/v1/tools/usage", get(crate::api::tools::usage))
         .route("/api/v1/tools/mcp-usage", get(crate::api::tools::mcp_usage))
+        // Recommendations (Plan 6a): list (read) + mark-implemented (write).
+        .route(
+            "/api/v1/recommendations",
+            get(crate::api::recommendations::list),
+        )
+        .route(
+            "/api/v1/recommendations/mark-implemented",
+            post(crate::api::recommendations::mark_implemented),
+        )
         // Metadata
         .route(
             "/api/v1/metadata/sync-status",
