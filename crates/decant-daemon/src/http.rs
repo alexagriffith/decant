@@ -87,6 +87,9 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .route("/api/v1/health", get(crate::health::health))
+        // The API contract, served unauthenticated (it is a public schema, not
+        // data) so any client can fetch the bundled OpenAPI document.
+        .route("/api/v1/openapi.yaml", get(crate::openapi::spec))
         .merge(protected)
         .layer(axum::middleware::map_response(add_version_header))
         .layer(TraceLayer::new_for_http())

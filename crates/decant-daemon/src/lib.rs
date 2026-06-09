@@ -11,6 +11,7 @@ pub mod ingest;
 pub mod lock;
 pub mod metadata;
 pub mod middleware;
+pub mod openapi;
 pub mod sync_status;
 pub mod watcher;
 

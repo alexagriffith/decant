@@ -23,6 +23,7 @@ security:
 
 tags:
   - name: health
+  - name: meta
   - name: sessions
   - name: search
   - name: analytics
@@ -57,6 +58,23 @@ paths:
                           api_version: { type: integer, example: 1 }
                           db_schema_version: { type: integer, example: 1 }
                           status: { type: string, example: ok }
+
+  /openapi.yaml:
+    get:
+      tags: [meta]
+      summary: This OpenAPI contract
+      description: >
+        Returns this document (the API contract of record) as `application/yaml`.
+        Unauthenticated and bundled into the daemon binary so any client can fetch
+        the schema it is talking to.
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI 3.1 document.
+          content:
+            application/yaml:
+              schema:
+                type: string
 
   /sessions:
     get:
