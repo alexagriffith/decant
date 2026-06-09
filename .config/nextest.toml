@@ -1,0 +1,10 @@
+# cargo-nextest configuration.
+#
+# The `ci` profile is used in GitHub Actions to emit a JUnit XML report that
+# the test-reporter step surfaces in the GitHub UI. Run locally with:
+#
+#     cargo nextest run --workspace --profile ci
+#
+# The report is written to target/nextest/ci/junit.xml.
+[profile.ci.junit]
+path = "junit.xml"

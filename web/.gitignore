@@ -22,6 +22,9 @@ erl_crash.dump
 # Temporary files, for example, from tests.
 /tmp/
 
+# JUnit XML test report (generated in CI by junit_formatter).
+/report/
+
 # Ignore package tarball (built via "mix hex.build").
 decant-*.tar
 

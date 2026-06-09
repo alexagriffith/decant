@@ -11,6 +11,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The test-reporter steps publish to the Actions job summary
+# (use-actions-summary), which needs no elevated token scopes.
 permissions:
   contents: read
 
@@ -29,14 +31,41 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Format
         run: cargo fmt --all -- --check
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Test
-        run: cargo test --workspace
+      - name: Test (nextest, JUnit report)
+        run: cargo nextest run --workspace --profile ci
+
+      - name: Doctests
+        run: cargo test --workspace --doc
+
+      - name: Publish Rust test report
+        uses: dorny/test-reporter@v2
+        # Runs on success or failure (but not cancellation) so results are
+        # surfaced even when tests fail.
+        if: ${{ !cancelled() }}
+        with:
+          name: Rust tests
+          path: target/nextest/ci/junit.xml
+          reporter: java-junit
+          # Write the report to the Actions run summary (no checks: write).
+          use-actions-summary: true
+          fail-on-error: false
+
+      - name: Upload Rust JUnit report
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: rust-junit
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
 
   web:
     name: Web (Elixir/Phoenix)
@@ -73,5 +102,26 @@ jobs:
       - name: Compile (warnings as errors)
         run: mix compile --warnings-as-errors
 
-      - name: Test
+      - name: Test (JUnit report)
         run: mix test
+
+      - name: Publish Elixir test report
+        uses: dorny/test-reporter@v2
+        # Runs on success or failure (but not cancellation) so results are
+        # surfaced even when tests fail.
+        if: ${{ !cancelled() }}
+        with:
+          name: Elixir tests
+          path: web/report/junit.xml
+          reporter: java-junit
+          # Write the report to the Actions run summary (no checks: write).
+          use-actions-summary: true
+          fail-on-error: false
+
+      - name: Upload Elixir JUnit report
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: elixir-junit
+          path: web/report/junit.xml
+          if-no-files-found: warn

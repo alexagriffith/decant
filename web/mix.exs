@@ -66,7 +66,8 @@ defmodule Decant.MixProject do
       # SSE parsing for the daemon change-stream (GET /api/v1/events).
       {:server_sent_events, "~> 1.1"},
       # Mock the HTTP layer in tests (no real network connections).
-      {:mimic, "~> 2.3", only: :test}
+      {:mimic, "~> 2.3", only: :test},
+      {:junit_formatter, "~> 3.4", only: :test, runtime: false}
     ]
   end
 
