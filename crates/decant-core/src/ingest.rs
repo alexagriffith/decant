@@ -361,6 +361,12 @@ pub fn sync(conn: &mut Connection, config: &Config) -> Result<SyncReport> {
         tx.commit()?;
         report.ingested += 1;
     }
+    // Roll-up identity is data-derived and cheap; refresh it whenever new
+    // projects/sessions landed so worktrees link to roots (and synthetic
+    // attributions upgrade as real roots appear).
+    if report.ingested > 0 {
+        crate::worktree::resolve_worktree_roots(conn)?;
+    }
     Ok(report)
 }
 
@@ -501,6 +507,37 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0))
             .unwrap();
         assert_eq!(sessions3, 1);
+    }
+
+    #[test]
+    fn sync_resolves_worktree_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join("claude/projects");
+        let codex_dir = dir.path().join("codex");
+        write(&claude_dir.join("proj/sess.jsonl"), &claude_fixture());
+
+        let config = Config {
+            db_path: dir.path().join("d.db"),
+            claude_dir,
+            codex_dir,
+        };
+        let mut conn = db::open(&config.db_path).unwrap();
+        schema::migrate(&conn).unwrap();
+        let r = sync(&mut conn, &config).unwrap();
+        assert_eq!(r.ingested, 1);
+
+        // Every project produced by ingest has a resolved root.
+        let unresolved: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM project WHERE root_source IS NULL OR root_path IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unresolved, 0,
+            "sync must resolve worktree roots for new projects"
+        );
     }
 
     #[test]
