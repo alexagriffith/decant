@@ -4,9 +4,20 @@
 //! `format_status`) are unit-tested; the `launchctl` calls and process spawning
 //! are side effects exercised by hand, not in tests.
 
+// The lifecycle commands drive macOS `launchctl`, so the command bodies and
+// their path/PID/HTTP helpers only have callers on macOS; on other platforms
+// the commands are "not supported" stubs. The pure helpers are still
+// unit-tested on every platform, so keep them compiled and allow dead code on
+// non-macOS targets rather than gate the tests away from CI (which runs on
+// Linux). Dead code is still denied on macOS, so genuinely unused items surface
+// there.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 use crate::output::Format;
 use crate::Cli;
 use std::path::{Path, PathBuf};
+// Used only by the macOS HTTP status probe (`http_get_json`).
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
 /// The LaunchAgent label, also the plist filename stem.
