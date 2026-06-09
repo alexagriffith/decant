@@ -20,7 +20,6 @@ defmodule DecantWeb.SessionLive.IndexTest do
     assert html =~ "Fix the failing auth test"
     assert html =~ "List the open TODOs"
 
-    # Tool badges + model badges render.
     assert html =~ "Claude"
     assert html =~ "Codex"
     assert html =~ "claude-opus-4-7"
@@ -30,7 +29,6 @@ defmodule DecantWeb.SessionLive.IndexTest do
   test "renders the refresh control without shelling out", %{conn: conn} do
     {:ok, view, html} = live(conn, ~p"/")
 
-    # The control is present; clicking it now just re-fetches the page.
     assert html =~ "Sync"
     assert has_element?(view, "button[phx-click=\"sync\"]")
   end
@@ -44,7 +42,6 @@ defmodule DecantWeb.SessionLive.IndexTest do
       |> render_click()
 
     assert html =~ "Refreshed."
-    # Data is still present after the refresh.
     assert html =~ "Fix the failing auth test"
   end
 

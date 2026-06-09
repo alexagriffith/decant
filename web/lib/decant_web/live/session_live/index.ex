@@ -36,7 +36,6 @@ defmodule DecantWeb.SessionLive.Index do
     {:noreply, socket |> assign(sort: TableSort.toggle(socket.assigns.sort, col)) |> refresh()}
   end
 
-  # Apply the text filter and the current sort, then re-stream the rows.
   defp refresh(socket) do
     rows =
       socket.assigns.all

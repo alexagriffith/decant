@@ -47,8 +47,6 @@ defmodule Decant.Settings do
     Path.expand(Path.join(dir, "settings.json"))
   end
 
-  ## inference
-
   defp detect_terminal do
     case System.get_env("TERM_PROGRAM") do
       "iTerm.app" -> "iterm"
@@ -81,8 +79,6 @@ defmodule Decant.Settings do
   rescue
     _ -> "claude"
   end
-
-  ## storage
 
   defp load do
     with {:ok, body} <- File.read(path()),

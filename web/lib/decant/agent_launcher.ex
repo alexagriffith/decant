@@ -155,10 +155,8 @@ defmodule Decant.AgentLauncher do
     e -> {:error, Exception.message(e)}
   end
 
-  # Single-quote for POSIX shells.
   defp shell_quote(s), do: "'" <> String.replace(s, "'", "'\\''") <> "'"
 
-  # Quote + escape for an AppleScript string literal.
   defp applescript_string(s) do
     "\"" <> (s |> String.replace("\\", "\\\\") |> String.replace("\"", "\\\"")) <> "\""
   end

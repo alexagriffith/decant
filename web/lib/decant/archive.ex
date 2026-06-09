@@ -29,7 +29,6 @@ defmodule Decant.Archive do
     end
   end
 
-  # Map an API SessionSummary (string keys) to the dashboard's atom-keyed shape.
   defp to_summary(s) do
     %{
       id: s["id"],
@@ -248,8 +247,6 @@ defmodule Decant.Archive do
     %{sessions: t.sessions, cost: t.cost, last_activity: date_bounds().max}
   end
 
-  # Build the daemon's query params (string values) from a filters map. `from`
-  # and `to` become `YYYY-MM-DD`; nils are dropped by the client.
   defp to_params(filters) do
     [
       from: iso_date(Map.get(filters, :from)),

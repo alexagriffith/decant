@@ -89,8 +89,6 @@ defmodule DecantWeb.Filters do
     Enum.all?([:from, :to, :tool, :model, :project], &(Map.get(filters, &1) in [nil, ""]))
   end
 
-  ## helpers
-
   defp preset_days(key), do: Enum.find_value(@presets, 30, fn {k, d} -> if k == key, do: d end)
 
   defp anchor(%{max: max}) when is_binary(max), do: Date.from_iso8601!(max)

@@ -33,10 +33,6 @@ pub fn clamp_limit(requested: Option<i64>) -> i64 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Session summaries + list (keyset pagination)
-// ---------------------------------------------------------------------------
-
 /// A session row for list/detail. Includes cache token totals (the web summary
 /// omitted them; the API contract in spec §5 includes "token totals incl. cache").
 #[derive(Debug, Serialize)]
@@ -223,10 +219,6 @@ fn sort_key_to_sql(sk: &Option<String>) -> SqlValue {
         None => SqlValue::Null,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Session detail
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 pub struct CostBreakdown {
@@ -421,10 +413,6 @@ fn duration_seconds(a: Option<&str>, b: Option<&str>) -> Option<i64> {
     Some((db - da).num_seconds().max(0))
 }
 
-// ---------------------------------------------------------------------------
-// Search (FTS5)
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Serialize)]
 pub struct SearchHit {
     pub session_id: i64,
@@ -538,10 +526,6 @@ pub fn is_fts_syntax_error(e: &rusqlite::Error) -> bool {
         false
     }
 }
-
-// ---------------------------------------------------------------------------
-// Analytics: totals, by-dimension, activity, sparklines
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 pub struct Totals {
@@ -860,10 +844,6 @@ pub fn model_sparklines(conn: &Connection, filters: &Filters) -> Result<ModelSpa
     Ok(ModelSparklines { models, days })
 }
 
-// ---------------------------------------------------------------------------
-// Tools + MCP usage
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Serialize)]
 pub struct ToolRow {
     pub tool_name: String,
@@ -964,10 +944,6 @@ fn error_rate(errors: i64, calls: i64) -> f64 {
         0.0
     }
 }
-
-// ---------------------------------------------------------------------------
-// Metadata
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 pub struct DateBounds {

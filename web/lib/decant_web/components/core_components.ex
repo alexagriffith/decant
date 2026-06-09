@@ -239,13 +239,11 @@ defmodule DecantWeb.CoreComponents do
     """
   end
 
-  # Shared base classes for text-like inputs, selects, and textareas.
   defp field_base do
     "w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg " <>
       "placeholder:text-faint shadow-sm transition-colors focus:border-accent"
   end
 
-  # Helper used by inputs to generate form errors.
   defp error(assigns) do
     ~H"""
     <p class="mt-1.5 flex items-center gap-2 text-sm text-danger">
@@ -357,8 +355,6 @@ defmodule DecantWeb.CoreComponents do
     <span class={[@name, @class]} />
     """
   end
-
-  ## JS Commands
 
   def show(js \\ %JS{}, selector) do
     JS.show(js,

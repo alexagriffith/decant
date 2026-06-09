@@ -44,7 +44,6 @@ async fn protected_route_requires_token_and_good_host() {
     let (base, _h) = spawn("secret-token").await;
     let client = reqwest::Client::new();
 
-    // Missing token -> 401
     let r = client
         .get(format!("{base}/api/v1/ping"))
         .send()
@@ -52,7 +51,6 @@ async fn protected_route_requires_token_and_good_host() {
         .unwrap();
     assert_eq!(r.status(), 401);
 
-    // Good token -> 200
     let r = client
         .get(format!("{base}/api/v1/ping"))
         .header("authorization", "Bearer secret-token")

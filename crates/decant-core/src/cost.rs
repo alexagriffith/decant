@@ -26,7 +26,6 @@ pub struct Price {
 pub fn default_pricing() -> HashMap<&'static str, Price> {
     let mut m = HashMap::new();
 
-    // Anthropic Claude (opus 4.6/4.7/4.8, sonnet 4.5/4.6, haiku 4.5).
     m.insert(
         "claude-opus",
         Price {
@@ -148,7 +147,6 @@ fn canonical_model(raw: &str) -> Option<&'static str> {
         return None; // a "claude-*" we don't recognize
     }
 
-    // Codex's automatic code review runs on gpt-5.3-codex.
     if s.starts_with("codex-auto-review") {
         return Some("gpt-5.3-codex");
     }

@@ -52,7 +52,6 @@ defmodule Decant.DaemonEventsTest do
     send(pid, {:sse_event, %{event: "resync", data: "{\"type\":\"resync\"}"}})
 
     refute_receive {:archive_updated, _}, 100
-    # The process kept running.
     assert Process.alive?(pid)
   end
 

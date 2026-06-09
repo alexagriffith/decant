@@ -31,7 +31,6 @@ async fn spawn() -> String {
     let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let root = dir.path();
 
-    // Lay out a Claude + Codex source tree and seed it.
     let claude_dir = root.join("claude/projects");
     let codex_dir = root.join("codex");
     let csess = claude_dir.join("proj/sess.jsonl");
@@ -120,7 +119,6 @@ async fn sessions_list_returns_envelope_and_pagination() {
 #[tokio::test]
 async fn sessions_cursor_pagination_round_trips() {
     let base = spawn().await;
-    // Page 1: one row, has_more true, a next_cursor.
     let p1 = get_ok(&base, "/api/v1/sessions?limit=1").await;
     let d1 = p1["data"].as_array().unwrap();
     assert_eq!(d1.len(), 1);
@@ -128,7 +126,6 @@ async fn sessions_cursor_pagination_round_trips() {
     assert_eq!(p1["meta"]["pagination"]["total_count"], 2);
     let cursor = p1["meta"]["pagination"]["next_cursor"].as_str().unwrap();
 
-    // Page 2: the other row, no overlap, total stable, has_more false.
     let p2 = get_ok(&base, &format!("/api/v1/sessions?limit=1&cursor={cursor}")).await;
     let d2 = p2["data"].as_array().unwrap();
     assert_eq!(d2.len(), 1);
@@ -141,7 +138,6 @@ async fn sessions_cursor_pagination_round_trips() {
 #[tokio::test]
 async fn session_detail_has_stats_and_messages() {
     let base = spawn().await;
-    // Find the claude session id via a filtered list.
     let list = get_ok(&base, "/api/v1/sessions?tool=claude_code").await;
     let id = list["data"][0]["id"].as_i64().unwrap();
 
@@ -152,7 +148,6 @@ async fn session_detail_has_stats_and_messages() {
     assert_eq!(body["data"]["stats"]["duration_seconds"], 10);
     let msgs = body["data"]["messages"].as_array().unwrap();
     assert_eq!(msgs.len(), 4);
-    // Blocks are present on the assistant message.
     assert!(msgs
         .iter()
         .any(|m| !m["blocks"].as_array().unwrap().is_empty()));
@@ -195,7 +190,6 @@ async fn search_returns_hits() {
 #[tokio::test]
 async fn search_malformed_body_is_400() {
     let base = spawn().await;
-    // Not JSON at all.
     let r = client()
         .post(format!("{base}/api/v1/search"))
         .header("authorization", format!("Bearer {TOKEN}"))
@@ -302,7 +296,6 @@ async fn tools_usage_and_mcp_usage() {
     assert_envelope(&usage);
     let rows = usage["data"].as_array().unwrap();
     assert!(!rows.is_empty(), "fixtures have tool calls");
-    // error_rate is present and numeric.
     assert!(rows[0]["error_rate"].is_number());
 
     // errors_only filters down (fixtures have no errors -> empty).
@@ -327,7 +320,6 @@ async fn metadata_date_bounds() {
 #[tokio::test]
 async fn unauthenticated_requests_are_401() {
     let base = spawn().await;
-    // A representative set of protected endpoints, no Authorization header.
     for path in [
         "/api/v1/sessions",
         "/api/v1/analytics/summary",
@@ -337,7 +329,6 @@ async fn unauthenticated_requests_are_401() {
         let r = client().get(format!("{base}{path}")).send().await.unwrap();
         assert_eq!(r.status(), 401, "{path} must require auth");
     }
-    // Search (POST) too.
     let r = client()
         .post(format!("{base}/api/v1/search"))
         .json(&serde_json::json!({"q": "x"}))
@@ -373,8 +364,6 @@ async fn responses_carry_api_version_header() {
     assert_eq!(r.headers().get("x-decant-api-version").unwrap(), "1");
 }
 
-// --- Recommendations (Plan 6a) ---------------------------------------------
-
 /// POST mark-implemented with the bearer token; return (status, body).
 async fn post_mark(
     base: &str,
@@ -406,9 +395,7 @@ async fn recommendations_list_returns_envelope_with_catalog() {
     );
     assert!(keys.contains(&"catalog:hooks"));
     assert!(rows.iter().all(|r| r["status"] == "open"));
-    // Default filter is reflected in meta.
     assert_eq!(body["meta"]["filters_applied"]["status"], "open");
-    // Each row carries the content + state fields.
     let agents = rows
         .iter()
         .find(|r| r["key"] == "catalog:agents-md")
@@ -421,11 +408,9 @@ async fn recommendations_list_returns_envelope_with_catalog() {
 #[tokio::test]
 async fn mark_implemented_flips_status_and_is_visible_under_implemented_filter() {
     let base = spawn().await;
-    // Not implemented yet.
     let before = get_ok(&base, "/api/v1/recommendations?status=implemented").await;
     assert!(before["data"].as_array().unwrap().is_empty());
 
-    // Mark a catalog entry implemented.
     let (status, body) = post_mark(
         &base,
         serde_json::json!({"key": "catalog:agents-md", "source": "agent", "note": "wired it up"}),
@@ -436,7 +421,6 @@ async fn mark_implemented_flips_status_and_is_visible_under_implemented_filter()
     assert_eq!(body["data"]["status"], "implemented");
     assert_eq!(body["data"]["status_source"], "agent");
 
-    // It now appears under ?status=implemented and is gone from the open list.
     let after = get_ok(&base, "/api/v1/recommendations?status=implemented").await;
     let impl_rows = after["data"].as_array().unwrap();
     assert_eq!(impl_rows.len(), 1);
@@ -452,7 +436,6 @@ async fn mark_implemented_flips_status_and_is_visible_under_implemented_filter()
         .iter()
         .any(|r| r["key"] == "catalog:agents-md"));
 
-    // ?status=all shows both open and implemented.
     let all = get_ok(&base, "/api/v1/recommendations?status=all").await;
     assert!(all["data"]
         .as_array()
@@ -466,7 +449,6 @@ async fn mark_implemented_is_idempotent() {
     let base = spawn().await;
     let (s1, _) = post_mark(&base, serde_json::json!({"key": "catalog:skills"})).await;
     assert_eq!(s1, 200);
-    // Marking again returns 200 (idempotent), source defaults to manual.
     let (s2, body2) = post_mark(
         &base,
         serde_json::json!({"key": "catalog:skills", "source": "manual"}),
@@ -474,7 +456,6 @@ async fn mark_implemented_is_idempotent() {
     .await;
     assert_eq!(s2, 200);
     assert_eq!(body2["data"]["status"], "implemented");
-    // Still exactly one implemented row for that key.
     let implemented = get_ok(&base, "/api/v1/recommendations?status=implemented").await;
     let n = implemented["data"]
         .as_array()
@@ -511,7 +492,6 @@ async fn recommendations_unknown_status_is_400() {
 #[tokio::test]
 async fn recommendations_endpoints_require_auth() {
     let base = spawn().await;
-    // GET without token -> 401.
     let r = client()
         .get(format!("{base}/api/v1/recommendations"))
         .send()

@@ -4,19 +4,11 @@
 //! `format_status`) are unit-tested; the `launchctl` calls and process spawning
 //! are side effects exercised by hand, not in tests.
 
-// The lifecycle commands drive macOS `launchctl`, so the command bodies and
-// their path/PID/HTTP helpers only have callers on macOS; on other platforms
-// the commands are "not supported" stubs. The pure helpers are still
-// unit-tested on every platform, so keep them compiled and allow dead code on
-// non-macOS targets rather than gate the tests away from CI (which runs on
-// Linux). Dead code is still denied on macOS, so genuinely unused items surface
-// there.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use crate::output::Format;
 use crate::Cli;
 use std::path::{Path, PathBuf};
-// Used only by the macOS HTTP status probe (`http_get_json`).
 #[cfg(target_os = "macos")]
 use std::time::Duration;
 
@@ -26,10 +18,6 @@ pub const LAUNCH_AGENT_LABEL: &str = "com.decant.daemon";
 /// Default daemon base URL for the status probe (matches the daemon default and
 /// the web client). Overridable with `DECANT_DAEMON_URL`.
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:4577";
-
-// ---------------------------------------------------------------------------
-// Pure helpers (unit-tested)
-// ---------------------------------------------------------------------------
 
 /// Build the macOS LaunchAgent plist for the daemon.
 ///
@@ -178,10 +166,6 @@ pub fn format_status(r: &StatusReport) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Path helpers
-// ---------------------------------------------------------------------------
-
 fn home_dir() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
 }
@@ -209,10 +193,6 @@ fn lock_path() -> PathBuf {
     decant_daemon::config::Config::from_env().lock_path()
 }
 
-// ---------------------------------------------------------------------------
-// Commands
-// ---------------------------------------------------------------------------
-
 /// Emit the "macOS only" notice on unsupported platforms and exit non-fatally.
 #[cfg(not(target_os = "macos"))]
 fn not_supported(cli: &Cli, action: &str) -> anyhow::Result<i32> {
@@ -239,7 +219,6 @@ pub fn install(cli: &Cli) -> anyhow::Result<i32> {
     let log = log_path();
     let plist = plist_path();
 
-    // Ensure the Logs and LaunchAgents directories exist.
     std::fs::create_dir_all(logs_dir())?;
     if let Some(parent) = plist.parent() {
         std::fs::create_dir_all(parent)?;
@@ -319,7 +298,6 @@ pub fn start(cli: &Cli) -> anyhow::Result<i32> {
         return report_simple(&out, "start", res, "Started via launchctl.");
     }
 
-    // No LaunchAgent: spawn `decant daemon serve` detached, logging to the file.
     let pid = spawn_detached_serve()?;
     if matches!(out.format, Format::Json) {
         crate::output::print_json(&serde_json::json!({
@@ -349,7 +327,6 @@ pub fn stop(cli: &Cli) -> anyhow::Result<i32> {
         return report_simple(&out, "stop", res, "Stopped via launchctl.");
     }
 
-    // No LaunchAgent: signal the PID recorded in the lock file.
     match read_lock_pid(&lock_path()) {
         Some(pid) if pid_is_alive(pid) => {
             signal_term(pid);
@@ -417,7 +394,6 @@ pub fn logs(cli: &Cli, follow: bool) -> anyhow::Result<i32> {
     Ok(0)
 }
 
-// Non-macOS stubs: print the notice and exit 0.
 #[cfg(not(target_os = "macos"))]
 pub fn install(cli: &Cli) -> anyhow::Result<i32> {
     not_supported(cli, "install")
@@ -442,10 +418,6 @@ pub fn status(cli: &Cli) -> anyhow::Result<i32> {
 pub fn logs(cli: &Cli, _follow: bool) -> anyhow::Result<i32> {
     not_supported(cli, "logs")
 }
-
-// ---------------------------------------------------------------------------
-// Side-effecting helpers (macOS)
-// ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
 fn gui_target() -> String {
@@ -637,17 +609,14 @@ mod tests {
         assert!(p.contains("<string>/usr/local/bin/decant</string>"));
         assert!(p.contains("<string>daemon</string>"));
         assert!(p.contains("<string>serve</string>"));
-        // RunAtLoad + KeepAlive true.
         assert!(p.contains("<key>RunAtLoad</key>\n  <true/>"));
         assert!(p.contains("<key>KeepAlive</key>\n  <true/>"));
-        // Both std paths point at the log file.
         assert!(p.contains(&format!(
             "<key>StandardOutPath</key>\n  <string>{log}</string>"
         )));
         assert!(p.contains(&format!(
             "<key>StandardErrorPath</key>\n  <string>{log}</string>"
         )));
-        // Valid-looking plist preamble.
         assert!(p.starts_with("<?xml version=\"1.0\""));
         assert!(p.trim_end().ends_with("</plist>"));
     }

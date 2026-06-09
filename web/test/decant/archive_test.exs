@@ -89,16 +89,13 @@ defmodule Decant.ArchiveTest do
       assert detail.summary.id == 1
       assert detail.summary.title == "Fix the failing auth test"
 
-      # Session 1 has 4 messages.
       assert length(detail.messages) == 4
 
-      # Every message is a map with a role and a list of blocks.
       for m <- detail.messages do
         assert is_binary(m.role)
         assert is_list(m.blocks)
       end
 
-      # At least one block carries the searchable text.
       block_text =
         detail.messages
         |> Enum.flat_map(& &1.blocks)
@@ -140,7 +137,6 @@ defmodule Decant.ArchiveTest do
       assert Enum.all?(hits, &(&1.session_id == 1))
       assert Enum.any?(hits, &(&1.title == "Fix the failing auth test"))
 
-      # Snippet brackets the matched term.
       assert Enum.any?(hits, &(&1.snippet =~ "auth"))
     end
 

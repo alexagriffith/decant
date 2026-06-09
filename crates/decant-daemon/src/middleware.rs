@@ -56,7 +56,6 @@ pub async fn guard(
 }
 
 fn host_allowed(host: &str) -> bool {
-    // Strip port; accept loopback names only.
     let name = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
     matches!(name, "127.0.0.1" | "localhost" | "[::1]" | "::1")
 }

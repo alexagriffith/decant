@@ -29,8 +29,6 @@ defmodule Decant.Daemon do
   @default_token_path "~/.decant/daemon.token"
   @receive_timeout 15_000
 
-  # --- configuration helpers -------------------------------------------------
-
   @doc """
   Base URL of the daemon. `DECANT_DAEMON_URL` env overrides the default
   (`#{@default_base_url}`).
@@ -60,8 +58,6 @@ defmodule Decant.Daemon do
       {:error, _} -> nil
     end
   end
-
-  # --- public API ------------------------------------------------------------
 
   @doc "List session summaries. `opts` becomes query params (`from`, `to`, `tool`, `model`, `project`, `sort`, `limit`, `cursor`)."
   def list_sessions(opts \\ []) do
@@ -139,8 +135,6 @@ defmodule Decant.Daemon do
     single(:get, "/health")
   end
 
-  # --- internals -------------------------------------------------------------
-
   # Endpoints whose `data` is a scalar/object (not a paginated list): drop `meta`.
   defp single(method, path, opts \\ []) do
     case request(method, path, opts) do
@@ -149,8 +143,6 @@ defmodule Decant.Daemon do
     end
   end
 
-  # One request helper for the whole client. Builds the request against the
-  # `Decant.Finch` pool with auth + version headers, then normalizes the result.
   defp request(method, path, opts \\ []) do
     params = opts |> Keyword.get(:params, []) |> drop_nil_params()
 
@@ -163,7 +155,6 @@ defmodule Decant.Daemon do
         headers: headers(),
         receive_timeout: @receive_timeout,
         retry: false,
-        # Treat all statuses as data; we branch on them ourselves below.
         decode_body: false
       ]
       |> maybe_put(:params, params)
@@ -222,7 +213,6 @@ defmodule Decant.Daemon do
     end
   end
 
-  # Req normalizes header names to lowercase; values are lists.
   defp get_header(headers, name) when is_map(headers) do
     case Map.get(headers, name) do
       [value | _] -> value

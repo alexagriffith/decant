@@ -25,7 +25,6 @@ pub fn upsert_session(
 ) -> Result<i64> {
     let s = &parsed.session;
 
-    // Project (by cwd path).
     let project_id: Option<i64> = if let Some(path) = &s.project_path {
         conn.execute(
             "INSERT INTO project(path, name, first_seen_at, last_seen_at)
@@ -42,7 +41,6 @@ pub fn upsert_session(
         None
     };
 
-    // Remove any existing session with the same identity (cascades to children).
     conn.execute(
         "DELETE FROM session WHERE tool = ?1 AND source_session_id = ?2",
         params![s.tool.as_str(), s.source_session_id],
@@ -114,7 +112,6 @@ pub fn upsert_session(
         }
     }
 
-    // Build tool_call rows from tool_use blocks, pairing results by tool_use_id.
     for (message_id, call_block_id, ts, b) in &tool_use_blocks {
         let name = b.tool_name.clone().unwrap_or_default();
         let (kind, server, base) = classify_tool(&name);

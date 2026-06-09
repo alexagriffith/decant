@@ -245,7 +245,6 @@ fn export_session_to_markdown_stdout_and_all_to_dir() {
         .assert()
         .success();
 
-    // single session -> markdown to stdout
     Command::cargo_bin("decant")
         .unwrap()
         .args(["--db"])
@@ -255,7 +254,6 @@ fn export_session_to_markdown_stdout_and_all_to_dir() {
         .success()
         .stdout(predicate::str::contains("# Fix the failing auth test"));
 
-    // --all -> files in a dir
     let outdir = dir.path().join("export");
     Command::cargo_bin("decant")
         .unwrap()
@@ -282,7 +280,6 @@ fn export_error_paths() {
         .assert()
         .success();
 
-    // --all without --out -> usage error, exit 2
     Command::cargo_bin("decant")
         .unwrap()
         .args(["--db"])
@@ -290,7 +287,6 @@ fn export_error_paths() {
         .args(["export", "--all"])
         .assert()
         .code(2);
-    // no id and no --all -> usage error, exit 2
     Command::cargo_bin("decant")
         .unwrap()
         .args(["--db"])
@@ -298,7 +294,6 @@ fn export_error_paths() {
         .arg("export")
         .assert()
         .code(2);
-    // unknown id -> not found, exit 1
     Command::cargo_bin("decant")
         .unwrap()
         .args(["--db"])

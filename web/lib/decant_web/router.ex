@@ -25,9 +25,4 @@ defmodule DecantWeb.Router do
     live "/tools", ToolsLive, :index
     live "/settings", SettingsLive, :index
   end
-
-  # Other scopes may use custom stacks.
-  # scope "/api", DecantWeb do
-  #   pipe_through :api
-  # end
 end

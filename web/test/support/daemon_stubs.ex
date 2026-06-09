@@ -258,8 +258,6 @@ defmodule Decant.DaemonStubs do
   @doc "The canned recommendations (API Recommendation shape), for tests that want the raw payloads."
   def recommendations, do: @recommendations
 
-  # --- stub implementations --------------------------------------------------
-
   defp list_sessions(opts) do
     rows =
       @sessions
@@ -376,7 +374,6 @@ defmodule Decant.DaemonStubs do
     {:ok, rows, paginated_meta()}
   end
 
-  # The fixture has no MCP tool calls.
   defp mcp_usage(_opts), do: {:ok, [], paginated_meta()}
 
   defp date_bounds, do: {:ok, %{"min" => "2026-05-01", "max" => "2026-05-02"}}
@@ -391,8 +388,6 @@ defmodule Decant.DaemonStubs do
 
     {:ok, rows}
   end
-
-  # --- helpers ---------------------------------------------------------------
 
   defp filter(sessions, opts) do
     opts = Map.new(opts, fn {k, v} -> {to_string(k), v} end)

@@ -40,7 +40,6 @@ impl SourceWatcher {
             notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
                 match res {
                     Ok(event) if is_relevant(&event.kind) => {
-                        // Signal the debounce thread; ignore send errors (it exited).
                         let _ = raw_tx.send(());
                     }
                     Ok(_) => {}
@@ -70,8 +69,8 @@ fn debounce_loop(raw_rx: std_mpsc::Receiver<()>, trigger: mpsc::Sender<()>, debo
         // Got one event; drain the quiet window, restarting it on each new event.
         loop {
             match raw_rx.recv_timeout(debounce) {
-                Ok(()) => continue, // more activity; keep waiting for quiet
-                Err(std_mpsc::RecvTimeoutError::Timeout) => break, // quiet -> fire
+                Ok(()) => continue,
+                Err(std_mpsc::RecvTimeoutError::Timeout) => break,
                 Err(std_mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }

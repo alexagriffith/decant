@@ -48,9 +48,7 @@ pub struct Recommendation {
 
 const SKILLS_URL: &str = "https://code.claude.com/docs/en/skills";
 
-// ---------------------------------------------------------------------------
 // Signals (ported from Decant.Insights). Highest-impact first; capped at 12.
-// ---------------------------------------------------------------------------
 
 /// Compute the data-derived signals from the archive, highest `score` first.
 /// Mirrors `Decant.Insights.signals/1`: union the four rule families, sort by
@@ -227,10 +225,8 @@ fn fmt_usd(n: f64) -> String {
     format!("${:.2}", n)
 }
 
-// ---------------------------------------------------------------------------
 // Catalog (evergreen). Ported verbatim from Decant.Insights.catalog/0.
 // Keys/titles/prompts/urls are part of the contract — do not change.
-// ---------------------------------------------------------------------------
 
 /// The curated, evergreen catalog of coding-agent enhancements. Keys are stable
 /// (`catalog:<key>`) so state survives re-sync. `score` is 0.0 — catalog entries
@@ -344,9 +340,7 @@ pub fn current(conn: &Connection) -> Result<Vec<Recommendation>> {
     Ok(out)
 }
 
-// ---------------------------------------------------------------------------
 // Persistence: UPSERT preserving state + auto-resolve.
-// ---------------------------------------------------------------------------
 
 /// Regenerate the `recommendation` table from the archive's current state.
 ///
@@ -484,9 +478,7 @@ fn now_rfc3339(conn: &Connection) -> Result<String> {
     )
 }
 
-// ---------------------------------------------------------------------------
 // Read side: list persisted recommendations with their state.
-// ---------------------------------------------------------------------------
 
 /// Which recommendations to return from [`list`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -118,7 +118,6 @@ pub async fn run_loop(
     interval: Duration,
     shutdown: impl std::future::Future<Output = ()>,
 ) {
-    // Initial sync on boot.
     sync_blocking(&write, &cfg, &status, &change_tx).await;
 
     let mut tick = tokio::time::interval(interval);

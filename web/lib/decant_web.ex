@@ -23,7 +23,6 @@ defmodule DecantWeb do
     quote do
       use Phoenix.Router, helpers: false
 
-      # Import common connection and controller functions to use in pipelines
       import Plug.Conn
       import Phoenix.Controller
       import Phoenix.LiveView.Router
@@ -69,30 +68,24 @@ defmodule DecantWeb do
     quote do
       use Phoenix.Component
 
-      # Import convenience functions from controllers
       import Phoenix.Controller,
         only: [get_csrf_token: 0, view_module: 1, view_template: 1]
 
-      # Include general helpers for rendering HTML
       unquote(html_helpers())
     end
   end
 
   defp html_helpers do
     quote do
-      # HTML escaping functionality
       import Phoenix.HTML
-      # Core UI components + design-system components + format helpers
       import DecantWeb.CoreComponents
       import DecantWeb.Components.UI
       import DecantWeb.Components.Icons
       import DecantWeb.Format
 
-      # Common modules used in templates
       alias Phoenix.LiveView.JS
       alias DecantWeb.Layouts
 
-      # Routes generation with the ~p sigil
       unquote(verified_routes())
     end
   end

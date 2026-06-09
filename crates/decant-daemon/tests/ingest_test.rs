@@ -42,7 +42,6 @@ async fn run_sync_once_ingests_fixture_and_updates_status() {
     decant_core::schema::migrate(&write).unwrap();
 
     let status = SyncStatusHandle::new();
-    // Before any sync: never run.
     {
         let snap = status.snapshot();
         assert!(snap.last_sync_at.is_none());
@@ -52,19 +51,16 @@ async fn run_sync_once_ingests_fixture_and_updates_status() {
     let report = ingest::run_sync_once(&mut write, &core_cfg, &status);
     assert!(report.is_ok(), "sync should not error: {report:?}");
 
-    // DB now has exactly the one fixture session.
     let sessions: i64 = write
         .query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0))
         .unwrap();
     assert_eq!(sessions, 1, "fixture session must be ingested");
 
-    // Sync-status reflects a completed, recent sync.
     let snap = status.snapshot();
     assert!(!snap.in_progress, "sync finished -> not in progress");
     assert!(snap.last_sync_at.is_some(), "last_sync_at must be set");
     assert!(snap.last_error.is_none(), "no error expected");
     assert_eq!(snap.ingested_count, Some(1));
-    // last_sync_at parses as RFC3339 and is recent (within the last minute).
     let ts = snap.last_sync_at.clone().unwrap();
     let parsed = chrono::DateTime::parse_from_rfc3339(&ts)
         .unwrap_or_else(|e| panic!("last_sync_at {ts:?} must be RFC3339: {e}"));
@@ -79,7 +75,6 @@ async fn sync_status_endpoint_returns_envelope() {
     status.set_in_progress(true);
     status.finish_ok(7, "ok: 7 ingested");
 
-    // Build the read pool over a real (migrated) temp DB.
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("d.db");
     {
@@ -105,7 +100,6 @@ async fn sync_status_endpoint_returns_envelope() {
     let base = format!("http://127.0.0.1:{}", addr.port());
     let client = reqwest::Client::new();
 
-    // Unauthenticated -> 401 (behind the guard).
     let r = client
         .get(format!("{base}/api/v1/metadata/sync-status"))
         .send()
@@ -113,7 +107,6 @@ async fn sync_status_endpoint_returns_envelope() {
         .unwrap();
     assert_eq!(r.status(), 401);
 
-    // Authenticated -> 200 with the {data, meta, errors} envelope.
     let r = client
         .get(format!("{base}/api/v1/metadata/sync-status"))
         .header("authorization", format!("Bearer {token}"))
@@ -180,7 +173,6 @@ async fn run_loop_syncs_then_stops_on_shutdown() {
     assert_eq!(sessions, 1, "boot sync must ingest the fixture");
     assert!(status.snapshot().last_sync_at.is_some());
 
-    // Add a second session and fire a trigger; expect a re-sync to pick it up.
     let sess2 = core_cfg.claude_dir.join("proj2/sess2.jsonl");
     std::fs::create_dir_all(sess2.parent().unwrap()).unwrap();
     std::fs::write(&sess2, claude_fixture()).unwrap();
@@ -198,7 +190,6 @@ async fn run_loop_syncs_then_stops_on_shutdown() {
     }
     assert_eq!(sessions2, 2, "triggered sync must ingest the new session");
 
-    // Shutdown: the loop must observe it and the task must join cleanly.
     sd_tx.send(true).unwrap();
     let joined = tokio::time::timeout(Duration::from_secs(5), loop_handle).await;
     assert!(joined.is_ok(), "ingest loop must stop on shutdown");
@@ -241,7 +232,6 @@ async fn run_loop_broadcasts_change_event_on_ingest_but_not_on_noop() {
         shutdown,
     ));
 
-    // The boot sync ingests the seeded fixture, so it must broadcast one event.
     let ev = tokio::time::timeout(Duration::from_secs(5), rx.recv())
         .await
         .expect("boot sync must broadcast a change event within 5s")

@@ -1,6 +1,4 @@
 defmodule Decant.Application do
-  # See https://hexdocs.pm/elixir/Application.html
-  # for more information on OTP Applications
   @moduledoc false
 
   use Application
@@ -12,23 +10,17 @@ defmodule Decant.Application do
         DecantWeb.Telemetry,
         {DNSCluster, query: Application.get_env(:decant, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Decant.PubSub},
-        # HTTP connection pool for the local decant daemon API.
         {Finch, name: Decant.Finch}
       ] ++
         daemon_client_children() ++
         [
-          # Start to serve requests, typically the last entry
           DecantWeb.Endpoint
         ]
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Decant.Supervisor]
     Supervisor.start_link(children, opts)
   end
 
-  # Tell Phoenix to update the endpoint configuration
-  # whenever the application is updated.
   @impl true
   def config_change(changed, _new, removed) do
     DecantWeb.Endpoint.config_change(changed, removed)

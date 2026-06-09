@@ -35,8 +35,6 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("could not start: {e}"))?;
     let token = auth::load_or_create(&cfg.token_path())?;
 
-    // Resolve the core config (DB path + source dirs). Source dirs honor
-    // DECANT_CLAUDE_DIR / DECANT_CODEX_DIR, else platform defaults.
     let core_cfg = ingest::core_config_for(&cfg.db_path, None, None);
     if let Some(parent) = core_cfg.db_path.parent() {
         std::fs::create_dir_all(parent).ok();
@@ -103,7 +101,6 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         events: change_tx,
     });
 
-    // Serve until shutdown, then wind down the ingest task cleanly.
     let serve_shutdown = wait_for_shutdown(shutdown_rx);
     http::serve(&cfg.bind_addr(), app, serve_shutdown).await?;
 
@@ -118,7 +115,6 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
 
 /// Resolve once the shared shutdown signal flips to `true`.
 async fn wait_for_shutdown(mut rx: tokio::sync::watch::Receiver<bool>) {
-    // If already set, return immediately; otherwise wait for the change.
     if *rx.borrow() {
         return;
     }

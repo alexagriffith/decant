@@ -63,8 +63,6 @@ async fn events_streams_archive_updated_frame() {
     let (base, tx) = spawn().await;
     let client = reqwest::Client::new();
 
-    // Open the SSE connection with a valid bearer token. Once headers are back the
-    // response is `text/event-stream`.
     let resp = client
         .get(format!("{base}/api/v1/events"))
         .header("authorization", format!("Bearer {TOKEN}"))
@@ -100,7 +98,6 @@ async fn events_streams_archive_updated_frame() {
         }
     });
 
-    // Accumulate the raw byte stream until we see a complete SSE frame.
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
     let frame = tokio::time::timeout(Duration::from_secs(5), async {
@@ -119,7 +116,6 @@ async fn events_streams_archive_updated_frame() {
 
     publisher.abort();
 
-    // The frame names the event and carries the JSON payload on a `data:` line.
     assert!(
         frame.contains("event: archive_updated"),
         "missing event name in frame: {frame:?}"

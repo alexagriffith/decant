@@ -208,7 +208,6 @@ defmodule DecantWeb.Layouts do
     |> JS.hide(to: "#sidebar-backdrop")
   end
 
-  # Friendly day label for the sidebar freshness line (e.g. "Jun 07").
   defp fmt_day(iso) when is_binary(iso) do
     case Date.from_iso8601(iso) do
       {:ok, d} -> Calendar.strftime(d, "%b %d")

@@ -18,12 +18,10 @@ defmodule DecantWeb.ConnCase do
 
   using do
     quote do
-      # The default endpoint for testing
       @endpoint DecantWeb.Endpoint
 
       use DecantWeb, :verified_routes
 
-      # Import conveniences for testing with connections
       import Plug.Conn
       import Phoenix.ConnTest
       import DecantWeb.ConnCase

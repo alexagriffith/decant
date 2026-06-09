@@ -249,7 +249,6 @@ defmodule DecantWeb.SessionLive.Show do
     """
   end
 
-  # The user prompts that form the navigable spine of the thread.
   defp build_toc(messages) do
     messages
     |> Enum.with_index()
@@ -287,8 +286,6 @@ defmodule DecantWeb.SessionLive.Show do
   defp truncate(s, n) when is_binary(s) and byte_size(s) > n, do: String.slice(s, 0, n) <> "…"
   defp truncate(s, _n), do: s
 
-  # Build copy-able command rows from the resume commands, dropping any that the
-  # tool doesn't support (nil). Order: resume, fork, new.
   defp resume_rows(summary) do
     cmds = DecantWeb.Resume.commands(summary)
 

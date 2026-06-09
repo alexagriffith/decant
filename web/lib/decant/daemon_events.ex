@@ -90,10 +90,6 @@ defmodule Decant.DaemonEvents do
 
   def handle_info(_msg, state), do: {:noreply, state}
 
-  # --- internals -------------------------------------------------------------
-
-  # Spawn the blocking streamer *unlinked* and monitor it. A connection failure
-  # exits the worker; we receive only the :DOWN and reconnect with backoff.
   defp connect(state) do
     parent = self()
     {_pid, ref} = spawn_monitor(fn -> stream(parent) end)
@@ -105,10 +101,6 @@ defmodule Decant.DaemonEvents do
     %{state | backoff: min(state.backoff * 2, @backoff_max_ms)}
   end
 
-  # Blocking: open the SSE connection and feed decoded events back to `parent`.
-  # Runs in the spawned worker. Returns normally on a clean end-of-stream; exits
-  # abnormally on a transport error, surfaced to the GenServer as the worker's
-  # :DOWN reason (which triggers a backoff reconnect).
   defp stream(parent) do
     send(parent, :sse_connected)
 
@@ -136,10 +128,6 @@ defmodule Decant.DaemonEvents do
     end
   end
 
-  # Req `into:` callback: decode each body chunk into SSE events and forward
-  # them to the GenServer. The incremental `ServerSentEvents.Parser` state is
-  # carried across chunks in the response's `:private` so a frame split across
-  # two chunks is reassembled correctly.
   defp stream_handler(parent) do
     fn {:data, data}, {req, resp} ->
       parser = resp.private[:sse_parser] || ServerSentEvents.Parser.new()

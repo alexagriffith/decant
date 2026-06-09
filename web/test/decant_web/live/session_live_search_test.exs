@@ -15,7 +15,6 @@ defmodule DecantWeb.SessionLive.SearchTest do
     {:ok, _view, html} = live(conn, ~p"/search")
 
     assert html =~ "Search your archive"
-    # No results before a query is entered.
     refute html =~ "Fix the failing auth test"
   end
 

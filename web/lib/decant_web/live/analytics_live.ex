@@ -70,7 +70,6 @@ defmodule DecantWeb.AnalyticsLive do
      )}
   end
 
-  # Label of the highest-count bucket, or nil when there is no activity.
   defp peak_label(counts, labeler) do
     max = Enum.max(counts, fn -> 0 end)
 

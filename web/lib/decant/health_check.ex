@@ -41,7 +41,6 @@ defmodule Decant.HealthCheck do
   def init(opts) do
     poll_ms = Keyword.get(opts, :poll_ms, @poll_ms)
     state = %{ready?: false, data: nil, checked_at: nil, poll_ms: poll_ms}
-    # Poll immediately on startup, then on the interval.
     {:ok, state, {:continue, :poll}}
   end
 
@@ -58,8 +57,6 @@ defmodule Decant.HealthCheck do
   def handle_info(:poll, state), do: {:noreply, poll(state)}
   def handle_info(_msg, state), do: {:noreply, state}
 
-  # Run one poll, update the cache, and schedule the next tick. Any error is
-  # caught and recorded as not-ready so the process never dies.
   defp poll(state) do
     schedule(state.poll_ms)
 

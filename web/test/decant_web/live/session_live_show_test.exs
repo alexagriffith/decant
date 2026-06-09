@@ -16,11 +16,9 @@ defmodule DecantWeb.SessionLive.ShowTest do
 
     assert html =~ "Fix the failing auth test"
 
-    # Summary line metadata (tool badge + model badge).
     assert html =~ "Claude"
     assert html =~ "claude-opus-4-7"
 
-    # Block text from the conversation is rendered.
     assert html =~ "auth"
   end
 

@@ -92,7 +92,6 @@ mod tests {
     fn pool_hands_out_usable_read_connections() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("d.db");
-        // Create + migrate first so the schema exists.
         let conn = open_write(&path).unwrap();
         decant_core::schema::migrate(&conn).unwrap();
         drop(conn);
@@ -103,7 +102,6 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
-        // WAL was configured by the shared open path.
         let mode: String = c
             .query_row("PRAGMA journal_mode", [], |r| r.get(0))
             .unwrap();
