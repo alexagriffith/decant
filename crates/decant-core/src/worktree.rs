@@ -1,0 +1,297 @@
+//! Identify a project's *root* repo and *worktree* identity from its path, so
+//! analytics can roll worktree cost up under the repo it belongs to.
+//!
+//! Resolution is layered by confidence: git-authoritative (live dir) → in-tree
+//! path string → external name-match → synthetic. The string logic here is pure
+//! (no I/O) and unit-tested in isolation; `resolve_git_root` and the orchestrator
+//! `resolve_worktree_roots` (added in later tasks) are the only parts that touch
+//! the filesystem / DB.
+
+/// Confidence tier of a root resolution; also the value stored in
+/// `project.root_source`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootSource {
+    SelfRoot,
+    Git,
+    Intree,
+    NameMatch,
+    Synthetic,
+}
+
+impl RootSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RootSource::SelfRoot => "self",
+            RootSource::Git => "git",
+            RootSource::Intree => "intree",
+            RootSource::NameMatch => "namematch",
+            RootSource::Synthetic => "synthetic",
+        }
+    }
+}
+
+/// The resolved root + worktree identity for one project path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolution {
+    pub is_worktree: bool,
+    pub root_path: String,
+    pub worktree_label: Option<String>,
+    pub worktree_tool: Option<String>,
+    pub source: RootSource,
+}
+
+/// A known root project, used as a name-match target for external worktrees.
+#[derive(Debug, Clone)]
+pub struct KnownRoot {
+    pub path: String,
+    pub basename: String,
+    pub sessions: i64,
+    pub last_seen: Option<String>,
+}
+
+/// Split an absolute-ish path into non-empty segments, remembering the leading `/`.
+fn segments(path: &str) -> (bool, Vec<&str>) {
+    let abs = path.starts_with('/');
+    (abs, path.split('/').filter(|s| !s.is_empty()).collect())
+}
+
+/// Re-join segments back into a path, restoring the leading `/` when `abs`.
+fn join(abs: bool, parts: &[&str]) -> String {
+    let body = parts.join("/");
+    if abs {
+        format!("/{body}")
+    } else {
+        body
+    }
+}
+
+/// Last non-empty path segment (e.g. basename of a root path or a synthetic key).
+pub fn basename(path: &str) -> String {
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .to_string()
+}
+
+/// In-tree worktree? Matches a `.worktrees` (tool `git`) or `.claude-worktrees`
+/// (tool `claude`) segment and returns the root (everything before it) plus the
+/// label (everything after it). No I/O.
+pub fn classify_intree(path: &str) -> Option<Resolution> {
+    let (abs, segs) = segments(path);
+    let idx = segs
+        .iter()
+        .position(|s| *s == ".worktrees" || *s == ".claude-worktrees")?;
+    if idx == 0 || idx + 1 >= segs.len() {
+        return None; // need a root before and a label after
+    }
+    let tool = if segs[idx] == ".claude-worktrees" {
+        "claude"
+    } else {
+        "git"
+    };
+    Some(Resolution {
+        is_worktree: true,
+        root_path: join(abs, &segs[..idx]),
+        worktree_label: Some(segs[idx + 1..].join("/")),
+        worktree_tool: Some(tool.to_string()),
+        source: RootSource::Intree,
+    })
+}
+
+/// External worktree container? Recognizes `.warp-worktrees`, `.t3-worktrees`
+/// (parent segment) and `conductor/workspaces` (two segments). Returns
+/// `(tool, leaf)` where `leaf` is the single directory under the container. No I/O.
+pub fn external_container(path: &str) -> Option<(&'static str, String)> {
+    let (_, segs) = segments(path);
+    for (i, seg) in segs.iter().enumerate() {
+        let tool = match *seg {
+            ".warp-worktrees" => Some("warp"),
+            ".t3-worktrees" => Some("t3"),
+            "workspaces" if i > 0 && segs[i - 1] == "conductor" => Some("conductor"),
+            _ => None,
+        };
+        if let Some(tool) = tool {
+            if let Some(leaf) = segs.get(i + 1) {
+                return Some((tool, leaf.to_string()));
+            }
+        }
+    }
+    None
+}
+
+/// Resolve an external worktree leaf: name-match against known roots, else a
+/// best-effort synthetic repo key by stripping the per-tool codename. No I/O.
+pub fn classify_external(
+    tool: &str,
+    leaf: &str,
+    path: &str,
+    known_roots: &[KnownRoot],
+) -> Resolution {
+    // Name-match: longest matching basename wins; tie-break sessions then recency.
+    let best = known_roots
+        .iter()
+        .filter(|r| !r.basename.is_empty())
+        .filter(|r| leaf == r.basename || leaf.starts_with(&format!("{}-", r.basename)))
+        .max_by(|a, b| {
+            a.basename
+                .len()
+                .cmp(&b.basename.len())
+                .then(a.sessions.cmp(&b.sessions))
+                .then(a.last_seen.cmp(&b.last_seen))
+        });
+    if let Some(root) = best {
+        let label = leaf
+            .strip_prefix(&format!("{}-", root.basename))
+            .map(str::to_string);
+        return Resolution {
+            is_worktree: true,
+            root_path: root.path.clone(),
+            worktree_label: label,
+            worktree_tool: Some(tool.to_string()),
+            source: RootSource::NameMatch,
+        };
+    }
+
+    // Synthetic: strip the codename to a bare repo key.
+    let key = strip_codename(tool, leaf);
+    let (root_path, label) = if key.is_empty() {
+        (path.to_string(), None) // unmerged — under-merge rather than mis-merge
+    } else {
+        let label = leaf.strip_prefix(&format!("{key}-")).map(str::to_string);
+        (key, label)
+    };
+    Resolution {
+        is_worktree: true,
+        root_path,
+        worktree_label: label,
+        worktree_tool: Some(tool.to_string()),
+        source: RootSource::Synthetic,
+    }
+}
+
+/// Best-effort repo key from an external worktree leaf, per tool convention:
+/// t3 = `<repo>-t3code-<hash>`, warp = `<repo>-<two-word-codename>`,
+/// conductor = `<repo>-<one-word-codename>`.
+fn strip_codename(tool: &str, leaf: &str) -> String {
+    match tool {
+        "t3" => match leaf.find("-t3code-") {
+            Some(idx) => leaf[..idx].to_string(),
+            None => leaf.to_string(),
+        },
+        "warp" => {
+            let toks: Vec<&str> = leaf.split('-').collect();
+            if toks.len() >= 3 {
+                toks[..toks.len() - 2].join("-")
+            } else {
+                leaf.to_string()
+            }
+        }
+        "conductor" => {
+            let toks: Vec<&str> = leaf.split('-').collect();
+            if toks.len() >= 2 {
+                toks[..toks.len() - 1].join("-")
+            } else {
+                leaf.to_string()
+            }
+        }
+        _ => leaf.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn intree_claude_worktree_recovers_root_and_label() {
+        let r =
+            classify_intree("/Users/onlydole/dosu/dosu/.claude-worktrees/teedole-ops-39").unwrap();
+        assert!(r.is_worktree);
+        assert_eq!(r.root_path, "/Users/onlydole/dosu/dosu");
+        assert_eq!(r.worktree_label.as_deref(), Some("teedole-ops-39"));
+        assert_eq!(r.worktree_tool.as_deref(), Some("claude"));
+        assert_eq!(r.source, RootSource::Intree);
+    }
+
+    #[test]
+    fn plain_path_is_not_intree() {
+        assert!(classify_intree("/Users/onlydole/oss/decant").is_none());
+    }
+
+    #[test]
+    fn external_container_detects_warp_and_conductor() {
+        assert_eq!(
+            external_container("/Users/onlydole/.warp-worktrees/dosu-agate-spire"),
+            Some(("warp", "dosu-agate-spire".to_string()))
+        );
+        assert_eq!(
+            external_container("/Users/onlydole/conductor/workspaces/dosu-abuja"),
+            Some(("conductor", "dosu-abuja".to_string()))
+        );
+        assert_eq!(external_container("/Users/onlydole/oss/decant"), None);
+    }
+
+    #[test]
+    fn external_namematches_known_root() {
+        let roots = vec![KnownRoot {
+            path: "/Users/onlydole/dosu/dosu".into(),
+            basename: "dosu".into(),
+            sessions: 10,
+            last_seen: Some("2026-06-01".into()),
+        }];
+        let r = classify_external(
+            "warp",
+            "dosu-agate-spire",
+            "/Users/onlydole/.warp-worktrees/dosu-agate-spire",
+            &roots,
+        );
+        assert_eq!(r.source, RootSource::NameMatch);
+        assert_eq!(r.root_path, "/Users/onlydole/dosu/dosu");
+        assert_eq!(r.worktree_label.as_deref(), Some("agate-spire"));
+        assert_eq!(r.worktree_tool.as_deref(), Some("warp"));
+        assert!(r.is_worktree);
+    }
+
+    #[test]
+    fn external_namematch_tiebreaks_on_sessions() {
+        let roots = vec![
+            KnownRoot {
+                path: "/Users/onlydole/dosu".into(),
+                basename: "dosu".into(),
+                sessions: 2,
+                last_seen: Some("2026-06-01".into()),
+            },
+            KnownRoot {
+                path: "/Users/onlydole/dosu/dosu".into(),
+                basename: "dosu".into(),
+                sessions: 40,
+                last_seen: Some("2026-05-01".into()),
+            },
+        ];
+        let r = classify_external("warp", "dosu-agate-spire", "/x", &roots);
+        assert_eq!(
+            r.root_path, "/Users/onlydole/dosu/dosu",
+            "more sessions wins"
+        );
+    }
+
+    #[test]
+    fn external_synthetic_strips_codename_per_tool() {
+        assert_eq!(
+            classify_external("warp", "dosu-agate-spire", "/x", &[]).root_path,
+            "dosu"
+        );
+        assert_eq!(
+            classify_external("t3", "dosu-t3code-2d73eb17", "/x", &[]).root_path,
+            "dosu"
+        );
+        assert_eq!(
+            classify_external("conductor", "dosu-abuja", "/x", &[]).root_path,
+            "dosu"
+        );
+        let r = classify_external("warp", "dosu-agate-spire", "/x", &[]);
+        assert_eq!(r.source, RootSource::Synthetic);
+        assert_eq!(r.worktree_label.as_deref(), Some("agate-spire"));
+    }
+}

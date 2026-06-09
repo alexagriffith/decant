@@ -13,6 +13,7 @@ pub mod schema;
 pub mod sources;
 pub mod stats;
 pub mod tools;
+pub mod worktree;
 
 pub use error::{Error, Result};
 
