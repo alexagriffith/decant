@@ -37,14 +37,12 @@ impl SourceWatcher {
         let (raw_tx, raw_rx) = std_mpsc::channel::<()>();
 
         let mut watcher =
-            notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-                match res {
-                    Ok(event) if is_relevant(&event.kind) => {
-                        let _ = raw_tx.send(());
-                    }
-                    Ok(_) => {}
-                    Err(e) => tracing::debug!(error = %e, "watch error"),
+            notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+                Ok(event) if is_relevant(&event.kind) => {
+                    let _ = raw_tx.send(());
                 }
+                Ok(_) => {}
+                Err(e) => tracing::debug!(error = %e, "watch error"),
             })?;
 
         for dir in &dirs {
