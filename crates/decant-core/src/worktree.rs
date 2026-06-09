@@ -128,7 +128,8 @@ pub fn classify_external(
     path: &str,
     known_roots: &[KnownRoot],
 ) -> Resolution {
-    // Name-match: longest matching basename wins; tie-break sessions then recency.
+    // Name-match: longest matching basename wins; tie-break sessions, recency, then
+    // path so the winner is deterministic regardless of input order.
     let best = known_roots
         .iter()
         .filter(|r| !r.basename.is_empty())
@@ -139,6 +140,7 @@ pub fn classify_external(
                 .cmp(&b.basename.len())
                 .then(a.sessions.cmp(&b.sessions))
                 .then(a.last_seen.cmp(&b.last_seen))
+                .then_with(|| a.path.cmp(&b.path))
         });
     if let Some(root) = best {
         let label = leaf
@@ -215,6 +217,15 @@ mod tests {
     }
 
     #[test]
+    fn intree_plain_git_worktree_uses_git_tool() {
+        let r = classify_intree("/Users/onlydole/oss/decant/.worktrees/feature-x").unwrap();
+        assert_eq!(r.root_path, "/Users/onlydole/oss/decant");
+        assert_eq!(r.worktree_label.as_deref(), Some("feature-x"));
+        assert_eq!(r.worktree_tool.as_deref(), Some("git"));
+        assert_eq!(r.source, RootSource::Intree);
+    }
+
+    #[test]
     fn plain_path_is_not_intree() {
         assert!(classify_intree("/Users/onlydole/oss/decant").is_none());
     }
@@ -230,6 +241,14 @@ mod tests {
             Some(("conductor", "dosu-abuja".to_string()))
         );
         assert_eq!(external_container("/Users/onlydole/oss/decant"), None);
+    }
+
+    #[test]
+    fn external_container_detects_t3() {
+        assert_eq!(
+            external_container("/Users/onlydole/.t3-worktrees/dosu-t3code-2d73eb17"),
+            Some(("t3", "dosu-t3code-2d73eb17".to_string()))
+        );
     }
 
     #[test]
@@ -251,6 +270,30 @@ mod tests {
         assert_eq!(r.worktree_label.as_deref(), Some("agate-spire"));
         assert_eq!(r.worktree_tool.as_deref(), Some("warp"));
         assert!(r.is_worktree);
+    }
+
+    #[test]
+    fn external_namematch_longest_basename_wins() {
+        let roots = vec![
+            KnownRoot {
+                path: "/u/dosu".into(),
+                basename: "dosu".into(),
+                sessions: 100,
+                last_seen: Some("2026-06-01".into()),
+            },
+            KnownRoot {
+                path: "/u/dosu-agate".into(),
+                basename: "dosu-agate".into(),
+                sessions: 1,
+                last_seen: Some("2026-01-01".into()),
+            },
+        ];
+        let r = classify_external("warp", "dosu-agate-spire", "/x", &roots);
+        assert_eq!(
+            r.root_path, "/u/dosu-agate",
+            "longest basename beats sessions"
+        );
+        assert_eq!(r.worktree_label.as_deref(), Some("spire"));
     }
 
     #[test]
@@ -277,6 +320,45 @@ mod tests {
     }
 
     #[test]
+    fn external_namematch_tiebreaks_on_recency_then_path() {
+        // Same basename + sessions: most-recent last_seen wins.
+        let recency = vec![
+            KnownRoot {
+                path: "/u/a/dosu".into(),
+                basename: "dosu".into(),
+                sessions: 5,
+                last_seen: Some("2026-01-01".into()),
+            },
+            KnownRoot {
+                path: "/u/b/dosu".into(),
+                basename: "dosu".into(),
+                sessions: 5,
+                last_seen: Some("2026-06-01".into()),
+            },
+        ];
+        let r = classify_external("warp", "dosu-agate-spire", "/x", &recency);
+        assert_eq!(r.root_path, "/u/b/dosu", "newer last_seen wins");
+
+        // Full tie: deterministic regardless of input order (greatest path wins).
+        let tie = |order: Vec<&str>| {
+            let roots: Vec<KnownRoot> = order
+                .into_iter()
+                .map(|p| KnownRoot {
+                    path: p.into(),
+                    basename: "dosu".into(),
+                    sessions: 5,
+                    last_seen: Some("2026-06-01".into()),
+                })
+                .collect();
+            classify_external("warp", "dosu-agate-spire", "/x", &roots).root_path
+        };
+        assert_eq!(
+            tie(vec!["/u/a/dosu", "/u/b/dosu"]),
+            tie(vec!["/u/b/dosu", "/u/a/dosu"])
+        );
+    }
+
+    #[test]
     fn external_synthetic_strips_codename_per_tool() {
         assert_eq!(
             classify_external("warp", "dosu-agate-spire", "/x", &[]).root_path,
@@ -293,5 +375,12 @@ mod tests {
         let r = classify_external("warp", "dosu-agate-spire", "/x", &[]);
         assert_eq!(r.source, RootSource::Synthetic);
         assert_eq!(r.worktree_label.as_deref(), Some("agate-spire"));
+    }
+
+    #[test]
+    fn basename_handles_trailing_slash_and_empty() {
+        assert_eq!(basename("/u/x/dosu/"), "dosu");
+        assert_eq!(basename("dosu"), "dosu");
+        assert_eq!(basename(""), "");
     }
 }

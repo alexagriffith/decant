@@ -136,10 +136,10 @@ roots discovered earlier in the pass (see §4.3). Rules, first match wins:
      key: t3 strips a trailing `-t3code-<hex>`; warp strips the trailing two
      `-`-tokens; conductor strips the trailing one `-`-token. `root_path` = that key
      (a bare repo name, not a path); `is_worktree = true`; `source = Synthetic`;
-     `worktree_label` = the stripped codename. If stripping cannot produce a non-empty
-     key (too few tokens), the leaf becomes its own unmerged root (`is_worktree =
-     true`, `root_path = path`, `source = Synthetic`) — under-merge rather than
-     mis-merge.
+     `worktree_label` = the stripped codename. When the leaf has too few tokens to
+     strip, the whole leaf is used as the key (worktrees with the identical leaf name
+     still merge); only a degenerate empty key falls back to the full `path` as its
+     own unmerged root — under-merge rather than mis-merge.
 3. **Self.** Neither in-tree nor an external container → a normal project:
    `is_worktree = false`, `root_path = path`, `source = SelfRoot`.
 
