@@ -32,7 +32,8 @@ defmodule DecantWeb.AnalyticsLiveTest do
     assert html =~ "$"
   end
 
-  test "rolls projects up by root and expands to per-worktree rows", %{conn: conn} do
+  # Shared stub for the project worktree tests.
+  defp stub_worktree_project(_context) do
     Mimic.stub(Decant.Daemon, :by_dimension, fn
       :project, opts ->
         if Keyword.has_key?(opts, :root) do
@@ -75,6 +76,12 @@ defmodule DecantWeb.AnalyticsLiveTest do
         {:ok, [], %{}}
     end)
 
+    :ok
+  end
+
+  test "rolls projects up by root and expands to per-worktree rows", %{conn: conn} do
+    stub_worktree_project(%{})
+
     {:ok, view, html} = live(conn, ~p"/analytics")
 
     assert html =~ "By project"
@@ -82,8 +89,38 @@ defmodule DecantWeb.AnalyticsLiveTest do
     assert html =~ "1 wt"
     refute html =~ "agate-spire"
 
-    html = render_click(view, "toggle_project", %{"key" => "/home/x/dosu/dosu"})
+    # Use element form to verify a bound phx-click element exists.
+    html = view |> element("button[phx-click*='toggle_project']") |> render_click()
     assert html =~ "agate-spire"
     assert html =~ "warp"
+    # Disclosure arrow should flip to ▾ when expanded.
+    assert html =~ "▾"
+  end
+
+  test "collapses per-worktree rows on second click", %{conn: conn} do
+    stub_worktree_project(%{})
+
+    {:ok, view, _html} = live(conn, ~p"/analytics")
+
+    # Expand.
+    view |> element("button[phx-click*='toggle_project']") |> render_click()
+    # Collapse.
+    html = view |> element("button[phx-click*='toggle_project']") |> render_click()
+    refute html =~ "agate-spire"
+  end
+
+  test "resets expansion state when filter changes via patch", %{conn: conn} do
+    stub_worktree_project(%{})
+
+    {:ok, view, _html} = live(conn, ~p"/analytics")
+
+    # Expand the root row.
+    view |> element("button[phx-click*='toggle_project']") |> render_click()
+
+    # Apply a date-range filter patch (simulates clicking a date preset chip).
+    html = render_patch(view, ~p"/analytics?from=2026-01-01")
+
+    # Sub-rows must be gone after the filter change.
+    refute html =~ "agate-spire"
   end
 end

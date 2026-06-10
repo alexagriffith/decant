@@ -40,6 +40,8 @@ defmodule DecantWeb.AnalyticsLive do
        totals: Archive.totals(filters),
        by_model: by_model,
        by_project: by_project,
+       expanded: MapSet.new(),
+       worktree_rows: %{},
        sparks: Archive.model_sparklines(filters),
        max_cost: max(1.0e-9, Enum.reduce(by_model, 0.0, fn r, a -> max(a, r.cost || 0) end)),
        sessions_spec: %{
@@ -335,14 +337,17 @@ defmodule DecantWeb.AnalyticsLive do
                   >
                     <td class="max-w-xl truncate px-4 py-2.5 font-mono text-xs text-fg" title={r.key}>
                       {basename(r.key)}
+                      <%!-- LiveView dispatches the innermost phx-click (closestPhxBinding), so
+                           the parent row's JS.navigate does NOT fire when this button is clicked.
+                           No onclick="event.stopPropagation()" needed — that would break phx-click. --%>
                       <button
                         :if={(r.worktree_count || 0) > 0}
                         type="button"
                         phx-click={JS.push("toggle_project", value: %{key: r.key})}
-                        onclick="event.stopPropagation()"
+                        aria-expanded={MapSet.member?(@expanded, r.key)}
                         class="ml-2 rounded px-1 text-[10px] text-muted hover:text-fg"
                       >
-                        ▸ {r.worktree_count} wt
+                        {(MapSet.member?(@expanded, r.key) && "▾") || "▸"} {r.worktree_count} wt
                       </button>
                     </td>
                     <td class="px-4 py-2.5 text-right tabular-nums text-muted">{int(r.sessions)}</td>
