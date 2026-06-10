@@ -1,0 +1,35 @@
+# Codecov configuration for decant.
+#
+# Coverage is uploaded from two CI jobs, each under its own flag:
+#   - rust:   cargo-llvm-cov lcov report from `crates/`
+#   - elixir: excoveralls JSON report from `web/`
+#
+# Statuses are informational while coverage is being bootstrapped so a drop
+# never blocks a PR; flip `informational: false` once a baseline settles.
+
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+# Carry coverage forward for a flag when a given build doesn't re-upload it,
+# so the rust and elixir jobs don't clobber each other's totals.
+flag_management:
+  default_rules:
+    carryforward: true
+  individual_flags:
+    - name: rust
+      paths:
+        - crates/
+    - name: elixir
+      paths:
+        - web/
+
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default
+  require_changes: false

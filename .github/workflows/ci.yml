@@ -27,7 +27,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt, clippy, llvm-tools-preview
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
@@ -35,17 +35,30 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - name: Format
         run: cargo fmt --all -- --check
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Test (nextest, JUnit report)
-        run: cargo nextest run --workspace --profile ci
+      - name: Test (nextest, JUnit report + coverage)
+        run: cargo llvm-cov nextest --workspace --profile ci --lcov --output-path lcov.info
 
       - name: Doctests
         run: cargo test --workspace --doc
+
+      - name: Upload Rust coverage to Codecov
+        uses: codecov/codecov-action@v5
+        if: ${{ !cancelled() }}
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: onlydole/decant
+          files: lcov.info
+          flags: rust
+          fail_ci_if_error: false
 
       - name: Publish Rust test report
         uses: dorny/test-reporter@v2
@@ -104,8 +117,18 @@ jobs:
       - name: Compile (warnings as errors)
         run: mix compile --warnings-as-errors
 
-      - name: Test (JUnit report)
-        run: mix test
+      - name: Test (JUnit report + coverage)
+        run: mix coveralls.json
+
+      - name: Upload Elixir coverage to Codecov
+        uses: codecov/codecov-action@v5
+        if: ${{ !cancelled() }}
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: onlydole/decant
+          files: web/cover/excoveralls.json
+          flags: elixir
+          fail_ci_if_error: false
 
       - name: Publish Elixir test report
         uses: dorny/test-reporter@v2

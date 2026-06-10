@@ -12,3 +12,6 @@ erl_crash.dump
 
 # Browser-automation artifacts
 .playwright-mcp/
+
+# Coverage report from cargo-llvm-cov (generated in CI, never committed).
+/lcov.info

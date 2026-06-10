@@ -10,6 +10,7 @@ defmodule Decant.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
+      test_coverage: [tool: ExCoveralls],
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
       listeners: [Phoenix.CodeReloader]
     ]
@@ -27,7 +28,12 @@ defmodule Decant.MixProject do
 
   def cli do
     [
-      preferred_envs: [precommit: :test]
+      preferred_envs: [
+        precommit: :test,
+        coveralls: :test,
+        "coveralls.json": :test,
+        "coveralls.html": :test
+      ]
     ]
   end
 
@@ -67,7 +73,8 @@ defmodule Decant.MixProject do
       {:server_sent_events, "~> 1.1"},
       # Mock the HTTP layer in tests (no real network connections).
       {:mimic, "~> 2.3", only: :test},
-      {:junit_formatter, "~> 3.4", only: :test, runtime: false}
+      {:junit_formatter, "~> 3.4", only: :test, runtime: false},
+      {:excoveralls, "~> 0.18", only: :test, runtime: false}
     ]
   end
 
