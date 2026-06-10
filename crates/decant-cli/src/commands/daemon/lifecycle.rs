@@ -481,6 +481,7 @@ fn report_simple(
 /// the daemon log file. Returns the child PID.
 #[cfg(target_os = "macos")]
 fn spawn_detached_serve() -> anyhow::Result<u32> {
+    use std::os::unix::process::CommandExt;
     use std::process::Stdio;
     std::fs::create_dir_all(logs_dir())?;
     let log = std::fs::OpenOptions::new()
@@ -494,6 +495,8 @@ fn spawn_detached_serve() -> anyhow::Result<u32> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))
+        // Own process group: survives the spawner's Ctrl-C / group kill.
+        .process_group(0)
         .spawn()?;
     Ok(child.id())
 }
