@@ -154,6 +154,44 @@ defmodule Decant.Archive do
   end
 
   @doc """
+  File hotspots within `filters`. Options: `group: :path | :ext` (default
+  :path), `op: :read | :edit | :write | :delete | nil`, `limit:` (default 100).
+  Adds a computed `total` so tables have a rank column.
+  """
+  def file_hotspots(filters \\ %{}, opts \\ []) do
+    params =
+      to_params(filters) ++
+        ([group: opts[:group], op: opts[:op], limit: Keyword.get(opts, :limit, 100)]
+         |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+         |> Enum.map(fn {k, v} -> {k, to_string(v)} end))
+
+    case Daemon.file_hotspots(params) do
+      {:ok, rows, _meta} when is_list(rows) ->
+        Enum.map(rows, fn r ->
+          reads = r["reads"] || 0
+          edits = r["edits"] || 0
+          writes = r["writes"] || 0
+          deletes = r["deletes"] || 0
+
+          %{
+            key: r["key"] || "",
+            project: r["project"],
+            reads: reads,
+            edits: edits,
+            writes: writes,
+            deletes: deletes,
+            total: reads + edits + writes + deletes,
+            sessions: r["sessions"] || 0,
+            last_touched_at: r["last_touched_at"]
+          }
+        end)
+
+      _ ->
+        []
+    end
+  end
+
+  @doc """
   Per-model daily session counts, aligned to a shared day axis (Tufte small
   multiples / sparklines). Returns `%{model => [count_per_day]}` ordered by the
   sorted distinct days present in `filters`.

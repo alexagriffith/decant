@@ -12,7 +12,8 @@ defmodule DecantWeb.Layouts do
     %{key: :search, label: "Search", path: "/search", icon: "hero-magnifying-glass"},
     %{key: :analytics, label: "Analytics", path: "/analytics", icon: "hero-chart-bar"},
     %{key: :insights, label: "Insights", path: "/insights", icon: "hero-light-bulb"},
-    %{key: :tools, label: "Tools & MCP", path: "/tools", icon: "hero-wrench-screwdriver"}
+    %{key: :tools, label: "Tools & MCP", path: "/tools", icon: "hero-wrench-screwdriver"},
+    %{key: :files, label: "Files", path: "/files", icon: "hero-document-text"}
   ]
 
   @doc """

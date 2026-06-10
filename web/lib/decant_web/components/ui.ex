@@ -372,6 +372,7 @@ defmodule DecantWeb.Components.UI do
   attr :filters, :map, required: true
   attr :bounds, :map, required: true
   attr :path, :string, required: true
+  attr :extra, :list, default: [], doc: "page-local view params preserved across links"
 
   def date_range(assigns) do
     assigns = assign(assigns, :active, Filters.active_preset(assigns.filters, assigns.bounds))
@@ -381,7 +382,7 @@ defmodule DecantWeb.Components.UI do
       <div class="flex items-center rounded-lg border border-line bg-surface p-0.5 text-sm">
         <.link
           :if={@filters.from}
-          patch={Filters.url(@path, Filters.shift(@filters, :prev))}
+          patch={Filters.url(@path, Filters.shift(@filters, :prev), @extra)}
           class="grid size-7 place-items-center rounded-md text-muted hover:bg-elevated hover:text-fg"
           aria-label="Previous period"
         >
@@ -389,7 +390,7 @@ defmodule DecantWeb.Components.UI do
         </.link>
         <.link
           :for={{key, _days} <- Filters.presets()}
-          patch={Filters.url(@path, Filters.apply_preset(@filters, key, @bounds))}
+          patch={Filters.url(@path, Filters.apply_preset(@filters, key, @bounds), @extra)}
           class={[
             "rounded-md px-2.5 py-1 font-medium",
             (@active == key && "bg-elevated text-fg") || "text-muted hover:text-fg"
@@ -398,7 +399,7 @@ defmodule DecantWeb.Components.UI do
           {key}
         </.link>
         <.link
-          patch={Filters.url(@path, %{@filters | from: nil, to: nil})}
+          patch={Filters.url(@path, %{@filters | from: nil, to: nil}, @extra)}
           class={[
             "rounded-md px-2.5 py-1 font-medium",
             (@active == "all" && "bg-elevated text-fg") || "text-muted hover:text-fg"
@@ -408,7 +409,7 @@ defmodule DecantWeb.Components.UI do
         </.link>
         <.link
           :if={@filters.to}
-          patch={Filters.url(@path, Filters.shift(@filters, :next))}
+          patch={Filters.url(@path, Filters.shift(@filters, :next), @extra)}
           class="grid size-7 place-items-center rounded-md text-muted hover:bg-elevated hover:text-fg"
           aria-label="Next period"
         >
@@ -423,6 +424,7 @@ defmodule DecantWeb.Components.UI do
   @doc "Removable active-filter chips (drill-down state)."
   attr :filters, :map, required: true
   attr :path, :string, required: true
+  attr :extra, :list, default: [], doc: "page-local view params preserved across links"
 
   def filter_chips(assigns) do
     assigns = assign(assigns, :chips, Filters.chips(assigns.filters))
@@ -432,7 +434,7 @@ defmodule DecantWeb.Components.UI do
       <span class="text-xs text-faint">Filtered by</span>
       <.link
         :for={{key, label} <- @chips}
-        patch={Filters.url(@path, Map.put(@filters, key, nil))}
+        patch={Filters.url(@path, Map.put(@filters, key, nil), @extra)}
         class="inline-flex items-center gap-1 rounded-md bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent hover:bg-accent/20"
       >
         {label} <.icon name="hero-x-mark" class="size-3" />

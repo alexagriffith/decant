@@ -246,6 +246,7 @@ defmodule Decant.DaemonStubs do
     stub(Decant.Daemon, :model_sparklines, &model_sparklines/1)
     stub(Decant.Daemon, :tools_usage, &tools_usage/1)
     stub(Decant.Daemon, :mcp_usage, &mcp_usage/1)
+    stub(Decant.Daemon, :file_hotspots, &file_hotspots/1)
     stub(Decant.Daemon, :date_bounds, &date_bounds/0)
     stub(Decant.Daemon, :recommendations, &recommendations/1)
     stub(Decant.Daemon, :health, fn -> {:ok, %{"status" => "ok"}} end)
@@ -375,6 +376,55 @@ defmodule Decant.DaemonStubs do
   end
 
   defp mcp_usage(_opts), do: {:ok, [], paginated_meta()}
+
+  # File hotspots: two path-mode rows (one hot reader with zero edits, one
+  # mixed) plus an ext-mode variant, honoring group/op opts like the API.
+  @file_rows [
+    %{
+      "key" => "src/main.rs",
+      "project" => "/Users/dev/proj",
+      "reads" => 5,
+      "edits" => 3,
+      "writes" => 1,
+      "deletes" => 0,
+      "sessions" => 4,
+      "last_touched_at" => "2026-05-02T14:00:00Z"
+    },
+    %{
+      "key" => "AGENTS.md",
+      "project" => "/Users/dev/proj",
+      "reads" => 8,
+      "edits" => 0,
+      "writes" => 0,
+      "deletes" => 0,
+      "sessions" => 8,
+      "last_touched_at" => "2026-05-01T09:00:00Z"
+    }
+  ]
+  @ext_rows [
+    %{
+      "key" => "rs",
+      "project" => nil,
+      "reads" => 5,
+      "edits" => 3,
+      "writes" => 1,
+      "deletes" => 0,
+      "sessions" => 4,
+      "last_touched_at" => "2026-05-02T14:00:00Z"
+    }
+  ]
+
+  defp file_hotspots(opts) do
+    rows = if to_string(opts[:group] || "path") == "ext", do: @ext_rows, else: @file_rows
+
+    rows =
+      case opts[:op] do
+        nil -> rows
+        op -> Enum.filter(rows, &(&1[to_string(op) <> "s"] > 0))
+      end
+
+    {:ok, rows, paginated_meta()}
+  end
 
   defp date_bounds, do: {:ok, %{"min" => "2026-05-01", "max" => "2026-05-02"}}
 

@@ -98,6 +98,11 @@ defmodule Decant.Daemon do
     single(:get, "/analytics/model-sparklines", params: opts)
   end
 
+  @doc "Per-file hotspot rows (or per-extension with group: \"ext\")."
+  def file_hotspots(opts \\ []) do
+    request(:get, "/analytics/files", params: opts)
+  end
+
   @doc "Per-tool usage rows (calls/errors/error rate)."
   def tools_usage(opts \\ []) do
     request(:get, "/tools/usage", params: opts)

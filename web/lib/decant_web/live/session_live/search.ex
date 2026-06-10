@@ -8,6 +8,18 @@ defmodule DecantWeb.SessionLive.Search do
     {:ok, assign(socket, q: "", hits: [])}
   end
 
+  # Deep links (`/search?q=…`, e.g. from a Files hotspot row) pre-fill and run
+  # the search; typing in the form goes through handle_event without patching.
+  # A URL without `q` (back-navigation) resets, so the UI never shows results
+  # the URL no longer claims.
+  @impl true
+  def handle_params(params, _uri, socket) do
+    case String.trim(params["q"] || "") do
+      "" -> {:noreply, assign(socket, q: "", hits: [])}
+      q -> {:noreply, assign(socket, q: q, hits: safe_search(q))}
+    end
+  end
+
   @impl true
   def handle_event("search", %{"q" => q}, socket) do
     hits = if String.trim(q) == "", do: [], else: safe_search(q)

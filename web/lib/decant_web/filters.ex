@@ -19,9 +19,15 @@ defmodule DecantWeb.Filters do
     }
   end
 
-  @doc "Build a path + query string for the given filters (omitting empty keys)."
-  def url(path, filters) do
-    case query(filters) do
+  @doc """
+  Build a path + query string for the given filters (omitting empty keys).
+  `extra` carries page-local view params (e.g. Files' `group`/`op`) so shared
+  controls preserve them; nil/false values are dropped.
+  """
+  def url(path, filters, extra \\ []) do
+    extra = for {k, v} <- extra, v not in [nil, false], into: %{}, do: {k, to_string(v)}
+
+    case Map.merge(query(filters), extra) do
       q when map_size(q) == 0 -> path
       q -> path <> "?" <> URI.encode_query(q)
     end
