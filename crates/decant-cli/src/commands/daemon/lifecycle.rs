@@ -330,12 +330,19 @@ pub fn stop(cli: &Cli) -> anyhow::Result<i32> {
     match read_lock_pid(&lock_path()) {
         Some(pid) if pid_is_alive(pid) => {
             signal_term(pid);
+            let stopped = wait_for_exit(pid, std::time::Duration::from_secs(15));
             if matches!(out.format, Format::Json) {
-                crate::output::print_json(&serde_json::json!({ "ok": true, "signaled": pid }))?;
+                crate::output::print_json(
+                    &serde_json::json!({ "ok": true, "signaled": pid, "stopped": stopped }),
+                )?;
             } else if !out.quiet {
-                println!("Sent SIGTERM to daemon (pid {pid}).");
+                if stopped {
+                    println!("Stopped daemon (pid {pid}).");
+                } else {
+                    println!("Sent SIGTERM to daemon (pid {pid}); still shutting down.");
+                }
             }
-            Ok(0)
+            Ok(if stopped { 0 } else { 1 })
         }
         _ => {
             if matches!(out.format, Format::Json) {
@@ -499,6 +506,19 @@ fn spawn_detached_serve() -> anyhow::Result<u32> {
         .process_group(0)
         .spawn()?;
     Ok(child.id())
+}
+
+/// Poll until `pid` exits or the timeout elapses. Returns whether it exited.
+#[cfg(target_os = "macos")]
+fn wait_for_exit(pid: i32, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if !pid_is_alive(pid) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    !pid_is_alive(pid)
 }
 
 #[cfg(all(unix, target_os = "macos"))]
