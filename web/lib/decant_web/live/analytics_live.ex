@@ -12,7 +12,9 @@ defmodule DecantWeb.AnalyticsLive do
        bounds: Archive.date_bounds(),
        page_title: "Analytics",
        model_sort: {:cost, :desc},
-       project_sort: {:cost, :desc}
+       project_sort: {:cost, :desc},
+       expanded: MapSet.new(),
+       worktree_rows: %{}
      )}
   end
 
@@ -86,6 +88,12 @@ defmodule DecantWeb.AnalyticsLive do
 
   defp weekday_label(d), do: Enum.at(~w(Sun Mon Tue Wed Thu Fri Sat), d)
 
+  # Display name for a project key: the last path segment, or the key itself for
+  # synthetic (path-less) root keys.
+  defp basename(key) do
+    key |> to_string() |> String.trim_trailing("/") |> String.split("/") |> List.last()
+  end
+
   @impl true
   def handle_event("sort", %{"table" => "model", "col" => col}, socket) do
     sort = TableSort.toggle(socket.assigns.model_sort, col)
@@ -102,6 +110,24 @@ defmodule DecantWeb.AnalyticsLive do
        project_sort: sort,
        by_project: TableSort.sort(socket.assigns.by_project, sort)
      )}
+  end
+
+  def handle_event("toggle_project", %{"key" => key}, socket) do
+    if MapSet.member?(socket.assigns.expanded, key) do
+      {:noreply,
+       assign(socket,
+         expanded: MapSet.delete(socket.assigns.expanded, key),
+         worktree_rows: Map.delete(socket.assigns.worktree_rows, key)
+       )}
+    else
+      rows = Archive.by_dimension(:project, Map.put(socket.assigns.filters, :root, key))
+
+      {:noreply,
+       assign(socket,
+         expanded: MapSet.put(socket.assigns.expanded, key),
+         worktree_rows: Map.put(socket.assigns.worktree_rows, key, rows)
+       )}
+    end
   end
 
   defp reject_blank(rows), do: Enum.reject(rows, &(&1.key in [nil, ""]))
@@ -302,15 +328,37 @@ defmodule DecantWeb.AnalyticsLive do
                 </tr>
               </thead>
               <tbody>
-                <tr
-                  :for={r <- @by_project}
-                  phx-click={JS.navigate(Filters.url(~p"/", Map.put(@filters, :project, r.key)))}
-                  class="cursor-pointer border-b border-line/60 transition-colors hover:bg-elevated"
-                >
-                  <td class="max-w-xl truncate px-4 py-2.5 font-mono text-xs text-fg">{r.key}</td>
-                  <td class="px-4 py-2.5 text-right tabular-nums text-muted">{int(r.sessions)}</td>
-                  <td class="px-4 py-2.5 text-right tabular-nums">{money(r.cost)}</td>
-                </tr>
+                <%= for r <- @by_project do %>
+                  <tr
+                    phx-click={JS.navigate(Filters.url(~p"/", Map.put(@filters, :project, r.key)))}
+                    class="cursor-pointer border-b border-line/60 transition-colors hover:bg-elevated"
+                  >
+                    <td class="max-w-xl truncate px-4 py-2.5 font-mono text-xs text-fg" title={r.key}>
+                      {basename(r.key)}
+                      <button
+                        :if={(r.worktree_count || 0) > 0}
+                        type="button"
+                        phx-click={JS.push("toggle_project", value: %{key: r.key})}
+                        onclick="event.stopPropagation()"
+                        class="ml-2 rounded px-1 text-[10px] text-muted hover:text-fg"
+                      >
+                        ▸ {r.worktree_count} wt
+                      </button>
+                    </td>
+                    <td class="px-4 py-2.5 text-right tabular-nums text-muted">{int(r.sessions)}</td>
+                    <td class="px-4 py-2.5 text-right tabular-nums">{money(r.cost)}</td>
+                  </tr>
+                  <tr
+                    :for={w <- Map.get(@worktree_rows, r.key, [])}
+                    class="border-b border-line/40 bg-elevated/40"
+                  >
+                    <td class="truncate px-4 py-2 pl-10 font-mono text-xs text-muted">
+                      wt: {w.worktree_label || basename(w.key)}<span :if={w.worktree_tool}>&nbsp;({w.worktree_tool})</span>
+                    </td>
+                    <td class="px-4 py-2 text-right tabular-nums text-muted">{int(w.sessions)}</td>
+                    <td class="px-4 py-2 text-right tabular-nums text-muted">{money(w.cost)}</td>
+                  </tr>
+                <% end %>
               </tbody>
             </table>
           </div>
