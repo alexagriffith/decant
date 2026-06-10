@@ -344,7 +344,7 @@ defmodule DecantWeb.AnalyticsLive do
                         :if={(r.worktree_count || 0) > 0}
                         type="button"
                         phx-click={JS.push("toggle_project", value: %{key: r.key})}
-                        aria-expanded={MapSet.member?(@expanded, r.key)}
+                        aria-expanded={to_string(MapSet.member?(@expanded, r.key))}
                         class="ml-2 rounded px-1 text-[10px] text-muted hover:text-fg"
                       >
                         {(MapSet.member?(@expanded, r.key) && "▾") || "▸"} {r.worktree_count} wt
