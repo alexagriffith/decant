@@ -37,6 +37,8 @@ Phoenix LiveView web app is a pure HTTP client of the daemon API.
 ## Commands
 
 Run from the repo root unless noted. These are exactly what CI and pre-commit run.
+The `justfile` mirrors every context below (`just` lists recipes by group;
+`just check` runs all gates; `just daemon` / `just web` run the services).
 
 ```sh
 # Rust

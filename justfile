@@ -1,15 +1,156 @@
-# decant developer tasks
+# decant developer tasks. `just` lists recipes; `just check` is the full
+# definition-of-done (same commands CI and pre-commit run — see AGENTS.md).
 
+default:
+    @just --list --unsorted
+
+# ── Quality gates ────────────────────────────────────────────────────
+
+# All gates: Rust + web (the Definition of done)
+[group('gates')]
+check: rust-check web-check
+
+# Rust gates: tests, formatting, lints
+[group('gates')]
+rust-check:
+    cargo test --workspace
+    cargo fmt --all -- --check
+    cargo clippy --all-targets -- -D warnings
+
+# Web gates: tests, formatting, warnings-as-errors compile
+[group('gates')]
+web-check:
+    cd web && mix test
+    cd web && mix format --check-formatted
+    cd web && mix compile --warnings-as-errors
+
+# ── Rust ─────────────────────────────────────────────────────────────
+
+[group('rust')]
 build:
-    cargo build --release
+    cargo build --workspace
 
-test:
-    cargo test
+[group('rust')]
+build-release:
+    cargo build --workspace --release
 
-# Sync your real sessions into the default DB
-sync:
-    cargo run -p decant-cli --release -- sync
+# Run Rust tests (e.g. `just test -p decant-core worktree`)
+[group('rust')]
+test *ARGS:
+    cargo test --workspace {{ARGS}}
 
-# List recent sessions
+# Fix formatting in place
+[group('rust')]
+fmt:
+    cargo fmt --all
+
+[group('rust')]
+clippy:
+    cargo clippy --all-targets -- -D warnings
+
+# ── Daemon (owns ~/.decant/decant.db; loopback HTTP on :4577) ────────
+
+# Run the daemon in the foreground (dev)
+[group('daemon')]
+daemon:
+    cargo run -p decant-cli -- daemon serve
+
+# Running? + health + last sync
+[group('daemon')]
+daemon-status:
+    cargo run -p decant-cli -- daemon status
+
+# Tail the daemon log (`just daemon-logs -f` to follow)
+[group('daemon')]
+daemon-logs *ARGS:
+    cargo run -p decant-cli -- daemon logs {{ARGS}}
+
+# Install + load the macOS LaunchAgent (background + at login)
+[group('daemon')]
+daemon-install:
+    cargo run -p decant-cli -- daemon install
+
+[group('daemon')]
+daemon-uninstall:
+    cargo run -p decant-cli -- daemon uninstall
+
+# Start (LaunchAgent if installed, else detached serve)
+[group('daemon')]
+daemon-start:
+    cargo run -p decant-cli -- daemon start
+
+[group('daemon')]
+daemon-stop:
+    cargo run -p decant-cli -- daemon stop
+
+# ── Web (Phoenix; pure HTTP client of the daemon) ────────────────────
+
+# Dev server at http://localhost:4000 (needs a running daemon)
+[group('web')]
+web:
+    cd web && mix phx.server
+
+[group('web')]
+web-deps:
+    cd web && mix deps.get
+
+# Run web tests (e.g. `just web-test test/decant_web/live/analytics_live_test.exs`)
+[group('web')]
+web-test *ARGS:
+    cd web && mix test {{ARGS}}
+
+# Fix web formatting in place
+[group('web')]
+web-fmt:
+    cd web && mix format
+
+# ── Health / smoke ───────────────────────────────────────────────────
+
+# Curl the daemon health endpoint and the web app
+[group('health')]
+health:
+    @curl -sf -m 3 http://127.0.0.1:4577/api/v1/health && echo " <- daemon :4577 OK" || echo "daemon :4577 NOT responding"
+    @curl -sf -m 3 -o /dev/null -w "web :4000 HTTP %{http_code}\n" http://localhost:4000/ || echo "web :4000 NOT responding"
+
+# ── CLI reads (binary `decant`; respects --db / $DECANT_DB) ──────────
+
+# List sessions (e.g. `just ls --limit 10`)
+[group('cli')]
 ls *ARGS:
-    cargo run -p decant-cli --release -- session ls {{ARGS}}
+    cargo run -p decant-cli -- ls {{ARGS}}
+
+# Full-text search (e.g. `just search "worktree rollup"`)
+[group('cli')]
+search QUERY *ARGS:
+    cargo run -p decant-cli -- search "{{QUERY}}" {{ARGS}}
+
+# Usage & cost rollups (e.g. `just stats --by model`)
+[group('cli')]
+stats *ARGS:
+    cargo run -p decant-cli -- stats {{ARGS}}
+
+# One-shot headless ingest (daemon owns ingest normally; use with --db)
+[group('cli')]
+sync *ARGS:
+    cargo run -p decant-cli -- sync {{ARGS}}
+
+# ── Data / maintenance ───────────────────────────────────────────────
+
+# Stop daemon, delete the derived DB, re-ingest (recomputes costs/rollups)
+[group('data')]
+[confirm("Delete ~/.decant/decant.db and re-ingest from ~/.claude + ~/.codex?")]
+db-rebuild:
+    cargo run -p decant-cli -- daemon stop || true
+    rm -f ~/.decant/decant.db ~/.decant/decant.db-wal ~/.decant/decant.db-shm
+    cargo run -p decant-cli -- daemon start
+    @echo "Re-ingest started; watch with: just daemon-status"
+
+# DB info (schema version, counts)
+[group('data')]
+db-info *ARGS:
+    cargo run -p decant-cli -- db info {{ARGS}}
+
+# Install the repo's git hooks
+[group('data')]
+hooks:
+    pre-commit install
