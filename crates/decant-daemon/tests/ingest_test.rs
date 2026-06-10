@@ -48,7 +48,12 @@ async fn run_sync_once_ingests_fixture_and_updates_status() {
         assert!(!snap.in_progress);
     }
 
-    let report = ingest::run_sync_once(&mut write, &core_cfg, &status);
+    let report = ingest::run_sync_once(
+        &mut write,
+        &core_cfg,
+        &status,
+        &std::sync::atomic::AtomicBool::new(false),
+    );
     assert!(report.is_ok(), "sync should not error: {report:?}");
 
     let sessions: i64 = write
@@ -156,6 +161,7 @@ async fn run_loop_syncs_then_stops_on_shutdown() {
         trigger_rx,
         Duration::from_secs(3600),
         shutdown,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     ));
 
     // The boot sync should ingest the seeded fixture; poll until it lands.
@@ -230,6 +236,7 @@ async fn run_loop_broadcasts_change_event_on_ingest_but_not_on_noop() {
         trigger_rx,
         Duration::from_secs(3600),
         shutdown,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     ));
 
     let ev = tokio::time::timeout(Duration::from_secs(5), rx.recv())

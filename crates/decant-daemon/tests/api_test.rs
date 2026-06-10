@@ -52,7 +52,13 @@ async fn spawn() -> String {
     let mut conn = decant_core::db::open(&db_path).unwrap();
     decant_core::schema::migrate(&conn).unwrap();
     let status = SyncStatusHandle::new();
-    let report = decant_daemon::ingest::run_sync_once(&mut conn, &core_cfg, &status).unwrap();
+    let report = decant_daemon::ingest::run_sync_once(
+        &mut conn,
+        &core_cfg,
+        &status,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
     assert_eq!(report.ingested, 2, "both fixtures must ingest");
     // Keep the connection alive as the shared writer for the mark-implemented
     // endpoint (the daemon shares this exact connection with the ingest task).

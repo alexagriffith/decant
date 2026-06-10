@@ -56,10 +56,14 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
     let change_tx = events::channel();
 
     // Shared shutdown: a watch channel fired by the OS-signal listener; both the
-    // HTTP server and the ingest loop observe it.
+    // HTTP server and the ingest loop observe it. The cancel flag reaches into a
+    // sync already running on the blocking thread, which can't see the channel.
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let sync_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let signal_cancel = sync_cancel.clone();
     tokio::spawn(async move {
         http::shutdown_signal().await;
+        signal_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = shutdown_tx.send(true);
     });
 
@@ -91,6 +95,7 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         trigger_rx,
         ingest::DEFAULT_SYNC_INTERVAL,
         ingest_shutdown,
+        sync_cancel,
     ));
 
     let app = http::router(http::AppState {
@@ -101,8 +106,21 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         events: change_tx,
     });
 
-    let serve_shutdown = wait_for_shutdown(shutdown_rx);
-    http::serve(&cfg.bind_addr(), app, serve_shutdown).await?;
+    // Graceful shutdown waits for open connections, but SSE subscribers hold
+    // theirs open indefinitely — bound the wait and then drop the server
+    // (clients reconnect by design).
+    let serve_shutdown = wait_for_shutdown(shutdown_rx.clone());
+    let grace_elapsed = async {
+        wait_for_shutdown(shutdown_rx).await;
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    };
+    let bind_addr = cfg.bind_addr();
+    tokio::select! {
+        res = http::serve(&bind_addr, app, serve_shutdown) => res?,
+        _ = grace_elapsed => {
+            tracing::warn!("shutdown grace period elapsed; dropping open connections");
+        }
+    }
 
     // Drop the watcher first so no new triggers arrive, then await the ingest
     // task so any in-flight sync transaction completes before we exit.

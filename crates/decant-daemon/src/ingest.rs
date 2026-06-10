@@ -11,6 +11,7 @@
 //! and the loop simply waits for the next trigger.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use decant_core::config::Config as CoreConfig;
@@ -60,13 +61,19 @@ pub fn run_sync_once(
     write: &mut Connection,
     cfg: &CoreConfig,
     status: &SyncStatusHandle,
+    cancel: &std::sync::atomic::AtomicBool,
 ) -> decant_core::Result<SyncReport> {
     status.set_in_progress(true);
-    match core_ingest::sync(write, cfg) {
+    match core_ingest::sync_cancellable(write, cfg, cancel) {
         Ok(report) => {
             let summary = format!(
-                "scanned {}, ingested {}, skipped {}, issues {}, failed {}",
-                report.scanned, report.ingested, report.skipped, report.issues, report.failed
+                "scanned {}, ingested {}, skipped {}, issues {}, failed {}{}",
+                report.scanned,
+                report.ingested,
+                report.skipped,
+                report.issues,
+                report.failed,
+                if report.cancelled { ", cancelled" } else { "" }
             );
             tracing::info!(
                 scanned = report.scanned,
@@ -74,13 +81,17 @@ pub fn run_sync_once(
                 skipped = report.skipped,
                 issues = report.issues,
                 failed = report.failed,
+                cancelled = report.cancelled,
                 "sync complete"
             );
             // Regenerate recommendations off the same write connection now that
             // the ingest transaction has committed. This is best-effort: a
             // regeneration failure must NOT fail the sync (the archive is already
-            // updated), so we log and carry on (spec §6).
-            regenerate_recommendations(write);
+            // updated), so we log and carry on (spec §6). Skipped on a cancelled
+            // sync: the daemon is shutting down.
+            if !report.cancelled {
+                regenerate_recommendations(write);
+            }
             status.finish_ok(report.ingested, summary);
             Ok(report)
         }
@@ -109,6 +120,7 @@ fn regenerate_recommendations(write: &Connection) {
 ///
 /// `change_tx` broadcasts a [`ChangeEvent`] to SSE subscribers after each sync
 /// that ingested new data; no-op syncs do not emit (spec §7).
+#[allow(clippy::too_many_arguments)]
 pub async fn run_loop(
     write: WriteConn,
     cfg: CoreConfig,
@@ -117,8 +129,9 @@ pub async fn run_loop(
     mut trigger: mpsc::Receiver<()>,
     interval: Duration,
     shutdown: impl std::future::Future<Output = ()>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
 ) {
-    sync_blocking(&write, &cfg, &status, &change_tx).await;
+    sync_blocking(&write, &cfg, &status, &change_tx, &cancel).await;
 
     let mut tick = tokio::time::interval(interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -139,14 +152,14 @@ pub async fn run_loop(
                 break;
             }
             _ = tick.tick() => {
-                sync_blocking(&write, &cfg, &status, &change_tx).await;
+                sync_blocking(&write, &cfg, &status, &change_tx, &cancel).await;
             }
             recv = trigger.recv(), if watcher_alive => {
                 match recv {
                     Some(()) => {
                         // Coalesce any backlog of triggers into this one sync.
                         while trigger.try_recv().is_ok() {}
-                        sync_blocking(&write, &cfg, &status, &change_tx).await;
+                        sync_blocking(&write, &cfg, &status, &change_tx, &cancel).await;
                     }
                     None => {
                         // All trigger senders dropped (watcher gone). Fall back to
@@ -173,17 +186,19 @@ async fn sync_blocking(
     cfg: &CoreConfig,
     status: &SyncStatusHandle,
     change_tx: &ChangeSender,
+    cancel: &Arc<std::sync::atomic::AtomicBool>,
 ) {
     let cfg_task = cfg.clone();
     let status_task = status.clone();
     let write_task = write.clone();
+    let cancel_task = cancel.clone();
     let join = tokio::task::spawn_blocking(move || {
         // Recover from a poisoned mutex: a previous sync may have panicked while
         // holding the lock, but the connection itself is still usable.
         let mut guard = write_task
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        run_sync_once(&mut guard, &cfg_task, &status_task)
+        run_sync_once(&mut guard, &cfg_task, &status_task, &cancel_task)
     })
     .await;
     match join {
