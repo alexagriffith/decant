@@ -1578,7 +1578,6 @@ In `web/lib/decant_web/live/analytics_live.ex`, replace the "By project" `<tbody
                         :if={(r.worktree_count || 0) > 0}
                         type="button"
                         phx-click={JS.push("toggle_project", value: %{key: r.key})}
-                        onclick="event.stopPropagation()"
                         class="ml-2 rounded px-1 text-[10px] text-muted hover:text-fg"
                       >
                         ▸ {r.worktree_count} wt
@@ -1600,6 +1599,8 @@ In `web/lib/decant_web/live/analytics_live.ex`, replace the "By project" `<tbody
                 <% end %>
               </tbody>
 ```
+
+> As-built deviation (c9a3f13): the template's original `onclick="event.stopPropagation()"` line was removed — it prevents LiveView's delegated phx-click from ever firing; nested phx-click needs no propagation guard.
 
 - [ ] **Step 7: Run to verify it passes**
 

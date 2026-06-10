@@ -5,7 +5,7 @@
 //! - `from` (inclusive) → `s.started_at >= from`
 //! - `to`   (inclusive) → `s.started_at < (to + 1 day)` so the whole `to` day is included
 //! - `tool` / `model`   → exact match
-//! - `project`          → match by `project.path`
+//! - `project`          → match root row and every worktree rolled up under it (path fallback for unresolved rows)
 //!
 //! Dates must be `YYYY-MM-DD`; anything else is a 400 (never a silent no-op).
 
