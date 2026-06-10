@@ -70,6 +70,7 @@ async fn spawn() -> String {
         read_pool,
         write,
         sync_status: status,
+        activity: std::sync::Arc::new(decant_daemon::activity::ActivityTracker::default()),
         events: decant_daemon::events::channel(),
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -556,4 +557,170 @@ async fn analytics_by_dimension_project_rollup_exposes_worktree_count_and_root_p
             .is_some(),
         "empty root must behave as absent (rolled-up view)"
     );
+}
+
+#[tokio::test]
+async fn analytics_files_returns_hotspots() {
+    let base = spawn().await;
+    let body = get_ok(&base, "/api/v1/analytics/files").await;
+    assert_envelope(&body);
+    let data = body["data"].as_array().unwrap();
+    // Claude fixture has one Read of /Users/dev/proj/auth_test.py; codex sample
+    // has no apply_patch -> exactly one hotspot row.
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["key"], "auth_test.py");
+    assert_eq!(data[0]["project"], "/Users/dev/proj");
+    assert_eq!(data[0]["reads"], 1);
+    assert_eq!(data[0]["edits"], 0);
+    assert_eq!(data[0]["sessions"], 1);
+}
+
+#[tokio::test]
+async fn analytics_files_group_ext_and_op_filter() {
+    let base = spawn().await;
+    let ext = get_ok(&base, "/api/v1/analytics/files?group=ext").await;
+    let data = ext["data"].as_array().unwrap();
+    assert_eq!(data[0]["key"], "py");
+    assert!(data[0]["project"].is_null());
+
+    let edits = get_ok(&base, "/api/v1/analytics/files?op=edit").await;
+    assert_eq!(edits["data"].as_array().unwrap().len(), 0);
+
+    // Filters thread through: a date window before the fixture excludes it.
+    let none = get_ok(&base, "/api/v1/analytics/files?to=2026-04-01").await;
+    assert_eq!(none["data"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn analytics_files_rejects_unknown_group_and_op() {
+    let base = spawn().await;
+    for path in [
+        "/api/v1/analytics/files?group=bogus",
+        "/api/v1/analytics/files?op=bogus",
+    ] {
+        let r = client()
+            .get(format!("{base}{path}"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 400, "GET {path} should be 400");
+    }
+}
+
+#[tokio::test]
+async fn sessions_carry_facets_and_classification() {
+    let base = spawn().await;
+    let body = get_ok(&base, "/api/v1/sessions").await;
+    let data = body["data"].as_array().unwrap();
+    let facets = &data[0]["facets"];
+    assert!(facets.is_object(), "summary must embed a facets object");
+    assert!(facets["turn_count"].is_number());
+    assert!(facets["error_count"].is_number());
+    assert!(facets["active_seconds"].is_number());
+    // Both fixtures end with assistant output -> completed.
+    assert_eq!(facets["outcome"], "completed");
+    // Claude sample's first prompt is "Fix the failing auth test" -> debugging.
+    let claude = data.iter().find(|s| s["tool"] == "claude_code").unwrap();
+    assert_eq!(claude["facets"]["work_type"], "debugging");
+
+    // Detail embeds the same summary shape.
+    let id = data[0]["id"].as_i64().unwrap();
+    let detail = get_ok(&base, &format!("/api/v1/sessions/{id}")).await;
+    assert!(detail["data"]["summary"]["facets"].is_object());
+}
+
+#[tokio::test]
+async fn sessions_filter_by_outcome_and_work_type() {
+    let base = spawn().await;
+    let abandoned = get_ok(&base, "/api/v1/sessions?outcome=abandoned").await;
+    assert_eq!(abandoned["data"].as_array().unwrap().len(), 0);
+    assert_eq!(abandoned["meta"]["pagination"]["total_count"], 0);
+
+    let debugging = get_ok(&base, "/api/v1/sessions?work_type=debugging").await;
+    let rows = debugging["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["tool"], "claude_code");
+
+    // Classification filters apply to analytics too (shared filter set).
+    let summary = get_ok(&base, "/api/v1/analytics/summary?outcome=completed").await;
+    assert_eq!(summary["data"]["sessions"], 2);
+
+    for path in [
+        "/api/v1/sessions?outcome=bogus",
+        "/api/v1/sessions?work_type=bogus",
+    ] {
+        let r = client()
+            .get(format!("{base}{path}"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 400, "GET {path} should be 400");
+    }
+}
+
+#[tokio::test]
+async fn analytics_now_reports_today_and_active_sessions() {
+    // Boot with a pre-seeded tracker: one fixture source file marked active.
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let root = dir.path();
+    let claude_dir = root.join("claude/projects");
+    let codex_dir = root.join("codex");
+    let csess = claude_dir.join("proj/sess.jsonl");
+    std::fs::create_dir_all(csess.parent().unwrap()).unwrap();
+    std::fs::write(&csess, claude_fixture()).unwrap();
+
+    let db_path = root.join("d.db");
+    let core_cfg = decant_core::config::Config {
+        db_path: db_path.clone(),
+        claude_dir,
+        codex_dir,
+    };
+    let mut conn = decant_core::db::open(&db_path).unwrap();
+    decant_core::schema::migrate(&conn).unwrap();
+    let status = decant_daemon::sync_status::SyncStatusHandle::new();
+    decant_daemon::ingest::run_sync_once(
+        &mut conn,
+        &core_cfg,
+        &status,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    let write = decant_daemon::db::shared_write(conn);
+    let read_pool = decant_daemon::db::read_pool(&db_path, 4).unwrap();
+
+    let tracker = std::sync::Arc::new(decant_daemon::activity::ActivityTracker::default());
+    tracker.record_write(&csess, "claude_code", std::time::Instant::now());
+
+    let app = decant_daemon::http::router(decant_daemon::http::AppState {
+        token: TOKEN.to_string(),
+        read_pool,
+        write,
+        sync_status: status,
+        activity: tracker,
+        events: decant_daemon::events::channel(),
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let base = format!("http://127.0.0.1:{}", addr.port());
+
+    let body = get_ok(&base, "/api/v1/analytics/now").await;
+    assert_envelope(&body);
+    let data = &body["data"];
+    // Fixtures are dated 2026-05; "today" totals are zero but present.
+    assert_eq!(data["today"]["sessions"], 0);
+    assert!(data["today"]["estimated_cost_usd"].is_number());
+    // The seeded tracker entry joins back to the ingested session row.
+    let active = data["active_sessions"].as_array().unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0]["tool"], "claude_code");
+    assert_eq!(active[0]["title"], "Fix the failing auth test");
+    assert_eq!(active[0]["project"], "/Users/dev/proj");
+    assert!(active[0]["idle_seconds"].is_number());
+    assert!(data["sync_in_progress"].is_boolean());
+    assert!(data["last_sync_at"].is_string());
 }

@@ -1,0 +1,10 @@
+{"type":"session_meta","timestamp":"2026-05-04T09:00:00.000Z","payload":{"id":"sess-codex-enr","cwd":"/Users/dev/proj","originator":"codex_cli_rs","cli_version":"0.116.0","source":"cli","model_provider":"openai"}}
+{"type":"turn_context","timestamp":"2026-05-04T09:00:01.000Z","payload":{"cwd":"/Users/dev/proj","model":"gpt-5.4","effort":"high","approval_policy":"on-request"}}
+{"type":"response_item","timestamp":"2026-05-04T09:00:02.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Apply the planned patch"}]}}
+{"type":"response_item","timestamp":"2026-05-04T09:00:03.000Z","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Apply add, update, delete in one patch."}]}}
+{"type":"response_item","timestamp":"2026-05-04T09:00:05.000Z","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"call_p1","input":"*** Begin Patch\n*** Add File: docs/new.md\n+# New doc\n*** Update File: src/lib.rs\n@@\n-old line\n+new line\n*** Delete File: old.txt\n*** End Patch"}}
+{"type":"response_item","timestamp":"2026-05-04T09:00:06.000Z","payload":{"type":"custom_tool_call_output","call_id":"call_p1","output":"Done. 3 files changed."}}
+{"type":"response_item","timestamp":"2026-05-04T09:00:07.000Z","payload":{"type":"function_call","name":"exec_command","call_id":"call_e1","arguments":"{\"cmd\":\"cat docs/new.md\",\"workdir\":\"/Users/dev/proj\",\"max_output_tokens\":1024}"}}
+{"type":"response_item","timestamp":"2026-05-04T09:00:08.000Z","payload":{"type":"function_call_output","call_id":"call_e1","output":"# New doc"}}
+{"type":"event_msg","timestamp":"2026-05-04T09:00:09.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":800,"cached_input_tokens":300,"output_tokens":120,"reasoning_output_tokens":40,"total_tokens":920}}}}
+{"type":"response_item","timestamp":"2026-05-04T09:00:10.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Patch applied across three files."}]}}

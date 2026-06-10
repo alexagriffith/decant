@@ -52,11 +52,34 @@ pub struct SessionSummary {
     pub total_cache_creation_tokens: i64,
     pub estimated_cost_usd: f64,
     pub is_archived: bool,
+    pub facets: SessionFacets,
+}
+
+/// Deterministic per-session enrichment (schema v4): facet counters plus the
+/// heuristic outcome / work-type labels. Embedded in every session summary.
+#[derive(Debug, Serialize)]
+pub struct SessionFacets {
+    pub turn_count: i64,
+    pub error_count: i64,
+    pub interruption_count: i64,
+    pub compaction_count: i64,
+    pub sidechain_message_count: i64,
+    pub agent_spawn_count: i64,
+    pub skill_count: i64,
+    pub command_count: i64,
+    pub thinking_block_count: i64,
+    pub thinking_chars: i64,
+    pub active_seconds: i64,
+    pub outcome: Option<String>,
+    pub work_type: Option<String>,
 }
 
 const SESSION_COLS: &str = "s.id, s.tool, s.source_session_id, s.title, s.model, p.path, \
      s.started_at, s.ended_at, s.message_count, s.total_input_tokens, s.total_output_tokens, \
-     s.total_cache_read_tokens, s.total_cache_creation_tokens, s.estimated_cost_usd, s.is_archived";
+     s.total_cache_read_tokens, s.total_cache_creation_tokens, s.estimated_cost_usd, s.is_archived, \
+     s.turn_count, s.error_count, s.interruption_count, s.compaction_count, \
+     s.sidechain_message_count, s.agent_spawn_count, s.skill_count, s.command_count, \
+     s.thinking_block_count, s.thinking_chars, s.active_seconds, s.outcome, s.work_type";
 
 fn map_summary(r: &rusqlite::Row) -> rusqlite::Result<SessionSummary> {
     Ok(SessionSummary {
@@ -75,6 +98,21 @@ fn map_summary(r: &rusqlite::Row) -> rusqlite::Result<SessionSummary> {
         total_cache_creation_tokens: r.get(12)?,
         estimated_cost_usd: r.get(13)?,
         is_archived: r.get::<_, i64>(14)? != 0,
+        facets: SessionFacets {
+            turn_count: r.get(15)?,
+            error_count: r.get(16)?,
+            interruption_count: r.get(17)?,
+            compaction_count: r.get(18)?,
+            sidechain_message_count: r.get(19)?,
+            agent_spawn_count: r.get(20)?,
+            skill_count: r.get(21)?,
+            command_count: r.get(22)?,
+            thinking_block_count: r.get(23)?,
+            thinking_chars: r.get(24)?,
+            active_seconds: r.get(25)?,
+            outcome: r.get(26)?,
+            work_type: r.get(27)?,
+        },
     })
 }
 
@@ -1004,6 +1042,95 @@ pub fn date_bounds(conn: &Connection) -> Result<DateBounds, ApiError> {
         },
     )?;
     Ok(DateBounds { min, max })
+}
+
+/// Parse the `group` query param for `/analytics/files`.
+pub fn parse_file_group(s: Option<&str>) -> Result<decant_core::stats::FileGroup, ApiError> {
+    match s {
+        None => Ok(decant_core::stats::FileGroup::Path),
+        Some(v) => decant_core::stats::FileGroup::parse(v).ok_or_else(|| {
+            ApiError::invalid_filter(format!("unknown group {v:?}")).with_hint("one of: path, ext")
+        }),
+    }
+}
+
+/// Parse the `op` query param for `/analytics/files`.
+pub fn parse_file_op(s: Option<&str>) -> Result<Option<decant_core::enrich::Operation>, ApiError> {
+    match s {
+        None => Ok(None),
+        Some(v) => decant_core::enrich::Operation::parse(v)
+            .map(Some)
+            .ok_or_else(|| {
+                ApiError::invalid_filter(format!("unknown op {v:?}"))
+                    .with_hint("one of: read, edit, write, delete")
+            }),
+    }
+}
+
+/// File hotspots scoped to `filters` (spec §5.1 `/analytics/files`): which
+/// files (group=path) or extensions (group=ext) agents touch most, split by
+/// operation, ordered by total operations desc.
+pub fn file_hotspots(
+    conn: &Connection,
+    group: decant_core::stats::FileGroup,
+    op: Option<decant_core::enrich::Operation>,
+    filters: &Filters,
+    limit: i64,
+) -> Result<Vec<decant_core::stats::FileStatRow>, ApiError> {
+    use decant_core::stats::{FileGroup, FileStatRow};
+
+    let where_c = filters.where_clause();
+    let (key_expr, proj_expr, proj_join) = match group {
+        FileGroup::Path => (
+            "COALESCE(f.rel_path, f.path)",
+            "p.path",
+            "LEFT JOIN project p ON p.id = s.project_id",
+        ),
+        FileGroup::Ext => ("COALESCE(f.ext, '(none)')", "NULL", ""),
+    };
+    let mut params: Vec<SqlValue> = Vec::new();
+    let op_clause = match op {
+        Some(o) => {
+            params.push(SqlValue::Text(o.as_str().to_string()));
+            "f.operation = ?"
+        }
+        None => "1=1",
+    };
+    params.extend(where_c.params.iter().cloned());
+
+    let sql = format!(
+        "SELECT {key_expr} AS k, {proj_expr} AS proj,
+                SUM(f.operation = 'read') AS reads,
+                SUM(f.operation = 'edit') AS edits,
+                SUM(f.operation = 'write') AS writes,
+                SUM(f.operation = 'delete') AS deletes,
+                COUNT(DISTINCT f.session_id) AS sessions,
+                MAX(f.timestamp) AS last_touched
+         FROM file_ref f
+         JOIN session s ON s.id = f.session_id
+         {proj_join}
+         WHERE {op_clause} AND {where_sql}
+         GROUP BY k, proj
+         ORDER BY (reads + edits + writes + deletes) DESC, k ASC
+         LIMIT {limit}",
+        where_sql = where_c.sql,
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            Ok(FileStatRow {
+                key: r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                project: r.get(1)?,
+                reads: r.get(2)?,
+                edits: r.get(3)?,
+                writes: r.get(4)?,
+                deletes: r.get(5)?,
+                sessions: r.get(6)?,
+                last_touched_at: r.get(7)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 #[cfg(test)]

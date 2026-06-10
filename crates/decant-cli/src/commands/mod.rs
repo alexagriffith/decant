@@ -2,6 +2,7 @@ pub mod completion;
 pub mod daemon;
 pub mod db;
 pub mod export;
+pub mod files;
 pub mod mcp;
 pub mod project;
 pub mod recommendations;

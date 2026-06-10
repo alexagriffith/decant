@@ -47,6 +47,8 @@ pub enum Commands {
     Search(commands::search::SearchArgs),
     /// Usage & cost rollups (overall, or --by tool|model|project|day).
     Stats(commands::stats::StatsArgs),
+    /// File hotspots: which files agents read/edit most (--group path|ext).
+    Files(commands::files::FilesArgs),
     /// Tool usage (built-in vs MCP): `tool ls` / `tool stats`.
     #[command(subcommand)]
     Tool(commands::tool::ToolCmd),
@@ -98,6 +100,7 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
         Commands::Show(args) => commands::session::run_show(cli, args),
         Commands::Search(args) => commands::search::run(cli, args),
         Commands::Stats(args) => commands::stats::run(cli, args),
+        Commands::Files(args) => commands::files::run(cli, args),
         Commands::Tool(cmd) => commands::tool::run(cli, cmd),
         Commands::Mcp(cmd) => commands::mcp::run(cli, cmd),
         Commands::Export(args) => commands::export::run(cli, args),

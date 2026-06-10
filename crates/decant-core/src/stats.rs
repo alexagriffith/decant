@@ -183,6 +183,152 @@ pub fn mcp_usage(conn: &Connection, limit: i64) -> Result<Vec<McpStatRow>> {
     Ok(rows)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileGroup {
+    /// Hotspot files, keyed by project-relative path.
+    Path,
+    /// Language lens, keyed by file extension.
+    Ext,
+}
+
+impl FileGroup {
+    pub fn parse(s: &str) -> Option<FileGroup> {
+        match s {
+            "path" => Some(FileGroup::Path),
+            "ext" => Some(FileGroup::Ext),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileStatRow {
+    /// rel_path (path fallback) for `Path`, extension for `Ext`.
+    pub key: String,
+    /// Owning project path (`Path` grouping only).
+    pub project: Option<String>,
+    pub reads: i64,
+    pub edits: i64,
+    pub writes: i64,
+    pub deletes: i64,
+    pub sessions: i64,
+    pub last_touched_at: Option<String>,
+}
+
+/// File hotspots: which files (or extensions) the agents touch most, split by
+/// operation. Ordered by total operations desc. The grouping expression comes
+/// from a fixed match (never user text), so the format! is injection-safe.
+pub fn file_hotspots(
+    conn: &Connection,
+    group: FileGroup,
+    op: Option<crate::enrich::Operation>,
+    limit: i64,
+) -> Result<Vec<FileStatRow>> {
+    let limit = if limit > 0 { limit } else { 50 };
+    let (key_expr, proj_expr, join) = match group {
+        FileGroup::Path => (
+            "COALESCE(f.rel_path, f.path)",
+            "p.path",
+            "JOIN session s ON s.id = f.session_id LEFT JOIN project p ON p.id = s.project_id",
+        ),
+        FileGroup::Ext => (
+            "COALESCE(f.ext, '(none)')",
+            "NULL",
+            "JOIN session s ON s.id = f.session_id",
+        ),
+    };
+    let op_filter = match op {
+        Some(_) => "WHERE f.operation = ?1",
+        None => "",
+    };
+    let sql = format!(
+        "SELECT {key_expr} AS k, {proj_expr} AS proj,
+                SUM(f.operation = 'read') AS reads,
+                SUM(f.operation = 'edit') AS edits,
+                SUM(f.operation = 'write') AS writes,
+                SUM(f.operation = 'delete') AS deletes,
+                COUNT(DISTINCT f.session_id) AS sessions,
+                MAX(f.timestamp) AS last_touched
+         FROM file_ref f {join}
+         {op_filter}
+         GROUP BY k, proj
+         ORDER BY (reads + edits + writes + deletes) DESC, k ASC
+         LIMIT {limit}"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let map_row = |r: &rusqlite::Row<'_>| {
+        Ok(FileStatRow {
+            key: r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+            project: r.get(1)?,
+            reads: r.get(2)?,
+            edits: r.get(3)?,
+            writes: r.get(4)?,
+            deletes: r.get(5)?,
+            sessions: r.get(6)?,
+            last_touched_at: r.get(7)?,
+        })
+    };
+    let rows = match op {
+        Some(o) => stmt.query_map([o.as_str()], map_row)?,
+        None => stmt.query_map([], map_row)?,
+    }
+    .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// One session's facet counters + classification, for CLI `show`.
+#[derive(Debug, Serialize)]
+pub struct SessionFacetRow {
+    pub turn_count: i64,
+    pub error_count: i64,
+    pub interruption_count: i64,
+    pub compaction_count: i64,
+    pub sidechain_message_count: i64,
+    pub agent_spawn_count: i64,
+    pub skill_count: i64,
+    pub command_count: i64,
+    pub thinking_block_count: i64,
+    pub thinking_chars: i64,
+    pub active_seconds: i64,
+    pub outcome: Option<String>,
+    pub work_type: Option<String>,
+}
+
+/// Fetch the deterministic facets for one session (None if the id is unknown).
+pub fn session_facets(conn: &Connection, session_id: i64) -> Result<Option<SessionFacetRow>> {
+    let row = conn
+        .query_row(
+            "SELECT turn_count, error_count, interruption_count, compaction_count,
+                    sidechain_message_count, agent_spawn_count, skill_count, command_count,
+                    thinking_block_count, thinking_chars, active_seconds, outcome, work_type
+             FROM session WHERE id = ?1",
+            [session_id],
+            |r| {
+                Ok(SessionFacetRow {
+                    turn_count: r.get(0)?,
+                    error_count: r.get(1)?,
+                    interruption_count: r.get(2)?,
+                    compaction_count: r.get(3)?,
+                    sidechain_message_count: r.get(4)?,
+                    agent_spawn_count: r.get(5)?,
+                    skill_count: r.get(6)?,
+                    command_count: r.get(7)?,
+                    thinking_block_count: r.get(8)?,
+                    thinking_chars: r.get(9)?,
+                    active_seconds: r.get(10)?,
+                    outcome: r.get(11)?,
+                    work_type: r.get(12)?,
+                })
+            },
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })?;
+    Ok(row)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +347,75 @@ mod tests {
         ingest::upsert_session(&tx, &parsed, "/x.jsonl", 1, 2, "h").unwrap();
         tx.commit().unwrap();
         conn
+    }
+
+    fn seeded_enriched() -> Connection {
+        let conn = db::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        for (fixture, id) in [
+            ("/../../fixtures/claude/enriched.jsonl", "claude"),
+            ("/../../fixtures/codex/enriched.jsonl", "codex"),
+        ] {
+            let content =
+                std::fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), fixture))
+                    .unwrap();
+            let parsed = if id == "claude" {
+                sources::claude::parse_session("sess-enr-claude", &content)
+            } else {
+                sources::codex::parse_session("sess-enr-codex", &content, &Default::default())
+            };
+            let tx = conn.unchecked_transaction().unwrap();
+            ingest::upsert_session(&tx, &parsed, &format!("/x/{id}.jsonl"), 1, 2, id).unwrap();
+            tx.commit().unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn file_hotspots_by_path_orders_by_total_ops() {
+        let conn = seeded_enriched();
+        let rows = file_hotspots(&conn, FileGroup::Path, None, 50).unwrap();
+        // claude: src/main.rs (read+edit), README.md (write), nb.ipynb (edit)
+        // codex: docs/new.md (write), src/lib.rs (edit), old.txt (delete)
+        assert_eq!(rows[0].key, "src/main.rs");
+        assert_eq!((rows[0].reads, rows[0].edits), (1, 1));
+        assert_eq!(rows[0].sessions, 1);
+        assert_eq!(rows[0].project.as_deref(), Some("/Users/dev/proj"));
+        assert_eq!(rows.len(), 6);
+        assert!(rows[0].last_touched_at.is_some());
+    }
+
+    #[test]
+    fn file_hotspots_op_filter_keeps_only_that_operation() {
+        let conn = seeded_enriched();
+        let rows = file_hotspots(
+            &conn,
+            FileGroup::Path,
+            Some(crate::enrich::Operation::Edit),
+            50,
+        )
+        .unwrap();
+        let keys: Vec<_> = rows.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, vec!["nb.ipynb", "src/lib.rs", "src/main.rs"]);
+        assert!(rows.iter().all(|r| r.reads == 0 && r.writes == 0));
+    }
+
+    #[test]
+    fn file_hotspots_by_ext_rolls_up_languages() {
+        let conn = seeded_enriched();
+        let rows = file_hotspots(&conn, FileGroup::Ext, None, 50).unwrap();
+        let rs = rows.iter().find(|r| r.key == "rs").unwrap();
+        // src/main.rs read+edit (claude) + src/lib.rs edit (codex)
+        assert_eq!((rs.reads, rs.edits), (1, 2));
+        assert_eq!(rs.sessions, 2, "rs ops span both sessions");
+        assert!(rs.project.is_none());
+    }
+
+    #[test]
+    fn file_group_parse() {
+        assert_eq!(FileGroup::parse("path"), Some(FileGroup::Path));
+        assert_eq!(FileGroup::parse("ext"), Some(FileGroup::Ext));
+        assert_eq!(FileGroup::parse("bogus"), None);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! decant-daemon: the long-running service that owns the archive and serves the HTTP API.
 
+pub mod activity;
 pub mod api;
 pub mod auth;
 pub mod config;
@@ -67,13 +68,35 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         let _ = shutdown_tx.send(true);
     });
 
+    // Live-session tracker: raw watcher events feed it (pre-debounce); a sweep
+    // task expires quiet sessions; `/analytics/now` and SSE expose it.
+    let tracker = std::sync::Arc::new(activity::ActivityTracker::default());
+
     // Filesystem watcher -> debounced trigger channel -> ingest loop.
     let (trigger_tx, trigger_rx) = tokio::sync::mpsc::channel::<()>(16);
     let watch_dirs = ingest::watch_dirs(&core_cfg);
+    let path_hook: watcher::PathHook = {
+        let tracker = tracker.clone();
+        let tx = change_tx.clone();
+        let claude_dir = core_cfg.claude_dir.clone();
+        let codex_dir = core_cfg.codex_dir.clone();
+        Box::new(move |path| {
+            let Some(tool) = activity::classify_source_path(path, &claude_dir, &codex_dir) else {
+                return;
+            };
+            if tracker.record_write(path, tool, std::time::Instant::now()) {
+                events::emit(
+                    &tx,
+                    events::ActivityEvent::new("active", tool, path.to_string_lossy()),
+                );
+            }
+        })
+    };
     let _watcher = match watcher::SourceWatcher::start(
         watch_dirs,
         trigger_tx,
         watcher::DEFAULT_DEBOUNCE,
+        Some(path_hook),
     ) {
         Ok(w) => Some(w),
         Err(e) => {
@@ -83,6 +106,30 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
             None
         }
     };
+
+    // Sweep quiet sessions to idle on a steady tick (same cadence as the SSE
+    // keep-alive); each expiry broadcasts one `session_activity{idle}` event.
+    {
+        let tracker = tracker.clone();
+        let tx = change_tx.clone();
+        let mut sweep_shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {
+                        for (path, tool) in tracker.sweep(std::time::Instant::now()) {
+                            events::emit(
+                                &tx,
+                                events::ActivityEvent::new("idle", tool, path.to_string_lossy()),
+                            );
+                        }
+                    }
+                    _ = sweep_shutdown.changed() => return,
+                }
+            }
+        });
+    }
 
     // Spawn the ingest task (the only writer). It gets a sender clone so each
     // sync that ingests new data broadcasts a change event.
@@ -104,6 +151,7 @@ pub async fn run(cfg: config::Config) -> anyhow::Result<()> {
         write,
         sync_status,
         events: change_tx,
+        activity: tracker,
     });
 
     // Graceful shutdown waits for open connections, but SSE subscribers hold

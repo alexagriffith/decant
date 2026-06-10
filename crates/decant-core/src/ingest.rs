@@ -47,20 +47,32 @@ pub fn upsert_session(
     )?;
 
     let cost = estimate_cost(s.model.as_deref(), &s.totals, &default_pricing());
+    let refs = crate::enrich::file_refs(s);
+    let facets = crate::enrich::facets(s);
+    let outcome = crate::classify::outcome(s);
+    let work_type = crate::classify::work_type(s, &refs);
     conn.execute(
         "INSERT INTO session(
             tool, source_session_id, project_id, title, cwd, git_branch, model, cli_version,
             started_at, ended_at, message_count,
             total_input_tokens, total_output_tokens, total_cache_read_tokens, total_cache_creation_tokens,
             estimated_cost_usd, is_archived, source_path, raw_meta,
-            ingested_at, source_mtime, source_size, source_hash)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,datetime('now'),?20,?21,?22)",
+            ingested_at, source_mtime, source_size, source_hash,
+            turn_count, error_count, interruption_count, compaction_count, sidechain_message_count,
+            agent_spawn_count, skill_count, command_count, thinking_block_count, thinking_chars,
+            active_seconds, outcome, work_type)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,datetime('now'),?20,?21,?22,
+                 ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35)",
         params![
             s.tool.as_str(), s.source_session_id, project_id, s.title, s.cwd, s.git_branch, s.model, s.cli_version,
             s.started_at, s.ended_at, s.messages.len() as i64,
             s.totals.input, s.totals.output, s.totals.cache_read, s.totals.cache_creation,
             cost, s.is_archived as i64, source_path, s.raw_meta.to_string(),
             mtime, size, hash,
+            facets.turn_count, facets.error_count, facets.interruption_count, facets.compaction_count,
+            facets.sidechain_message_count, facets.agent_spawn_count, facets.skill_count,
+            facets.command_count, facets.thinking_block_count, facets.thinking_chars,
+            facets.active_seconds, outcome.map(|o| o.as_str()), work_type.map(|w| w.as_str()),
         ],
     )?;
     let session_id = conn.last_insert_rowid();
@@ -69,6 +81,7 @@ pub fn upsert_session(
     let mut result_errors: HashMap<String, Option<bool>> = HashMap::new();
     // (message_id, call_block_id, message_timestamp, block)
     let mut tool_use_blocks: Vec<(i64, i64, Option<String>, NormalizedBlock)> = Vec::new();
+    let mut msg_ids: Vec<i64> = Vec::with_capacity(s.messages.len());
 
     for m in &s.messages {
         conn.execute(
@@ -86,6 +99,7 @@ pub fn upsert_session(
             ],
         )?;
         let message_id = conn.last_insert_rowid();
+        msg_ids.push(message_id);
 
         for b in &m.blocks {
             conn.execute(
@@ -136,6 +150,22 @@ pub fn upsert_session(
                 b.tool_input.as_ref().map(|v| v.to_string()),
                 is_error.map(|e| e as i64),
                 b.ordinal, ts,
+            ],
+        )?;
+    }
+
+    for fr in &refs {
+        conn.execute(
+            "INSERT INTO file_ref(session_id, message_id, path, rel_path, ext, operation, timestamp)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                session_id,
+                msg_ids.get(fr.message_idx),
+                fr.path,
+                fr.rel_path,
+                fr.ext,
+                fr.operation.as_str(),
+                fr.timestamp,
             ],
         )?;
     }
@@ -478,6 +508,109 @@ mod tests {
             )
             .unwrap();
         assert!(fts >= 1, "FTS should find 'auth'");
+    }
+
+    #[test]
+    fn upsert_writes_file_refs_and_facets() {
+        let conn = db::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+
+        let claude = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/claude/enriched.jsonl"
+        ))
+        .unwrap();
+        let parsed = sources::claude::parse_session("sess-claude-enr", &claude);
+        let tx = conn.unchecked_transaction().unwrap();
+        let sid = upsert_session(&tx, &parsed, "/x/enr.jsonl", 1, 2, "h").unwrap();
+        tx.commit().unwrap();
+
+        let codex = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/codex/enriched.jsonl"
+        ))
+        .unwrap();
+        let parsed2 =
+            sources::codex::parse_session("fallback", &codex, &std::collections::HashMap::new());
+        let tx = conn.unchecked_transaction().unwrap();
+        upsert_session(&tx, &parsed2, "/x/enr2.jsonl", 1, 2, "h2").unwrap();
+        tx.commit().unwrap();
+
+        let (claude_refs, codex_refs): (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM file_ref WHERE session_id = ?1),
+                        (SELECT COUNT(*) FROM file_ref WHERE session_id != ?1)",
+                params![sid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(claude_refs, 4, "Read+Edit+Write+NotebookEdit");
+        assert_eq!(codex_refs, 3, "apply_patch add/update/delete");
+
+        // Spot row: the Read ref keeps its message link, rel path, ext, op.
+        let (rel, ext, op, msg_linked): (String, String, String, i64) = conn
+            .query_row(
+                "SELECT rel_path, ext, operation, message_id IS NOT NULL
+                 FROM file_ref WHERE session_id = ?1 AND operation = 'read'",
+                params![sid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (rel.as_str(), ext.as_str(), op.as_str()),
+            ("src/main.rs", "rs", "read")
+        );
+        assert_eq!(
+            msg_linked, 1,
+            "file_ref.message_id must link to the tool-use message"
+        );
+
+        let (
+            turns,
+            errors,
+            interruptions,
+            compactions,
+            sidechain,
+            agents,
+            skills,
+            commands,
+            active,
+        ): (i64, i64, i64, i64, i64, i64, i64, i64, i64) = conn
+            .query_row(
+                "SELECT turn_count, error_count, interruption_count, compaction_count,
+                        sidechain_message_count, agent_spawn_count, skill_count, command_count,
+                        active_seconds
+                 FROM session WHERE id = ?1",
+                params![sid],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            (
+                turns,
+                errors,
+                interruptions,
+                compactions,
+                sidechain,
+                agents,
+                skills,
+                commands,
+                active
+            ),
+            (1, 1, 1, 1, 2, 1, 1, 1, 490)
+        );
     }
 
     use std::fs;

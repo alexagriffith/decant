@@ -18,6 +18,8 @@ pub struct ListParams {
     pub tool: Option<String>,
     pub model: Option<String>,
     pub project: Option<String>,
+    pub outcome: Option<String>,
+    pub work_type: Option<String>,
     pub sort: Option<String>,
     pub limit: Option<i64>,
     pub cursor: Option<String>,
@@ -34,7 +36,8 @@ pub async fn list(
         params.tool,
         params.model,
         params.project,
-    )?;
+    )?
+    .with_classification(params.outcome, params.work_type)?;
     let sort = SessionSort::parse(params.sort.as_deref())?;
     let limit = query::clamp_limit(params.limit);
     let cursor = match params.cursor {

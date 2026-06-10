@@ -94,6 +94,7 @@ async fn sync_status_endpoint_returns_envelope() {
         read_pool: pool,
         write,
         sync_status: status.clone(),
+        activity: std::sync::Arc::new(decant_daemon::activity::ActivityTracker::default()),
         events: decant_daemon::events::channel(),
     });
 
@@ -243,6 +244,9 @@ async fn run_loop_broadcasts_change_event_on_ingest_but_not_on_noop() {
         .await
         .expect("boot sync must broadcast a change event within 5s")
         .expect("channel open");
+    let decant_daemon::events::BusEvent::ArchiveUpdated(ev) = ev else {
+        panic!("expected ArchiveUpdated, got {ev:?}");
+    };
     assert_eq!(ev.kind, "archive_updated");
     assert_eq!(ev.ingested, 1, "boot sync ingested the one fixture session");
 

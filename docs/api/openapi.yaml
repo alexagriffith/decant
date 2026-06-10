@@ -90,6 +90,8 @@ paths:
         - $ref: "#/components/parameters/Tool"
         - $ref: "#/components/parameters/Model"
         - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Outcome"
+        - $ref: "#/components/parameters/WorkType"
         - name: sort
           in: query
           description: Sort order.
@@ -200,6 +202,8 @@ paths:
         - $ref: "#/components/parameters/Tool"
         - $ref: "#/components/parameters/Model"
         - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Outcome"
+        - $ref: "#/components/parameters/WorkType"
       responses:
         "200":
           description: Aggregate totals.
@@ -300,6 +304,79 @@ paths:
                     properties:
                       data: { $ref: "#/components/schemas/ModelSparklines" }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /analytics/files:
+    get:
+      tags: [analytics]
+      summary: File hotspots (or per-extension language lens)
+      description: >
+        Which files agents touch most, with per-operation counts
+        (read/edit/write/delete), distinct session coverage, and last touch.
+        Backed by `file_ref` rows extracted deterministically at ingest (Claude
+        Read/Edit/Write/NotebookEdit paths; Codex apply_patch headers — Codex
+        shell reads are not mined, so its read counts are conservative).
+        Top-N by total operations; no cursor.
+      parameters:
+        - name: group
+          in: query
+          description: Aggregation key — project-relative path or file extension.
+          schema:
+            type: string
+            enum: [path, ext]
+            default: path
+        - name: op
+          in: query
+          description: Keep only one operation kind.
+          schema:
+            type: string
+            enum: [read, edit, write, delete]
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/Model"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Outcome"
+        - $ref: "#/components/parameters/WorkType"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Hotspot rows, ordered by total operations desc.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/FileStatRow" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /analytics/now:
+    get:
+      tags: [analytics]
+      summary: Glanceable "now" snapshot
+      description: >
+        One cheap call for glanceable clients (menu bar, dashboard header):
+        today's totals (local-time day bounds), the sessions whose source files
+        are being written right now (live-session tracker; active = a write in
+        the last 120s), and sync state. Live entries are joined to their archive
+        row when already ingested; a brand-new session may briefly carry only
+        `tool` + `source_path`.
+      responses:
+        "200":
+          description: The snapshot.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Now" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /tools/usage:
@@ -506,6 +583,11 @@ paths:
           have missed events; it should re-fetch current state from scratch. Sent
           at most once per lag episode. `data` is `{"type":"resync"}`.
 
+        - `session_activity` — a session source file went `active` (writes
+          started after quiet) or `idle` (quiet past the 120s activity window).
+          `data` is an [`ActivityEvent`](#/components/schemas/ActivityEvent).
+          Additive: clients that don't know this event name ignore it.
+
 
         A keep-alive comment (`:`) is sent about every 15s so idle connections
         (no sync activity) stay open through intermediaries.
@@ -535,6 +617,12 @@ paths:
                   value: |
                     event: resync
                     data: {"type":"resync"}
+
+                sessionActivity:
+                  summary: A session started writing
+                  value: |
+                    event: session_activity
+                    data: {"type":"session_activity","state":"active","tool":"claude_code","source_path":"/Users/me/.claude/projects/p/s.jsonl"}
         "401": { $ref: "#/components/responses/Unauthorized" }
 
 components:
@@ -588,6 +676,24 @@ components:
         project path and return one row per worktree (the root checkout plus each
         worktree) instead of the rolled-up root row. Ignored for other dimensions.
       schema: { type: string }
+    Outcome:
+      name: outcome
+      in: query
+      description: >
+        Heuristic session outcome (computed at ingest). Unknown values are a
+        `400`, never a silent empty match.
+      schema:
+        type: string
+        enum: [completed, failed, abandoned]
+    WorkType:
+      name: work_type
+      in: query
+      description: >
+        Heuristic session work type (computed at ingest from the first prompt's
+        intent keywords, falling back to tool mix).
+      schema:
+        type: string
+        enum: [debugging, feature, refactor, research, ops]
     Limit:
       name: limit
       in: query
@@ -709,6 +815,7 @@ components:
         total_cache_creation_tokens: { type: integer }
         estimated_cost_usd: { type: number }
         is_archived: { type: boolean }
+        facets: { $ref: "#/components/schemas/SessionFacets" }
       required:
         - id
         - tool
@@ -720,6 +827,99 @@ components:
         - total_cache_creation_tokens
         - estimated_cost_usd
         - is_archived
+        - facets
+
+    SessionFacets:
+      type: object
+      description: >
+        Deterministic per-session enrichment, computed at ingest (schema v4) —
+        no LLM involved. Counters are exact; `outcome`/`work_type` are coarse
+        code-versioned heuristics (null = no signal). `active_seconds` is
+        gap-capped wallclock (gaps over 300s count as idle), which avoids the
+        large inflation of naive span time.
+      properties:
+        turn_count: { type: integer, description: Real user turns (excludes tool results, interruptions, command expansions, sidechains). }
+        error_count: { type: integer, description: Tool results flagged is_error. }
+        interruption_count: { type: integer }
+        compaction_count: { type: integer }
+        sidechain_message_count: { type: integer, description: Subagent-thread messages embedded in the session. }
+        agent_spawn_count: { type: integer }
+        skill_count: { type: integer }
+        command_count: { type: integer, description: Slash-command invocations. }
+        thinking_block_count: { type: integer }
+        thinking_chars: { type: integer }
+        active_seconds: { type: integer }
+        outcome:
+          type: [string, "null"]
+          enum: [completed, failed, abandoned, null]
+        work_type:
+          type: [string, "null"]
+          enum: [debugging, feature, refactor, research, ops, null]
+      required:
+        - turn_count
+        - error_count
+        - interruption_count
+        - compaction_count
+        - sidechain_message_count
+        - agent_spawn_count
+        - skill_count
+        - command_count
+        - thinking_block_count
+        - thinking_chars
+        - active_seconds
+
+    FileStatRow:
+      type: object
+      description: One file-hotspot (or extension) rollup row.
+      properties:
+        key:
+          type: string
+          description: Project-relative path (absolute fallback) for `group=path`; extension for `group=ext`.
+        project:
+          type: [string, "null"]
+          description: Owning project path (`group=path` only).
+        reads: { type: integer }
+        edits: { type: integer }
+        writes: { type: integer }
+        deletes: { type: integer }
+        sessions: { type: integer, description: Distinct sessions touching this key. }
+        last_touched_at: { type: [string, "null"], format: date-time }
+      required: [key, reads, edits, writes, deletes, sessions]
+
+    NowSession:
+      type: object
+      description: A currently-active session (its source file changed within the activity window).
+      properties:
+        tool: { type: string }
+        source_path: { type: string }
+        idle_seconds: { type: integer, description: Seconds since the file last changed. }
+        title: { type: [string, "null"] }
+        project: { type: [string, "null"] }
+        model: { type: [string, "null"] }
+        started_at: { type: [string, "null"], format: date-time }
+      required: [tool, source_path, idle_seconds]
+
+    Now:
+      type: object
+      description: Glanceable snapshot for `/analytics/now`.
+      properties:
+        today: { $ref: "#/components/schemas/Totals" }
+        active_sessions:
+          type: array
+          items: { $ref: "#/components/schemas/NowSession" }
+        last_sync_at: { type: [string, "null"], format: date-time }
+        sync_in_progress: { type: boolean }
+      required: [today, active_sessions, sync_in_progress]
+
+    ActivityEvent:
+      type: object
+      description: SSE `session_activity` payload — a live-session transition.
+      properties:
+        type: { type: string, enum: [session_activity] }
+        state: { type: string, enum: [active, idle] }
+        tool: { type: string, enum: [claude_code, codex] }
+        source_path: { type: string }
+      required: [type, state, tool, source_path]
 
     CostBreakdown:
       type: object

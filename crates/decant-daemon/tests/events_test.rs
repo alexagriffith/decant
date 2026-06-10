@@ -33,6 +33,7 @@ async fn spawn() -> (String, ChangeSender) {
         read_pool,
         write,
         sync_status: SyncStatusHandle::new(),
+        activity: std::sync::Arc::new(decant_daemon::activity::ActivityTracker::default()),
         events: events.clone(),
     });
 
@@ -92,7 +93,7 @@ async fn events_streams_archive_updated_frame() {
     // re-sending until the reader sees a frame closes that race without flakiness.
     let publisher = tokio::spawn(async move {
         for _ in 0..50 {
-            tx.send(ChangeEvent::archive_updated(2, "2026-06-07T12:00:00Z"))
+            tx.send(ChangeEvent::archive_updated(2, "2026-06-07T12:00:00Z").into())
                 .ok();
             tokio::time::sleep(Duration::from_millis(20)).await;
         }

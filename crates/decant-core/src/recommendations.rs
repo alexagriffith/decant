@@ -70,6 +70,10 @@ pub fn signals(conn: &Connection) -> Result<Vec<Recommendation>> {
     out.extend(heavy_servers(&mcp));
     out.extend(heavy_tools(&tools));
     out.extend(cost_concentration(&models));
+    out.extend(hot_context_files(conn)?);
+    out.extend(churn_files(conn)?);
+    out.extend(search_heavy(conn)?);
+    out.extend(abandoned_rate(conn)?);
 
     // Highest score first; stable so equal scores keep family/source order.
     out.sort_by(|a, b| {
@@ -223,6 +227,203 @@ fn cost_concentration(models: &[stats::DimRow]) -> Vec<Recommendation> {
 /// `$X.XX` — matches Insights' `fmt_usd` (two decimals).
 fn fmt_usd(n: f64) -> String {
     format!("${:.2}", n)
+}
+
+// Determinism-shifting signals (deterministic-enrichment spec §7): file-level
+// evidence from `file_ref` + session facets, windowed to the last 30 days.
+// The shared theme: when agents re-derive the same context every session,
+// move it into AGENTS.md / a Skill — spend structure, not tokens.
+
+const WINDOW: &str = "s.started_at >= date('now','-30 days')";
+/// Distinct read sessions before a file counts as re-derived context.
+const HOT_CONTEXT_MIN_SESSIONS: i64 = 8;
+/// Edit sessions above which a "hot" file is churn, not stable context.
+const HOT_CONTEXT_MAX_EDIT_SESSIONS: i64 = 2;
+/// Distinct edit sessions before a file counts as a churn hotspot.
+const CHURN_MIN_SESSIONS: i64 = 6;
+/// Grep+Glob calls per session that flag discovery-heavy work, and the minimum
+/// session count for the ratio to mean anything. (Tuned against the real
+/// archive 2026-06-10: this archive averages 0.6 — agents here read directly —
+/// so 5.0 keeps it quiet locally while tripping early for search-heavy repos.)
+const SEARCH_HEAVY_RATIO: f64 = 5.0;
+const SEARCH_HEAVY_MIN_SESSIONS: i64 = 20;
+/// Abandoned share that flags stalling, over at least this many classified.
+const ABANDONED_RATE: f64 = 0.25;
+const ABANDONED_MIN_CLASSIFIED: i64 = 10;
+
+/// Files read across many sessions but rarely edited: stable context agents
+/// re-derive every time. Top 2 to keep the 12-signal budget balanced.
+/// In-project files only (`rel_path IS NOT NULL`): out-of-project paths are
+/// agent bookkeeping (memory indexes, automation notes) read by design, not a
+/// distillation opportunity — validated against the real archive 2026-06-10.
+fn hot_context_files(conn: &Connection) -> Result<Vec<Recommendation>> {
+    let sql = format!(
+        "SELECT f.rel_path AS key,
+                COUNT(DISTINCT CASE WHEN f.operation = 'read' THEN f.session_id END) AS readers,
+                COUNT(DISTINCT CASE WHEN f.operation IN ('edit','write','delete') THEN f.session_id END) AS editors
+         FROM file_ref f JOIN session s ON s.id = f.session_id
+         WHERE {WINDOW} AND f.rel_path IS NOT NULL
+         GROUP BY key
+         HAVING readers >= {HOT_CONTEXT_MIN_SESSIONS} AND editors <= {HOT_CONTEXT_MAX_EDIT_SESSIONS}
+         ORDER BY readers DESC
+         LIMIT 2"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .map(|(path, readers)| Recommendation {
+            key: format!("signal:hot-context:{path}"),
+            kind: "signal".into(),
+            category: None,
+            title: format!("Agents re-read {path} in {readers} sessions this month"),
+            detail: Some(format!(
+                "{readers} distinct sessions read it in the last 30 days, with almost no edits — that's stable context being re-derived with tokens each time."
+            )),
+            suggestion: Some(format!(
+                "Distill what agents need from {path} into AGENTS.md (or a Skill) so they stop re-reading and re-deriving it."
+            )),
+            prompt: Some(format!(
+                "Agents read {path} in {readers} separate sessions over the last 30 days while barely editing it. Read it, distill the parts agents actually need (contracts, invariants, gotchas) into AGENTS.md or a focused Skill, and keep the summary maintainable. Follow this repo's conventions."
+            )),
+            url: Some(SKILLS_URL.into()),
+            link_label: Some("Skills guide".into()),
+            icon: Some("hero-book-open".into()),
+            tone: Some("accent".into()),
+            score: readers as f64,
+        })
+        .collect())
+}
+
+/// Files edited across many sessions: complexity hotspots agents keep returning
+/// to. Top 2.
+fn churn_files(conn: &Connection) -> Result<Vec<Recommendation>> {
+    let sql = format!(
+        "SELECT f.rel_path AS key,
+                COUNT(DISTINCT f.session_id) AS editors
+         FROM file_ref f JOIN session s ON s.id = f.session_id
+         WHERE {WINDOW} AND f.rel_path IS NOT NULL AND f.operation IN ('edit','write')
+         GROUP BY key
+         HAVING editors >= {CHURN_MIN_SESSIONS}
+         ORDER BY editors DESC
+         LIMIT 2"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .map(|(path, editors)| Recommendation {
+            key: format!("signal:churn:{path}"),
+            kind: "signal".into(),
+            category: None,
+            title: format!("{path} keeps getting reworked"),
+            detail: Some(format!(
+                "Edited in {editors} distinct sessions over the last 30 days."
+            )),
+            suggestion: Some(format!(
+                "A churn hotspot: consider a refactor, better tests, or clearer module docs so changes to {path} stop requiring agent archaeology."
+            )),
+            prompt: Some(format!(
+                "{path} was edited in {editors} separate sessions in the last 30 days — a churn hotspot. Review it for unclear boundaries or missing tests, propose a focused refactor or documentation that makes future changes cheaper, and implement it following this repo's conventions."
+            )),
+            url: None,
+            link_label: None,
+            icon: Some("hero-fire".into()),
+            tone: Some("warning".into()),
+            score: editors as f64 * 1.5,
+        })
+        .collect())
+}
+
+/// Heavy Grep/Glob discovery per session: agents are searching for structure
+/// the repo could just tell them.
+fn search_heavy(conn: &Connection) -> Result<Vec<Recommendation>> {
+    let sql = format!(
+        "SELECT COUNT(*) AS searches, COUNT(DISTINCT s.id) AS sessions
+         FROM tool_call tc JOIN session s ON s.id = tc.session_id
+         WHERE {WINDOW} AND tc.tool_name IN ('Grep','Glob')"
+    );
+    let (searches, sessions): (i64, i64) =
+        conn.query_row(&sql, [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let in_window: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM session s WHERE {WINDOW}"),
+        [],
+        |r| r.get(0),
+    )?;
+    if in_window < SEARCH_HEAVY_MIN_SESSIONS || sessions == 0 {
+        return Ok(Vec::new());
+    }
+    let ratio = searches as f64 / in_window as f64;
+    if ratio < SEARCH_HEAVY_RATIO {
+        return Ok(Vec::new());
+    }
+    Ok(vec![Recommendation {
+        key: "signal:search-heavy".into(),
+        kind: "signal".into(),
+        category: None,
+        title: format!("{ratio:.0} searches per session — discovery is expensive"),
+        detail: Some(format!(
+            "{searches} Grep/Glob calls across {in_window} sessions in the last 30 days."
+        )),
+        suggestion: Some(
+            "Agents grep for structure the repo could state once: add a code map / module index to AGENTS.md so discovery is a read, not a search loop."
+                .into(),
+        ),
+        prompt: Some(format!(
+            "Our agents average {ratio:.0} Grep/Glob searches per session ({searches} over the last 30 days). Build a concise code map — key modules, their responsibilities, where common things live — and add it to AGENTS.md so agents can navigate by reading instead of searching."
+        )),
+        url: None,
+        link_label: None,
+        icon: Some("hero-magnifying-glass".into()),
+        tone: Some("info".into()),
+        score: ratio * 2.0,
+    }])
+}
+
+/// Too many sessions classified abandoned: work is stalling before completion.
+fn abandoned_rate(conn: &Connection) -> Result<Vec<Recommendation>> {
+    let sql = format!(
+        "SELECT COUNT(*) AS classified,
+                SUM(s.outcome = 'abandoned') AS abandoned
+         FROM session s
+         WHERE {WINDOW} AND s.outcome IS NOT NULL"
+    );
+    let (classified, abandoned): (i64, Option<i64>) =
+        conn.query_row(&sql, [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let abandoned = abandoned.unwrap_or(0);
+    if classified < ABANDONED_MIN_CLASSIFIED {
+        return Ok(Vec::new());
+    }
+    let rate = abandoned as f64 / classified as f64;
+    if rate <= ABANDONED_RATE {
+        return Ok(Vec::new());
+    }
+    let pct = (rate * 100.0).round() as i64;
+    Ok(vec![Recommendation {
+        key: "signal:abandoned-rate".into(),
+        kind: "signal".into(),
+        category: None,
+        title: format!("{pct}% of recent sessions end abandoned"),
+        detail: Some(format!(
+            "{abandoned} of {classified} classified sessions in the last 30 days ended mid-flight (interrupted, unanswered, or stopped between tool calls)."
+        )),
+        suggestion: Some(
+            "Review where sessions stall: unclear prompts, missing context, or work that should be decomposed. Decant's session list filters by outcome=abandoned."
+                .into(),
+        ),
+        prompt: Some(format!(
+            "{pct}% of our last 30 days' agent sessions ended abandoned. List recent abandoned sessions (filter outcome=abandoned), find the common stall points, and propose concrete fixes — better AGENTS.md context, decomposed tasks, or skills for the repeated parts."
+        )),
+        url: None,
+        link_label: None,
+        icon: Some("hero-hand-raised".into()),
+        tone: Some("danger".into()),
+        score: pct as f64 / 3.0,
+    }])
 }
 
 // Catalog (evergreen). Ported verbatim from Decant.Insights.catalog/0.
@@ -617,6 +818,158 @@ mod tests {
 
     fn keys(recs: &[Recommendation]) -> Vec<String> {
         recs.iter().map(|r| r.key.clone()).collect()
+    }
+
+    /// Insert `n` sessions started now, ids from `first_id`, each with one
+    /// file_ref of `op` on `rel_path`. Drives the file-evidence signals.
+    fn seed_file_sessions(conn: &Connection, first_id: i64, n: i64, rel_path: &str, op: &str) {
+        for i in 0..n {
+            let id = first_id + i;
+            conn.execute(
+                "INSERT INTO session(id, tool, source_session_id, project_id, started_at)
+                 VALUES (?1, 'claude_code', 'fs' || ?1, 1, datetime('now'))",
+                params![id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO file_ref(session_id, path, rel_path, ext, operation)
+                 VALUES (?1, '/p/' || ?2, ?2, 'rs', ?3)",
+                params![id, rel_path, op],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn hot_context_signal_fires_for_read_only_hot_files() {
+        let conn = base();
+        seed_file_sessions(&conn, 100, 9, "AGENTS.md", "read");
+        let recs = signals(&conn).unwrap();
+        let hot = recs
+            .iter()
+            .find(|r| r.key == "signal:hot-context:AGENTS.md")
+            .expect("hot-context signal must fire at 9 read sessions");
+        assert_eq!(hot.tone.as_deref(), Some("accent"));
+        assert!(hot.suggestion.as_deref().unwrap().contains("AGENTS.md"));
+        assert!(hot.score > 0.0);
+    }
+
+    #[test]
+    fn hot_context_signal_suppressed_when_file_is_also_edited() {
+        let conn = base();
+        seed_file_sessions(&conn, 100, 9, "src/hot.rs", "read");
+        seed_file_sessions(&conn, 200, 3, "src/hot.rs", "edit");
+        let recs = signals(&conn).unwrap();
+        assert!(
+            !keys(&recs).contains(&"signal:hot-context:src/hot.rs".to_string()),
+            "files under active churn are not stable context to distill"
+        );
+        // ...but 3 edit sessions is below the churn threshold too.
+        assert!(!keys(&recs).contains(&"signal:churn:src/hot.rs".to_string()));
+    }
+
+    #[test]
+    fn churn_signal_fires_for_repeatedly_edited_files() {
+        let conn = base();
+        seed_file_sessions(&conn, 100, 7, "src/parser.rs", "edit");
+        let recs = signals(&conn).unwrap();
+        let churn = recs
+            .iter()
+            .find(|r| r.key == "signal:churn:src/parser.rs")
+            .expect("churn signal must fire at 7 edit sessions");
+        assert_eq!(churn.tone.as_deref(), Some("warning"));
+        assert!(churn.detail.as_deref().unwrap().contains("7"));
+    }
+
+    #[test]
+    fn abandoned_rate_signal_fires_above_quarter() {
+        let conn = base();
+        // 12 classified sessions in-window: 4 abandoned (33%).
+        for i in 0..12 {
+            let outcome = if i < 4 { "abandoned" } else { "completed" };
+            conn.execute(
+                "INSERT INTO session(id, tool, source_session_id, project_id, started_at, outcome)
+                 VALUES (?1, 'claude_code', 'ab' || ?1, 1, datetime('now'), ?2)",
+                params![300 + i, outcome],
+            )
+            .unwrap();
+        }
+        let recs = signals(&conn).unwrap();
+        let ab = recs
+            .iter()
+            .find(|r| r.key == "signal:abandoned-rate")
+            .expect("abandoned-rate must fire at 33%");
+        assert!(ab.title.contains("33%"));
+    }
+
+    #[test]
+    fn search_heavy_signal_fires_on_high_discovery_ratio() {
+        let conn = base();
+        // 20 in-window sessions, 8+ Grep/Glob calls per session on average.
+        for i in 0..20 {
+            conn.execute(
+                "INSERT INTO session(id, tool, source_session_id, project_id, started_at)
+                 VALUES (?1, 'claude_code', 'sh' || ?1, 1, datetime('now'))",
+                params![400 + i],
+            )
+            .unwrap();
+            for _ in 0..9 {
+                conn.execute(
+                    "INSERT INTO tool_call(session_id, tool_kind, tool_name, timestamp)
+                     VALUES (?1, 'builtin', 'Grep', datetime('now'))",
+                    params![400 + i],
+                )
+                .unwrap();
+            }
+        }
+        let recs = signals(&conn).unwrap();
+        let sh = recs
+            .iter()
+            .find(|r| r.key == "signal:search-heavy")
+            .expect("search-heavy must fire at 9 searches/session over 20 sessions");
+        assert!(sh.suggestion.as_deref().unwrap().contains("AGENTS.md"));
+    }
+
+    #[test]
+    fn file_signals_ignore_out_of_project_paths() {
+        let conn = base();
+        // 9 read sessions on an out-of-project (absolute, rel_path NULL) file —
+        // agent bookkeeping like memory indexes, read by design.
+        for i in 0..9 {
+            let id = 500 + i;
+            conn.execute(
+                "INSERT INTO session(id, tool, source_session_id, project_id, started_at)
+                 VALUES (?1, 'claude_code', 'oop' || ?1, 1, datetime('now'))",
+                params![id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO file_ref(session_id, path, rel_path, ext, operation)
+                 VALUES (?1, '/home/x/.claude/memory/MEMORY.md', NULL, 'md', 'read')",
+                params![id],
+            )
+            .unwrap();
+        }
+        let recs = signals(&conn).unwrap();
+        assert!(
+            !keys(&recs)
+                .iter()
+                .any(|k| k.starts_with("signal:hot-context:")),
+            "out-of-project bookkeeping must not produce distillation signals"
+        );
+    }
+
+    #[test]
+    fn file_signals_stay_quiet_below_thresholds() {
+        let conn = base();
+        seed_file_sessions(&conn, 100, 7, "calm.md", "read"); // < 8 readers
+        seed_file_sessions(&conn, 200, 5, "calm.rs", "edit"); // < 6 editors
+        let recs = signals(&conn).unwrap();
+        let ks = keys(&recs);
+        assert!(!ks.iter().any(|k| k.starts_with("signal:hot-context:")));
+        assert!(!ks.iter().any(|k| k.starts_with("signal:churn:")));
+        assert!(!ks.contains(&"signal:abandoned-rate".to_string()));
+        assert!(!ks.contains(&"signal:search-heavy".to_string()));
     }
 
     #[test]

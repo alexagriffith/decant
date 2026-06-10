@@ -36,6 +36,19 @@ CREATE TABLE IF NOT EXISTS session (
   source_mtime INTEGER,
   source_size INTEGER,
   source_hash TEXT,
+  turn_count INTEGER NOT NULL DEFAULT 0,
+  error_count INTEGER NOT NULL DEFAULT 0,
+  interruption_count INTEGER NOT NULL DEFAULT 0,
+  compaction_count INTEGER NOT NULL DEFAULT 0,
+  sidechain_message_count INTEGER NOT NULL DEFAULT 0,
+  agent_spawn_count INTEGER NOT NULL DEFAULT 0,
+  skill_count INTEGER NOT NULL DEFAULT 0,
+  command_count INTEGER NOT NULL DEFAULT 0,
+  thinking_block_count INTEGER NOT NULL DEFAULT 0,
+  thinking_chars INTEGER NOT NULL DEFAULT 0,
+  active_seconds INTEGER NOT NULL DEFAULT 0,
+  outcome TEXT,
+  work_type TEXT,
   UNIQUE(tool, source_session_id)
 );
 
@@ -87,6 +100,20 @@ CREATE TABLE IF NOT EXISTS tool_call (
   output_bytes INTEGER,
   duration_ms INTEGER,
   ordinal INTEGER,
+  timestamp TEXT
+);
+
+-- File-level evidence extracted deterministically from tool calls at ingest
+-- (Claude Read/Edit/Write/NotebookEdit file_path; Codex apply_patch headers).
+-- rel_path is the project-relative aggregation key; NULL when underivable.
+CREATE TABLE IF NOT EXISTS file_ref (
+  id INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  message_id INTEGER REFERENCES message(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  rel_path TEXT,
+  ext TEXT,
+  operation TEXT NOT NULL,
   timestamp TEXT
 );
 
@@ -160,6 +187,8 @@ CREATE INDEX IF NOT EXISTS idx_toolcall_session ON tool_call(session_id);
 CREATE INDEX IF NOT EXISTS idx_toolcall_kind ON tool_call(tool_kind);
 CREATE INDEX IF NOT EXISTS idx_toolcall_server ON tool_call(mcp_server);
 CREATE INDEX IF NOT EXISTS idx_toolcall_name ON tool_call(tool_name);
+CREATE INDEX IF NOT EXISTS idx_fileref_session ON file_ref(session_id);
+CREATE INDEX IF NOT EXISTS idx_fileref_path ON file_ref(rel_path, operation);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS block_fts USING fts5(
   text, tool_name, tool_input,

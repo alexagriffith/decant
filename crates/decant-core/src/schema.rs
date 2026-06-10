@@ -4,7 +4,7 @@ use rusqlite::Connection;
 pub const SCHEMA_V1: &str = include_str!("schema_v1.sql");
 
 /// The latest schema version `migrate` brings a database to.
-pub const LATEST_VERSION: i64 = 3;
+pub const LATEST_VERSION: i64 = 4;
 
 /// v2: the `recommendation` table (signals + evergreen catalog, materialized
 /// with state by `recommendations::regenerate`). `CREATE TABLE IF NOT EXISTS`
@@ -56,6 +56,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     if current < 3 {
         apply_v3(conn)?;
     }
+    if current < 4 {
+        apply_v4(conn)?;
+    }
     Ok(())
 }
 
@@ -81,11 +84,11 @@ fn apply(conn: &Connection, version: i64, sql: &str) -> Result<()> {
 /// self-heals instead of being recorded as done.
 fn apply_v3(conn: &Connection) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
-    add_column_if_missing(&tx, "is_worktree", "INTEGER NOT NULL DEFAULT 0")?;
-    add_column_if_missing(&tx, "root_path", "TEXT")?;
-    add_column_if_missing(&tx, "worktree_label", "TEXT")?;
-    add_column_if_missing(&tx, "worktree_tool", "TEXT")?;
-    add_column_if_missing(&tx, "root_source", "TEXT")?;
+    add_column_if_missing(&tx, "project", "is_worktree", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(&tx, "project", "root_path", "TEXT")?;
+    add_column_if_missing(&tx, "project", "worktree_label", "TEXT")?;
+    add_column_if_missing(&tx, "project", "worktree_tool", "TEXT")?;
+    add_column_if_missing(&tx, "project", "root_source", "TEXT")?;
     tx.commit()?;
     crate::worktree::resolve_worktree_roots(conn)?;
     conn.execute(
@@ -95,15 +98,62 @@ fn apply_v3(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Add a column to `project` only if it does not already exist.
-fn add_column_if_missing(conn: &Connection, col: &str, decl: &str) -> Result<()> {
+/// v4: the `file_ref` table + per-session facet columns (deterministic
+/// enrichment), then invalidate the ingest size memo (`size = -1`) so the next
+/// sync re-parses every source file and backfills enrichment for the whole
+/// archive. Everything (DDL, memo, version record) commits in one transaction:
+/// a mid-way failure re-runs v4 from the top, and each piece is idempotent.
+fn apply_v4(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS file_ref (
+           id INTEGER PRIMARY KEY,
+           session_id INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+           message_id INTEGER REFERENCES message(id) ON DELETE CASCADE,
+           path TEXT NOT NULL,
+           rel_path TEXT,
+           ext TEXT,
+           operation TEXT NOT NULL,
+           timestamp TEXT
+         );
+         CREATE INDEX IF NOT EXISTS idx_fileref_session ON file_ref(session_id);
+         CREATE INDEX IF NOT EXISTS idx_fileref_path ON file_ref(rel_path, operation);",
+    )?;
+    for (col, decl) in [
+        ("turn_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("error_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("interruption_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("compaction_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("sidechain_message_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("agent_spawn_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("skill_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("command_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("thinking_block_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("thinking_chars", "INTEGER NOT NULL DEFAULT 0"),
+        ("active_seconds", "INTEGER NOT NULL DEFAULT 0"),
+        ("outcome", "TEXT"),
+        ("work_type", "TEXT"),
+    ] {
+        add_column_if_missing(&tx, "session", col, decl)?;
+    }
+    tx.execute("UPDATE ingest_source SET size = -1", [])?;
+    tx.execute(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES (4, datetime('now'))",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Add a column to `table` only if it does not already exist.
+fn add_column_if_missing(conn: &Connection, table: &str, col: &str, decl: &str) -> Result<()> {
     let exists = conn
-        .prepare("PRAGMA table_info(project)")?
+        .prepare(&format!("PRAGMA table_info({table})"))?
         .query_map([], |r| r.get::<_, String>(1))?
         .filter_map(|x| x.ok())
         .any(|name| name == col);
     if !exists {
-        conn.execute(&format!("ALTER TABLE project ADD COLUMN {col} {decl}"), [])?;
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"), [])?;
     }
     Ok(())
 }
@@ -139,6 +189,7 @@ mod tests {
             "ingest_issue",
             "model_pricing",
             "recommendation",
+            "file_ref",
         ] {
             assert!(table_exists(&conn, t), "missing table {t}");
         }
@@ -146,7 +197,7 @@ mod tests {
         let versions: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(versions, 3, "each migration recorded exactly once");
+        assert_eq!(versions, 4, "each migration recorded exactly once");
         let max: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
                 r.get(0)
@@ -192,7 +243,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(max, 3);
+        assert_eq!(max, LATEST_VERSION);
     }
 
     #[test]
@@ -217,6 +268,91 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hits, 1);
+    }
+
+    #[test]
+    fn v4_adds_file_ref_and_facet_columns_idempotently() {
+        let conn = db::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap(); // idempotent
+
+        assert!(table_exists(&conn, "file_ref"), "missing table file_ref");
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(session)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for c in [
+            "turn_count",
+            "error_count",
+            "interruption_count",
+            "compaction_count",
+            "sidechain_message_count",
+            "agent_spawn_count",
+            "skill_count",
+            "command_count",
+            "thinking_block_count",
+            "thinking_chars",
+            "active_seconds",
+            "outcome",
+            "work_type",
+        ] {
+            assert!(cols.contains(&c.to_string()), "missing session column {c}");
+        }
+        let max: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(max, LATEST_VERSION);
+        assert_eq!(LATEST_VERSION, 4);
+    }
+
+    #[test]
+    fn v4_invalidates_ingest_memo_for_backfill() {
+        // Model a DB at v3: real-shaped session + ingest_source tables (old
+        // columns only) with one already-ingested file memoized.
+        let conn = db::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+             CREATE TABLE session(id INTEGER PRIMARY KEY, tool TEXT NOT NULL,
+                                  source_session_id TEXT NOT NULL, is_archived INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE ingest_source(path TEXT PRIMARY KEY, tool TEXT, size INTEGER, mtime INTEGER,
+                                        hash TEXT, session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
+                                        line_count INTEGER, status TEXT, error TEXT, last_ingested_at TEXT);
+             INSERT INTO schema_migrations(version, applied_at) VALUES (1, datetime('now'));
+             INSERT INTO schema_migrations(version, applied_at) VALUES (2, datetime('now'));
+             INSERT INTO schema_migrations(version, applied_at) VALUES (3, datetime('now'));
+             INSERT INTO ingest_source(path, tool, size, mtime) VALUES ('/x/sess.jsonl', 'claude_code', 100, 1700000000);",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let (size, mtime, rows): (i64, i64, i64) = conn
+            .query_row(
+                "SELECT size, mtime, (SELECT COUNT(*) FROM ingest_source) FROM ingest_source",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            size, -1,
+            "v4 must invalidate the size memo so sync re-ingests"
+        );
+        assert_eq!(
+            mtime, 1700000000,
+            "mtime preserved; size alone breaks the match"
+        );
+        assert_eq!(rows, 1, "memo rows preserved, not deleted");
+        let max: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(max, 4);
     }
 
     #[test]
@@ -246,7 +382,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(max, 3);
+        assert_eq!(max, LATEST_VERSION);
     }
 
     #[test]
@@ -259,6 +395,7 @@ mod tests {
              CREATE TABLE project(id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, name TEXT,
                                   first_seen_at TEXT, last_seen_at TEXT);
              CREATE TABLE session(id INTEGER PRIMARY KEY, project_id INTEGER, started_at TEXT);
+             CREATE TABLE ingest_source(path TEXT PRIMARY KEY, size INTEGER, mtime INTEGER);
              INSERT INTO schema_migrations(version, applied_at) VALUES (2, datetime('now'));
              INSERT INTO project(path, name) VALUES ('/home/x/dosu/dosu', 'dosu');
              INSERT INTO project(path, name) VALUES ('/home/x/.warp-worktrees/dosu-agate-spire', 'dosu-agate-spire');",

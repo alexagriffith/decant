@@ -22,6 +22,8 @@ pub struct Filters {
     pub tool: Option<String>,
     pub model: Option<String>,
     pub project: Option<String>,
+    pub outcome: Option<String>,
+    pub work_type: Option<String>,
 }
 
 /// A built WHERE fragment plus its positional bind parameters. The fragment is
@@ -48,7 +50,35 @@ impl Filters {
             tool: present(tool),
             model: present(model),
             project: present(project),
+            outcome: None,
+            work_type: None,
         })
+    }
+
+    /// Add the classification filters (schema v4), validating against the
+    /// closed label sets so typos 400 instead of silently matching nothing.
+    pub fn with_classification(
+        mut self,
+        outcome: Option<String>,
+        work_type: Option<String>,
+    ) -> Result<Filters, ApiError> {
+        if let Some(o) = present(outcome) {
+            const OUTCOMES: [&str; 3] = ["completed", "failed", "abandoned"];
+            if !OUTCOMES.contains(&o.as_str()) {
+                return Err(ApiError::invalid_filter(format!("unknown outcome {o:?}"))
+                    .with_hint("one of: completed, failed, abandoned"));
+            }
+            self.outcome = Some(o);
+        }
+        if let Some(w) = present(work_type) {
+            const WORK_TYPES: [&str; 5] = ["debugging", "feature", "refactor", "research", "ops"];
+            if !WORK_TYPES.contains(&w.as_str()) {
+                return Err(ApiError::invalid_filter(format!("unknown work_type {w:?}"))
+                    .with_hint("one of: debugging, feature, refactor, research, ops"));
+            }
+            self.work_type = Some(w);
+        }
+        Ok(self)
     }
 
     /// Build the parameterized WHERE clause (on alias `s`). Inclusive `to` via
@@ -82,6 +112,14 @@ impl Filters {
             params.push(SqlValue::Text(project.clone()));
             params.push(SqlValue::Text(project.clone()));
         }
+        if let Some(outcome) = &self.outcome {
+            clauses.push("s.outcome = ?");
+            params.push(SqlValue::Text(outcome.clone()));
+        }
+        if let Some(work_type) = &self.work_type {
+            clauses.push("s.work_type = ?");
+            params.push(SqlValue::Text(work_type.clone()));
+        }
 
         let sql = if clauses.is_empty() {
             "1=1".to_string()
@@ -108,6 +146,12 @@ impl Filters {
         }
         if let Some(v) = &self.project {
             m.insert("project".into(), json!(v));
+        }
+        if let Some(v) = &self.outcome {
+            m.insert("outcome".into(), json!(v));
+        }
+        if let Some(v) = &self.work_type {
+            m.insert("work_type".into(), json!(v));
         }
         Value::Object(m)
     }

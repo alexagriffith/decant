@@ -343,7 +343,7 @@ fn db_info_reports_counts() {
         .args(["db", "info"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("schema:     v3"))
+        .stdout(predicate::str::contains("schema:     v4"))
         .stdout(predicate::str::contains("sessions:   1"));
 }
 
@@ -369,4 +369,97 @@ fn project_ls_shows_project() {
         .assert()
         .success()
         .stdout(predicate::str::contains("/Users/dev/proj"));
+}
+
+#[test]
+fn files_lists_hotspots_from_enriched_fixture() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude_dir = dir.path().join("claude/projects/proj");
+    let codex_dir = dir.path().join("codex");
+    let db = dir.path().join("d.db");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let enriched = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/claude/enriched.jsonl"
+    ))
+    .unwrap();
+    fs::write(claude_dir.join("enr.jsonl"), enriched).unwrap();
+
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--db"])
+        .arg(&db)
+        .arg("sync")
+        .env("DECANT_CLAUDE_DIR", dir.path().join("claude/projects"))
+        .env("DECANT_CODEX_DIR", &codex_dir)
+        .assert()
+        .success();
+
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--db"])
+        .arg(&db)
+        .arg("files")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/main.rs"))
+        .stdout(predicate::str::contains("README.md"));
+
+    // Language lens + op filter + JSON output.
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--json", "--db"])
+        .arg(&db)
+        .args(["files", "--group", "ext", "--op", "edit"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"key\": \"rs\""));
+
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--db"])
+        .arg(&db)
+        .args(["files", "--group", "bogus"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn show_prints_facets_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude_dir = dir.path().join("claude/projects/proj");
+    let codex_dir = dir.path().join("codex");
+    let db = dir.path().join("d.db");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let enriched = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/claude/enriched.jsonl"
+    ))
+    .unwrap();
+    fs::write(claude_dir.join("enr.jsonl"), enriched).unwrap();
+
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--db"])
+        .arg(&db)
+        .arg("sync")
+        .env("DECANT_CLAUDE_DIR", dir.path().join("claude/projects"))
+        .env("DECANT_CODEX_DIR", &codex_dir)
+        .assert()
+        .success();
+
+    // enriched fixture: 1 turn, 1 error, active 8m10s (490s), 1 interruption,
+    // refactor work type ("Refactor the auth module").
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--db"])
+        .arg(&db)
+        .args(["show", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "1 turns · 1 errors · active 8m10s",
+        ))
+        .stdout(predicate::str::contains("1 interruptions"))
+        .stdout(predicate::str::contains("refactor"));
 }

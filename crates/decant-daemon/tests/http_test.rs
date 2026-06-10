@@ -19,6 +19,7 @@ async fn spawn(token: &str) -> (String, tokio::task::JoinHandle<()>) {
         read_pool,
         write,
         sync_status: decant_daemon::sync_status::SyncStatusHandle::new(),
+        activity: std::sync::Arc::new(decant_daemon::activity::ActivityTracker::default()),
         events: decant_daemon::events::channel(),
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

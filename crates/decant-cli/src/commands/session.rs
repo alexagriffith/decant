@@ -75,6 +75,18 @@ pub fn run_ls(cli: &Cli, args: &LsArgs) -> anyhow::Result<i32> {
     Ok(0)
 }
 
+/// `5m23s` / `1h05m` style, matching the project's human-duration convention.
+fn fmt_duration(secs: i64) -> String {
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    if h > 0 {
+        format!("{h}h{m:02}m")
+    } else if m > 0 {
+        format!("{m}m{s:02}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
 pub fn run_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<i32> {
     let config = Config::resolve(cli.db.clone(), None, None);
     let conn = db::open(&config.db_path)?;
@@ -106,6 +118,26 @@ pub fn run_show(cli: &Cli, args: &ShowArgs) -> anyhow::Result<i32> {
         s.message_count,
         s.estimated_cost_usd
     );
+    if let Some(f) = decant_core::stats::session_facets(&conn, args.id)? {
+        let mut parts = vec![
+            format!("{} turns", f.turn_count),
+            format!("{} errors", f.error_count),
+            format!("active {}", fmt_duration(f.active_seconds)),
+        ];
+        if f.interruption_count > 0 {
+            parts.push(format!("{} interruptions", f.interruption_count));
+        }
+        if f.agent_spawn_count > 0 {
+            parts.push(format!("{} agents", f.agent_spawn_count));
+        }
+        if let Some(o) = &f.outcome {
+            parts.push(o.clone());
+        }
+        if let Some(w) = &f.work_type {
+            parts.push(w.clone());
+        }
+        println!("{}", parts.join(" · "));
+    }
     println!();
     for m in &detail.messages {
         println!("## {}", m.role.to_uppercase());

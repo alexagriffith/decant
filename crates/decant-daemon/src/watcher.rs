@@ -16,6 +16,11 @@ use tokio::sync::mpsc;
 /// Quiet window collapsing a burst of file events into one sync.
 pub const DEFAULT_DEBOUNCE: Duration = Duration::from_millis(1500);
 
+/// Per-path observer for raw (pre-debounce) data events. Used by the activity
+/// tracker for live-session detection; must be cheap and non-blocking (it runs
+/// on notify's callback thread).
+pub type PathHook = Box<dyn Fn(&std::path::Path) + Send>;
+
 /// A running filesystem watcher. Dropping it stops watching and lets the
 /// debounce thread exit.
 pub struct SourceWatcher {
@@ -24,7 +29,9 @@ pub struct SourceWatcher {
 }
 
 impl SourceWatcher {
-    /// Watch `dirs` recursively, debouncing events into `trigger`.
+    /// Watch `dirs` recursively, debouncing events into `trigger`. Each
+    /// relevant event's paths are also reported (un-debounced) to `on_path`,
+    /// when given.
     ///
     /// Returns an error only if `notify` cannot create the backend or watch a
     /// path. Missing paths should be filtered out by the caller
@@ -33,12 +40,18 @@ impl SourceWatcher {
         dirs: Vec<PathBuf>,
         trigger: mpsc::Sender<()>,
         debounce: Duration,
+        on_path: Option<PathHook>,
     ) -> notify::Result<Self> {
         let (raw_tx, raw_rx) = std_mpsc::channel::<()>();
 
         let mut watcher =
             notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
                 Ok(event) if is_relevant(&event.kind) => {
+                    if let Some(hook) = &on_path {
+                        for path in &event.paths {
+                            hook(path);
+                        }
+                    }
                     let _ = raw_tx.send(());
                 }
                 Ok(_) => {}
@@ -113,10 +126,15 @@ mod tests {
         std::fs::create_dir_all(&watched).unwrap();
 
         let (tx, mut rx) = mpsc::channel::<()>(8);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<PathBuf>::new()));
+        let seen2 = seen.clone();
         let _w = SourceWatcher::start(
             vec![watched.clone()],
             tx,
             Duration::from_millis(100), // short debounce for the test
+            Some(Box::new(move |p| {
+                seen2.lock().unwrap().push(p.to_path_buf())
+            })),
         )
         .unwrap();
 
@@ -128,6 +146,12 @@ mod tests {
         assert!(
             matches!(got, Ok(Some(()))),
             "expected a debounced sync trigger, got {got:?}"
+        );
+        // The per-path hook saw the write (un-debounced).
+        let seen = seen.lock().unwrap();
+        assert!(
+            seen.iter().any(|p| p.ends_with("sess.jsonl")),
+            "path hook must observe the written file, saw {seen:?}"
         );
     }
 }

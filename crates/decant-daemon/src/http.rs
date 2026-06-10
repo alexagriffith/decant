@@ -24,6 +24,8 @@ pub struct AppState {
     /// Broadcast sender for the SSE change-stream (Plan 4). The SSE handler
     /// subscribes a receiver per connection; the ingest task holds a clone.
     pub events: ChangeSender,
+    /// Live-session tracker fed by the watcher; read by `/analytics/now`.
+    pub activity: std::sync::Arc<crate::activity::ActivityTracker>,
 }
 
 /// Build the router. `/api/v1/health` is public; everything else is gated by
@@ -56,6 +58,8 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/analytics/model-sparklines",
             get(crate::api::analytics::model_sparklines),
         )
+        .route("/api/v1/analytics/files", get(crate::api::analytics::files))
+        .route("/api/v1/analytics/now", get(crate::api::analytics::now))
         // Tools
         .route("/api/v1/tools/usage", get(crate::api::tools::usage))
         .route("/api/v1/tools/mcp-usage", get(crate::api::tools::mcp_usage))

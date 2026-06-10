@@ -28,6 +28,10 @@ pub const ARCHIVE_UPDATED: &str = "archive_updated";
 /// behind the broadcast buffer (a `Lagged` receiver) and may have missed events.
 pub const RESYNC: &str = "resync";
 
+/// SSE event name for a live-session transition (a source file started or
+/// stopped being written). Additive: clients that don't know it ignore it.
+pub const SESSION_ACTIVITY: &str = "session_activity";
+
 /// Capacity of the change-event broadcast buffer. Small: events are coalesced
 /// (one per sync) and clients only need the latest to know to re-fetch, so a
 /// slow consumer that lags merely triggers a single `resync` rather than a
@@ -65,9 +69,58 @@ impl ChangeEvent {
     }
 }
 
+/// A live-session transition: the watcher saw a source file go active (writes
+/// started) or idle (quiet past the activity window). Serialized as the JSON
+/// `data` of a `session_activity` SSE event. Carries the source path — same
+/// trust domain as the rest of the authed API — but never transcript content.
+#[derive(Debug, Clone, Serialize)]
+pub struct ActivityEvent {
+    /// Discriminator; always `"session_activity"`.
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    /// `"active"` or `"idle"`.
+    pub state: &'static str,
+    /// `"claude_code"` or `"codex"`.
+    pub tool: &'static str,
+    /// The session source file that changed.
+    pub source_path: String,
+}
+
+impl ActivityEvent {
+    pub fn new(state: &'static str, tool: &'static str, source_path: impl Into<String>) -> Self {
+        ActivityEvent {
+            kind: SESSION_ACTIVITY,
+            state,
+            tool,
+            source_path: source_path.into(),
+        }
+    }
+}
+
+/// Everything the broadcast bus carries. `untagged` keeps each variant's own
+/// `type` discriminator as the wire shape.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum BusEvent {
+    ArchiveUpdated(ChangeEvent),
+    SessionActivity(ActivityEvent),
+}
+
+impl From<ChangeEvent> for BusEvent {
+    fn from(e: ChangeEvent) -> Self {
+        BusEvent::ArchiveUpdated(e)
+    }
+}
+
+impl From<ActivityEvent> for BusEvent {
+    fn from(e: ActivityEvent) -> Self {
+        BusEvent::SessionActivity(e)
+    }
+}
+
 /// Cloneable sender side of the change-event channel. The ingest task holds one;
 /// each `Sender::send` reaches every live SSE subscriber.
-pub type ChangeSender = broadcast::Sender<ChangeEvent>;
+pub type ChangeSender = broadcast::Sender<BusEvent>;
 
 /// Create the change-event broadcast channel. Returns the [`ChangeSender`]
 /// stored in `AppState` and cloned into the ingest task. The matching receiver
@@ -82,8 +135,8 @@ pub fn channel() -> ChangeSender {
 /// `broadcast::Sender::send` returns `Err` only when there are no receivers; for
 /// a change-stream that is an ordinary idle state (no Phoenix connected), so we
 /// drop the error rather than logging noise or panicking.
-pub fn emit(tx: &ChangeSender, event: ChangeEvent) {
-    let _ = tx.send(event);
+pub fn emit(tx: &ChangeSender, event: impl Into<BusEvent>) {
+    let _ = tx.send(event.into());
 }
 
 /// `GET /api/v1/events` — Server-Sent Events change-stream.
@@ -114,12 +167,16 @@ pub async fn events(
     Sse::new(stream).keep_alive(KeepAlive::new().interval(KEEPALIVE_INTERVAL))
 }
 
-/// Render a [`ChangeEvent`] as an SSE `Event` with the `archive_updated` name
-/// and JSON data. Serialization of this tiny, fixed struct cannot fail; if it
+/// Render a [`BusEvent`] as an SSE `Event` with its kind as the event name and
+/// JSON data. Serialization of these tiny, fixed structs cannot fail; if it
 /// somehow did we fall back to an empty object so the stream never breaks.
-fn to_sse_event(change: &ChangeEvent) -> Result<Event, Infallible> {
-    let data = serde_json::to_string(change).unwrap_or_else(|_| "{}".to_string());
-    Ok(Event::default().event(ARCHIVE_UPDATED).data(data))
+fn to_sse_event(event: &BusEvent) -> Result<Event, Infallible> {
+    let name = match event {
+        BusEvent::ArchiveUpdated(_) => ARCHIVE_UPDATED,
+        BusEvent::SessionActivity(_) => SESSION_ACTIVITY,
+    };
+    let data = serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string());
+    Ok(Event::default().event(name).data(data))
 }
 
 #[cfg(test)]
@@ -148,8 +205,38 @@ mod tests {
         let tx = channel();
         let mut rx = tx.subscribe();
         emit(&tx, ChangeEvent::archive_updated(2, "2026-06-07T00:00:00Z"));
-        let got = rx.recv().await.unwrap();
-        assert_eq!(got.kind, ARCHIVE_UPDATED);
-        assert_eq!(got.ingested, 2);
+        match rx.recv().await.unwrap() {
+            BusEvent::ArchiveUpdated(got) => {
+                assert_eq!(got.kind, ARCHIVE_UPDATED);
+                assert_eq!(got.ingested, 2);
+            }
+            other => panic!("expected ArchiveUpdated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn activity_event_serializes_untagged_with_type_key() {
+        let ev = BusEvent::from(ActivityEvent::new("active", "claude_code", "/x/s.jsonl"));
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["type"], "session_activity");
+        assert_eq!(v["state"], "active");
+        assert_eq!(v["tool"], "claude_code");
+        assert_eq!(v["source_path"], "/x/s.jsonl");
+    }
+
+    #[test]
+    fn bus_event_sse_names_match_kind() {
+        let a = to_sse_event(&BusEvent::ArchiveUpdated(ChangeEvent::archive_updated(
+            1,
+            "2026-06-07T00:00:00Z",
+        )));
+        let b = to_sse_event(&BusEvent::SessionActivity(ActivityEvent::new(
+            "idle",
+            "codex",
+            "/x/r.jsonl",
+        )));
+        // Event has no public name accessor; assert via Debug.
+        assert!(format!("{a:?}").contains("archive_updated"));
+        assert!(format!("{b:?}").contains("session_activity"));
     }
 }
