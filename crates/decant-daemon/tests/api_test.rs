@@ -537,4 +537,17 @@ async fn analytics_by_dimension_project_rollup_exposes_worktree_count_and_root_p
         leaf_rows.iter().all(|r| r.get("worktree_count").is_none()),
         "leaf rows must not carry worktree_count (proves root param reached the query)"
     );
+
+    // Empty root (?root=) must behave as absent — i.e. return the rolled-up view
+    // (rows carry worktree_count), not leaf mode (which would return empty data
+    // because no project has root_path = '').
+    let rolled = get_ok(&base, "/api/v1/analytics/by-dimension?dim=project&root=").await;
+    let rolled_rows = rolled["data"].as_array().unwrap();
+    assert!(
+        rolled_rows
+            .first()
+            .and_then(|r| r.get("worktree_count"))
+            .is_some(),
+        "empty root must behave as absent (rolled-up view)"
+    );
 }
