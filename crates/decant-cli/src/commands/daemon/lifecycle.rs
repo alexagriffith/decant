@@ -330,7 +330,7 @@ pub fn stop(cli: &Cli) -> anyhow::Result<i32> {
     match read_lock_pid(&lock_path()) {
         Some(pid) if pid_is_alive(pid) => {
             signal_term(pid);
-            let stopped = wait_for_exit(pid, std::time::Duration::from_secs(15));
+            let stopped = wait_for_exit(pid, std::time::Duration::from_secs(30));
             if matches!(out.format, Format::Json) {
                 crate::output::print_json(
                     &serde_json::json!({ "ok": true, "signaled": pid, "stopped": stopped }),
