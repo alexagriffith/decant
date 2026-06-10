@@ -104,13 +104,26 @@ web-test *ARGS:
 web-fmt:
     cd web && mix format
 
-# ── Health / smoke ───────────────────────────────────────────────────
+# ── Stack ────────────────────────────────────────────────────────────
+
+# Bring up the stack: daemon (detached, skipped if already healthy), then
+# the web dev server in the foreground (Ctrl-C leaves the daemon running)
+[group('stack')]
+up:
+    @for i in $(seq 1 15); do curl -sf -m 2 http://127.0.0.1:4577/api/v1/health >/dev/null && break; cargo run -q -p decant-cli -- daemon start >/dev/null 2>&1 || true; sleep 2; done
+    @curl -sf -m 2 http://127.0.0.1:4577/api/v1/health >/dev/null && echo "daemon :4577 healthy" || { echo "daemon failed to start — see: just daemon-logs"; exit 1; }
+    cd web && mix phx.server
+
+# Stop the detached daemon (the web server is foreground — Ctrl-C it)
+[group('stack')]
+down:
+    cargo run -p decant-cli -- daemon stop
 
 # Curl the daemon health endpoint and the web app
-[group('health')]
+[group('stack')]
 health:
-    @curl -sf -m 3 http://127.0.0.1:4577/api/v1/health && echo " <- daemon :4577 OK" || echo "daemon :4577 NOT responding"
-    @curl -sf -m 3 -o /dev/null -w "web :4000 HTTP %{http_code}\n" http://localhost:4000/ || echo "web :4000 NOT responding"
+    @curl -sf -m 3 http://127.0.0.1:4577/api/v1/health >/dev/null && echo "daemon :4577 OK" || echo "daemon :4577 NOT responding"
+    @curl -sf -m 3 -o /dev/null http://localhost:4000/ && echo "web :4000 OK" || echo "web :4000 NOT responding"
 
 # ── CLI reads (binary `decant`; respects --db / $DECANT_DB) ──────────
 
