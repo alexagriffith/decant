@@ -110,6 +110,7 @@ web-fmt:
 # the web dev server in the foreground (Ctrl-C leaves the daemon running)
 [group('stack')]
 up:
+    @curl -sf -m 2 -o /dev/null http://localhost:4000/ && { echo "web already running on :4000"; exit 1; } || true
     @for i in $(seq 1 15); do curl -sf -m 2 http://127.0.0.1:4577/api/v1/health >/dev/null && break; cargo run -q -p decant-cli -- daemon start >/dev/null 2>&1 || true; sleep 2; done
     @curl -sf -m 2 http://127.0.0.1:4577/api/v1/health >/dev/null && echo "daemon :4577 healthy" || { echo "daemon failed to start — see: just daemon-logs"; exit 1; }
     cd web && mix phx.server
