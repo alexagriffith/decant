@@ -158,6 +158,9 @@ pub struct SyncReport {
     pub skipped: usize,
     pub issues: usize,
     pub failed: usize,
+    /// Sync stopped early because the caller's cancel flag was set; everything
+    /// ingested so far is committed.
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -255,7 +258,22 @@ struct Prepared {
 /// counted in `SyncReport.failed` (non-fatal). Returns `Err` on the first file that
 /// fails to write; files already committed in earlier iterations remain in the DB.
 pub fn sync(conn: &mut Connection, config: &Config) -> Result<SyncReport> {
+    sync_cancellable(conn, config, &std::sync::atomic::AtomicBool::new(false))
+}
+
+/// Files parsed per parallel batch. Bounds both peak memory (parsed sessions
+/// held at once) and cancellation latency (the flag is checked at every batch
+/// and file boundary).
+const PARSE_BATCH: usize = 64;
+
+/// [`sync`], stopping early (after the in-flight file) once `cancel` reads true.
+pub fn sync_cancellable(
+    conn: &mut Connection,
+    config: &Config,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<SyncReport> {
     use rayon::prelude::*;
+    use std::sync::atomic::Ordering;
 
     let files = discover(config);
     let titles = codex_titles(config);
@@ -267,6 +285,10 @@ pub fn sync(conn: &mut Connection, config: &Config) -> Result<SyncReport> {
     // Decide which files changed (cheap, serial: stat + lookup).
     let mut to_read: Vec<SourceFile> = Vec::new();
     for f in files {
+        if cancel.load(Ordering::Relaxed) {
+            report.cancelled = true;
+            return Ok(report);
+        }
         let meta = match std::fs::metadata(&f.path) {
             Ok(m) => m,
             Err(_) => continue,
@@ -288,82 +310,94 @@ pub fn sync(conn: &mut Connection, config: &Config) -> Result<SyncReport> {
         }
     }
 
-    // Read + hash + parse in parallel. `None` = a file we failed to read.
-    let results: Vec<Option<(Prepared, ParsedSession)>> = to_read
-        .par_iter()
-        .map(|f| {
-            let content = std::fs::read_to_string(&f.path).ok()?;
-            let meta = std::fs::metadata(&f.path).ok()?;
-            let hash = blake3::hash(content.as_bytes()).to_hex().to_string();
-            let line_count = content.lines().count() as i64;
-            let stem = f
-                .path
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let parsed = match f.tool {
-                Tool::ClaudeCode => sources::claude::parse_session(&stem, &content),
-                Tool::Codex => sources::codex::parse_session(&stem, &content, &titles),
-            };
-            Some((
-                Prepared {
-                    file: f.clone(),
-                    line_count,
-                    mtime: mtime_secs(&meta),
-                    size: meta.len() as i64,
-                    hash,
-                },
-                parsed,
-            ))
-        })
-        .collect();
-    report.failed = results.iter().filter(|r| r.is_none()).count();
-    let prepared: Vec<(Prepared, ParsedSession)> = results.into_iter().flatten().collect();
-
-    // Write each file in its own transaction (per-file atomicity: one bad file
-    // rolls back only itself; SQLite is single-writer so writes are serialized).
-    for (prep, mut parsed) in prepared {
-        parsed.session.is_archived = prep.file.archived;
-        let path_str = prep.file.path.to_string_lossy().to_string();
-        let tx = conn.transaction()?;
-        // Release any FK reference from ingest_source -> session so upsert_session
-        // can safely DELETE the old session row without a constraint violation.
-        tx.execute(
-            "UPDATE ingest_source SET session_id = NULL WHERE path = ?1",
-            params![path_str],
-        )?;
-        let session_id =
-            upsert_session(&tx, &parsed, &path_str, prep.mtime, prep.size, &prep.hash)?;
-        // Clear any prior issues for this path so re-ingest doesn't accumulate them.
-        tx.execute(
-            "DELETE FROM ingest_issue WHERE source_path = ?1",
-            params![path_str],
-        )?;
-        for issue in &parsed.issues {
-            tx.execute(
-                "INSERT INTO ingest_issue(source_path, line_no, error, raw_line, created_at)
-                 VALUES (?1,?2,?3,?4,datetime('now'))",
-                params![path_str, issue.line_no as i64, issue.error, issue.raw_line],
-            )?;
-            report.issues += 1;
+    'batches: for batch in to_read.chunks(PARSE_BATCH) {
+        if cancel.load(Ordering::Relaxed) {
+            report.cancelled = true;
+            break;
         }
-        let status = if parsed.issues.is_empty() {
-            "ok"
-        } else {
-            "ok_with_issues"
-        };
-        tx.execute(
+
+        // Read + hash + parse in parallel. `None` = a file we failed to read.
+        let results: Vec<Option<(Prepared, ParsedSession)>> = batch
+            .par_iter()
+            .map(|f| {
+                let content = std::fs::read_to_string(&f.path).ok()?;
+                let meta = std::fs::metadata(&f.path).ok()?;
+                let hash = blake3::hash(content.as_bytes()).to_hex().to_string();
+                let line_count = content.lines().count() as i64;
+                let stem = f
+                    .path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let parsed = match f.tool {
+                    Tool::ClaudeCode => sources::claude::parse_session(&stem, &content),
+                    Tool::Codex => sources::codex::parse_session(&stem, &content, &titles),
+                };
+                Some((
+                    Prepared {
+                        file: f.clone(),
+                        line_count,
+                        mtime: mtime_secs(&meta),
+                        size: meta.len() as i64,
+                        hash,
+                    },
+                    parsed,
+                ))
+            })
+            .collect();
+        report.failed += results.iter().filter(|r| r.is_none()).count();
+        let prepared: Vec<(Prepared, ParsedSession)> = results.into_iter().flatten().collect();
+
+        // Write each file in its own transaction (per-file atomicity: one bad file
+        // rolls back only itself; SQLite is single-writer so writes are serialized).
+        for (prep, mut parsed) in prepared {
+            if cancel.load(Ordering::Relaxed) {
+                report.cancelled = true;
+                break 'batches;
+            }
+            parsed.session.is_archived = prep.file.archived;
+            let path_str = prep.file.path.to_string_lossy().to_string();
+            let tx = conn.transaction()?;
+            // Release any FK reference from ingest_source -> session so upsert_session
+            // can safely DELETE the old session row without a constraint violation.
+            tx.execute(
+                "UPDATE ingest_source SET session_id = NULL WHERE path = ?1",
+                params![path_str],
+            )?;
+            let session_id =
+                upsert_session(&tx, &parsed, &path_str, prep.mtime, prep.size, &prep.hash)?;
+            // Clear any prior issues for this path so re-ingest doesn't accumulate them.
+            tx.execute(
+                "DELETE FROM ingest_issue WHERE source_path = ?1",
+                params![path_str],
+            )?;
+            for issue in &parsed.issues {
+                tx.execute(
+                    "INSERT INTO ingest_issue(source_path, line_no, error, raw_line, created_at)
+                 VALUES (?1,?2,?3,?4,datetime('now'))",
+                    params![path_str, issue.line_no as i64, issue.error, issue.raw_line],
+                )?;
+                report.issues += 1;
+            }
+            let status = if parsed.issues.is_empty() {
+                "ok"
+            } else {
+                "ok_with_issues"
+            };
+            tx.execute(
             "INSERT INTO ingest_source(path, tool, size, mtime, hash, session_id, line_count, status, last_ingested_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,datetime('now'))
              ON CONFLICT(path) DO UPDATE SET size=?3, mtime=?4, hash=?5, session_id=?6, line_count=?7, status=?8, last_ingested_at=datetime('now')",
             params![path_str, prep.file.tool.as_str(), prep.size, prep.mtime, prep.hash, session_id, prep.line_count, status],
         )?;
-        tx.commit()?;
-        report.ingested += 1;
+            tx.commit()?;
+            report.ingested += 1;
+        }
     }
     // Roll-up identity is data-derived and cheap; refresh it whenever new
     // projects/sessions landed so worktrees link to roots (and synthetic
-    // attributions upgrade as real roots appear).
+    // attributions upgrade as real roots appear). Runs on cancelled syncs too:
+    // committed sessions must not be left pointing at unresolved roots.
     if report.ingested > 0 {
         crate::worktree::resolve_worktree_roots(conn)?;
     }
@@ -507,6 +541,31 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0))
             .unwrap();
         assert_eq!(sessions3, 1);
+    }
+
+    #[test]
+    fn cancelled_sync_stops_early_and_next_sync_completes() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join("claude/projects");
+        let codex_dir = dir.path().join("codex");
+        write(&claude_dir.join("proj/sess.jsonl"), &claude_fixture());
+
+        let config = Config {
+            db_path: dir.path().join("d.db"),
+            claude_dir,
+            codex_dir,
+        };
+        let mut conn = db::open(&config.db_path).unwrap();
+        schema::migrate(&conn).unwrap();
+
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let r = sync_cancellable(&mut conn, &config, &cancel).unwrap();
+        assert!(r.cancelled);
+        assert_eq!(r.ingested, 0);
+
+        let r2 = sync(&mut conn, &config).unwrap();
+        assert!(!r2.cancelled);
+        assert_eq!(r2.ingested, 1);
     }
 
     #[test]
