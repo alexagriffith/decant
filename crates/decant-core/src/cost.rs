@@ -18,14 +18,26 @@ pub struct Price {
 /// these later; today the values here are authoritative. Unknown models
 /// estimate to 0.0 (surfaced as "unknown" in the UI).
 ///
-/// Claude is keyed by tier (opus/sonnet/haiku): every current version within a
-/// tier shares a price, so `canonical_model` collapses versions onto one key.
-/// Anthropic cache rates follow the documented multipliers — cache read = 0.1x
-/// input, 5-minute cache write = 1.25x input. OpenAI has no separate
-/// cache-write charge, so `cache_write_per_mtok` mirrors the input rate there.
+/// Claude is keyed by tier (fable/opus/sonnet/haiku): every current version
+/// within a tier shares a price, so `canonical_model` collapses versions onto
+/// one key. Anthropic cache rates follow the documented multipliers — cache
+/// read = 0.1x input, 5-minute cache write = 1.25x input. OpenAI has no
+/// separate cache-write charge, so `cache_write_per_mtok` mirrors the input
+/// rate there.
 pub fn default_pricing() -> HashMap<&'static str, Price> {
     let mut m = HashMap::new();
 
+    // Claude Fable 5 is the premium tier ($10/$50 per MTok). Mythos 5 shares
+    // this rate card (limited availability, same pricing as Fable).
+    m.insert(
+        "claude-fable",
+        Price {
+            input_per_mtok: 10.0,
+            output_per_mtok: 50.0,
+            cache_read_per_mtok: 1.0,
+            cache_write_per_mtok: 12.5,
+        },
+    );
     m.insert(
         "claude-opus",
         Price {
@@ -134,7 +146,11 @@ fn canonical_model(raw: &str) -> Option<&'static str> {
 
     // Anthropic Claude — match the tier regardless of version, vendor prefix,
     // date stamp, context suffix, or alias form.
-    if s.contains("claude") || s == "opus" || s == "sonnet" || s == "haiku" {
+    if s.contains("claude") || s == "opus" || s == "sonnet" || s == "haiku" || s == "fable" {
+        if s.contains("fable") || s.contains("mythos") {
+            // Mythos 5 (limited availability) shares Fable's rate card.
+            return Some("claude-fable");
+        }
         if s.contains("opus") {
             return Some("claude-opus");
         }
@@ -299,6 +315,33 @@ mod tests {
         assert!((estimate_cost(Some("gpt-5.2"), &u, &pricing) - 15.75).abs() < 1e-6);
         // Codex automatic review is billed at the gpt-5.3-codex rate.
         assert!((estimate_cost(Some("codex-auto-review"), &u, &pricing) - 15.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fable_canonical_model_forms() {
+        // claude-fable-5, context-suffix form, and bare alias all resolve to "claude-fable".
+        let pricing = default_pricing();
+        let u = usage_1m();
+        let fable = estimate_cost(Some("claude-fable-5"), &u, &pricing);
+        for m in ["claude-fable-5[1m]", "fable"] {
+            assert!(
+                (estimate_cost(Some(m), &u, &pricing) - fable).abs() < 1e-6,
+                "{m}"
+            );
+        }
+        // claude-mythos-5 shares the Fable rate card.
+        assert!(
+            (estimate_cost(Some("claude-mythos-5"), &u, &pricing) - fable).abs() < 1e-6,
+            "claude-mythos-5"
+        );
+    }
+
+    #[test]
+    fn fable_input_output_costs_add_up() {
+        let pricing = default_pricing();
+        // 1M input @ $10 + 1M output @ $50 = $60.
+        let cost = estimate_cost(Some("claude-fable-5"), &usage_1m(), &pricing);
+        assert!((cost - 60.0).abs() < 1e-6, "got {cost}");
     }
 
     #[test]
