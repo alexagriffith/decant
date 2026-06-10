@@ -1,4 +1,4 @@
-use directories::{BaseDirs, ProjectDirs};
+use directories::BaseDirs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -18,13 +18,11 @@ impl Config {
         let home = BaseDirs::new()
             .map(|b| b.home_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
-        let data_dir = ProjectDirs::from("", "", "decant")
-            .map(|p| p.data_dir().to_path_buf())
-            .unwrap_or_else(|| home.join(".local/share/decant"));
 
+        // Same default as the daemon's config: one archive for all surfaces.
         let db_path = db_override
             .or_else(|| std::env::var_os("DECANT_DB").map(PathBuf::from))
-            .unwrap_or_else(|| data_dir.join("decant.db"));
+            .unwrap_or_else(|| home.join(".decant/decant.db"));
         let claude_dir = claude_override
             .or_else(|| std::env::var_os("DECANT_CLAUDE_DIR").map(PathBuf::from))
             .unwrap_or_else(|| home.join(".claude/projects"));
@@ -54,6 +52,6 @@ mod tests {
     fn defaults_point_into_home() {
         let c = Config::resolve(None, None, None);
         assert!(c.claude_dir.ends_with(".claude/projects"));
-        assert!(c.db_path.to_string_lossy().contains("decant"));
+        assert!(c.db_path.ends_with(".decant/decant.db"));
     }
 }
