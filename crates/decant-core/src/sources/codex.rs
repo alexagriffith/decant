@@ -331,4 +331,65 @@ mod tests {
         let parsed = parse_session("fallback", &fixture(), &titles);
         assert_eq!(parsed.session.title.as_deref(), Some("TODO audit"));
     }
+
+    #[test]
+    fn malformed_and_blank_lines_and_unknown_top_types() {
+        let content = concat!(
+            "\n",
+            "{oops not json\n",
+            // turn_context arrives before any session_meta: its cwd seeds the
+            // session cwd, and the top-level timestamp seeds started/ended.
+            "{\"type\":\"turn_context\",\"timestamp\":\"2026-05-01T10:00:00Z\",\"payload\":{\"model\":\"gpt-5.4\",\"cwd\":\"/tmp/proj\"}}\n",
+            "{\"type\":\"session_meta\",\"timestamp\":\"2026-05-01T10:00:01Z\",\"payload\":{\"id\":\"sx\",\"cli_version\":\"1.2\"}}\n",
+            // An unrecognized top-level record type is ignored.
+            "{\"type\":\"unknown-top\",\"timestamp\":\"2026-05-01T10:00:02Z\"}\n",
+        );
+        let parsed = parse_session("fallback", content, &HashMap::new());
+        assert_eq!(parsed.issues.len(), 1);
+        assert_eq!(parsed.issues[0].line_no, 2);
+        let s = &parsed.session;
+        assert_eq!(s.source_session_id, "sx");
+        assert_eq!(s.cwd.as_deref(), Some("/tmp/proj"));
+        assert_eq!(s.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(s.cli_version.as_deref(), Some("1.2"));
+        assert_eq!(s.started_at.as_deref(), Some("2026-05-01T10:00:00Z"));
+        assert_eq!(s.ended_at.as_deref(), Some("2026-05-01T10:00:02Z"));
+    }
+
+    #[test]
+    fn response_item_variants_cover_every_block_kind() {
+        let content = concat!(
+            // reasoning with an empty summary falls back to the content text.
+            "{\"type\":\"response_item\",\"timestamp\":\"2026-05-01T10:00:00Z\",\"payload\":{\"type\":\"reasoning\",\"summary\":[],\"content\":[{\"text\":\"deep thought\"}]}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"web_search_call\"}}\n",
+            // An unrecognized response item becomes an Other block.
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"mystery\",\"foo\":1}}\n",
+            // function_call_output stringify: plain string, JSON value, and absent.
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"c1\",\"output\":\"plain\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call_output\",\"call_id\":\"c2\",\"output\":{\"k\":1}}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"tool_search_output\",\"call_id\":\"c3\"}}\n",
+            // system message + collect_text over a string.
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"system\",\"content\":\"sys note\"}}\n",
+            // collect_text over a non-string/non-array content yields empty.
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":42}}\n",
+            // custom_tool_call uses `input` when `arguments` is absent.
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call\",\"name\":\"do_thing\",\"call_id\":\"k1\",\"input\":{\"a\":1}}}\n",
+        );
+        let parsed = parse_session("fallback", content, &HashMap::new());
+        let m = &parsed.session.messages;
+        assert_eq!(m[0].role, Role::Assistant);
+        assert_eq!(m[0].blocks[0].block_type, BlockType::Thinking);
+        assert_eq!(m[0].blocks[0].text.as_deref(), Some("deep thought"));
+        assert_eq!(m[1].blocks[0].block_type, BlockType::WebSearch);
+        assert_eq!(m[2].blocks[0].block_type, BlockType::Other);
+        assert_eq!(m[3].blocks[0].tool_result.as_deref(), Some("plain"));
+        assert_eq!(m[4].blocks[0].tool_result.as_deref(), Some("{\"k\":1}"));
+        assert_eq!(m[5].blocks[0].tool_result.as_deref(), Some(""));
+        assert_eq!(m[6].role, Role::System);
+        assert_eq!(m[6].blocks[0].text.as_deref(), Some("sys note"));
+        assert_eq!(m[7].blocks[0].text.as_deref(), Some(""));
+        assert_eq!(m[8].blocks[0].block_type, BlockType::ToolUse);
+        assert_eq!(m[8].blocks[0].tool_name.as_deref(), Some("do_thing"));
+        assert_eq!(m[8].blocks[0].tool_input, Some(serde_json::json!({"a": 1})));
+    }
 }

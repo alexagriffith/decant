@@ -107,4 +107,30 @@ mod tests {
             .unwrap();
         assert_eq!(mode.to_lowercase(), "wal");
     }
+
+    #[test]
+    fn connect_maps_sqlite_open_failure_to_rusqlite_error() {
+        use r2d2::ManageConnection;
+        // Opening a path that is a directory fails inside decant-core's `open`
+        // with a `decant_core::Error::Sqlite`, which `connect` maps straight back
+        // to the underlying `rusqlite::Error` for r2d2.
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = SqliteConnectionManager::new(dir.path()); // a directory, not a file
+        let err = mgr
+            .connect()
+            .expect_err("opening a directory as a DB must fail");
+        // It is a real rusqlite error (the Sqlite arm), not the ToSql fallback.
+        assert!(!matches!(err, rusqlite::Error::ToSqlConversionFailure(_)));
+    }
+
+    #[test]
+    fn is_valid_and_has_broken_on_live_connection() {
+        use r2d2::ManageConnection;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("d.db");
+        let mgr = SqliteConnectionManager::new(&path);
+        let mut conn = mgr.connect().unwrap();
+        assert!(mgr.is_valid(&mut conn).is_ok());
+        assert!(!mgr.has_broken(&mut conn));
+    }
 }

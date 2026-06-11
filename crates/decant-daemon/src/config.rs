@@ -69,4 +69,81 @@ mod tests {
         let c = Config::from_values(Some("9000".into()), None, None);
         assert_eq!(c.port, 9000);
     }
+
+    #[test]
+    fn invalid_port_falls_back_to_default() {
+        // A non-numeric port string parses to None -> default.
+        let c = Config::from_values(Some("not-a-port".into()), None, None);
+        assert_eq!(c.port, 4577);
+    }
+
+    #[test]
+    fn config_dir_and_db_overrides_drive_paths() {
+        let c = Config::from_values(None, Some("/tmp/cfg".into()), Some("/tmp/x.db".into()));
+        assert_eq!(c.config_dir, std::path::PathBuf::from("/tmp/cfg"));
+        assert_eq!(c.db_path, std::path::PathBuf::from("/tmp/x.db"));
+        assert_eq!(
+            c.token_path(),
+            std::path::PathBuf::from("/tmp/cfg/daemon.token")
+        );
+        assert_eq!(
+            c.lock_path(),
+            std::path::PathBuf::from("/tmp/cfg/daemon.lock")
+        );
+    }
+
+    // Guards the env-var manipulation below: `from_env` reads process-wide vars,
+    // so serialize the one test that mutates them.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Set or clear an env var, returning a guard that restores the prior value.
+    struct EnvVarGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let prev = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, prev }
+        }
+    }
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    #[test]
+    fn from_env_reads_process_environment() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _p = EnvVarGuard::set("DECANT_DAEMON_PORT", "5123");
+        let _c = EnvVarGuard::set("DECANT_CONFIG_DIR", "/tmp/from-env-cfg");
+        let _d = EnvVarGuard::set("DECANT_DB", "/tmp/from-env.db");
+
+        let cfg = Config::from_env();
+        assert_eq!(cfg.port, 5123);
+        assert_eq!(
+            cfg.config_dir,
+            std::path::PathBuf::from("/tmp/from-env-cfg")
+        );
+        assert_eq!(cfg.db_path, std::path::PathBuf::from("/tmp/from-env.db"));
+    }
+
+    #[test]
+    fn env_var_guard_restores_a_previous_value() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // Seed a pre-existing value, then guard the same key: on drop the guard
+        // must restore the original (the `Some(v) => set_var` arm).
+        std::env::set_var("DECANT_DAEMON_PORT", "original");
+        {
+            let _g = EnvVarGuard::set("DECANT_DAEMON_PORT", "overridden");
+            assert_eq!(std::env::var("DECANT_DAEMON_PORT").unwrap(), "overridden");
+        }
+        assert_eq!(std::env::var("DECANT_DAEMON_PORT").unwrap(), "original");
+        std::env::remove_var("DECANT_DAEMON_PORT");
+    }
 }

@@ -70,4 +70,27 @@ defmodule Decant.HealthCheckTest do
   test "ready? is false when the GenServer is not running" do
     refute Decant.HealthCheck.ready?()
   end
+
+  test "status/0 returns the not-ready default when not running" do
+    assert Decant.HealthCheck.status() == %{ready?: false, data: nil, checked_at: nil}
+  end
+
+  test "a :poll message triggers a re-poll, and stray messages are ignored" do
+    test_pid = self()
+
+    Mimic.stub(Decant.Daemon, :health, fn ->
+      send(test_pid, :polled)
+      {:ok, %{"status" => "ok"}}
+    end)
+
+    pid = start_supervised!({Decant.HealthCheck, poll_ms: 10_000})
+    assert_receive :polled, 1_000
+
+    # A stray message must not crash the poller.
+    send(pid, :unexpected)
+    # A manual :poll triggers another health check.
+    send(pid, :poll)
+    assert_receive :polled, 1_000
+    assert Process.alive?(pid)
+  end
 end

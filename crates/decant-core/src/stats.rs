@@ -465,4 +465,60 @@ mod tests {
         let conn = seeded();
         assert!(mcp_usage(&conn, 50).unwrap().is_empty());
     }
+
+    #[test]
+    fn by_dimension_project_and_model_group_correctly() {
+        let conn = seeded();
+        let by_project = by_dimension(&conn, Dimension::Project).unwrap();
+        assert_eq!(by_project.len(), 1);
+        assert_eq!(by_project[0].key, "/Users/dev/proj");
+        assert_eq!(by_project[0].sessions, 1);
+
+        let by_model = by_dimension(&conn, Dimension::Model).unwrap();
+        assert_eq!(by_model[0].key, "claude-opus-4-7");
+    }
+
+    #[test]
+    fn by_dimension_project_uses_placeholder_when_unlinked() {
+        // A session with no project_id rolls up under "(none)".
+        let conn = db::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO session(id, tool, source_session_id) VALUES (1, 'codex', 's1');",
+        )
+        .unwrap();
+        let by_project = by_dimension(&conn, Dimension::Project).unwrap();
+        assert_eq!(by_project[0].key, "(none)");
+    }
+
+    #[test]
+    fn session_facets_returns_row_for_known_id_and_none_for_unknown() {
+        let conn = seeded_enriched();
+        // The first ingested (claude) session has facet counters populated.
+        let id: i64 = conn
+            .query_row(
+                "SELECT id FROM session WHERE source_session_id = 'sess-enr-claude'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let facets = session_facets(&conn, id).unwrap().expect("known session");
+        assert_eq!(facets.turn_count, 1);
+        assert!(facets.active_seconds > 0);
+
+        // Unknown id → Ok(None), not an error.
+        assert!(session_facets(&conn, 999_999).unwrap().is_none());
+    }
+
+    #[test]
+    fn stat_queries_propagate_db_errors() {
+        // An un-migrated DB lacks every table, so `totals`, `mcp_usage`, and
+        // `session_facets` all surface the SQLite error via their `?`.
+        let bare = db::open_in_memory().unwrap();
+        assert!(totals(&bare).is_err());
+        assert!(mcp_usage(&bare, 10).is_err());
+        // session_facets' error is a non-NoRows SQLite error (no `session`
+        // table), exercising its `other => Err(other)` arm.
+        assert!(session_facets(&bare, 1).is_err());
+    }
 }

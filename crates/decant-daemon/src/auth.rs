@@ -69,4 +69,54 @@ mod tests {
             assert_eq!(mode & 0o777, 0o600);
         }
     }
+
+    #[test]
+    fn reads_existing_nonempty_token_verbatim() {
+        // An existing, non-empty file is reused (trimmed) without rewriting.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.token");
+        std::fs::write(&path, "  abc123\n").unwrap();
+        assert_eq!(load_or_create(&path).unwrap(), "abc123");
+    }
+
+    #[test]
+    fn empty_existing_token_is_replaced() {
+        // A whitespace-only file is treated as absent and a fresh token written.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.token");
+        std::fs::write(&path, "   \n").unwrap();
+        let token = load_or_create(&path).unwrap();
+        assert_eq!(token.len(), 64);
+    }
+
+    #[test]
+    fn creates_parent_directories() {
+        // The token path's parent does not exist yet; load_or_create must create it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/deeper/daemon.token");
+        let token = load_or_create(&path).unwrap();
+        assert_eq!(token.len(), 64);
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn token_matches_is_length_sensitive() {
+        assert!(token_matches("abcd", "abcd"));
+        // Different lengths short-circuit to false.
+        assert!(!token_matches("abcd", "abcde"));
+        assert!(!token_matches("abcde", "abcd"));
+        // Same length, differing content.
+        assert!(!token_matches("abcd", "abce"));
+    }
+
+    #[test]
+    fn parent_create_dir_failure_propagates() {
+        // The token path's parent is an existing *file*, so `create_dir_all`
+        // fails and `load_or_create` surfaces the io error.
+        let dir = tempfile::tempdir().unwrap();
+        let file_as_parent = dir.path().join("not-a-dir");
+        std::fs::write(&file_as_parent, "x").unwrap();
+        let path = file_as_parent.join("daemon.token");
+        assert!(load_or_create(&path).is_err());
+    }
 }

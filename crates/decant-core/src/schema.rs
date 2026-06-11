@@ -520,4 +520,52 @@ mod tests {
             "warp worktree name-matched to root"
         );
     }
+
+    #[test]
+    fn migrate_propagates_create_table_error_on_readonly_db() {
+        use rusqlite::OpenFlags;
+        // Create an empty file DB, then reopen it read-only: the very first
+        // `CREATE TABLE IF NOT EXISTS schema_migrations` write fails, so
+        // `migrate`'s opening `?` propagates.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ro.db");
+        db::open(&path).unwrap(); // create the file
+        let ro = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .unwrap();
+        assert!(migrate(&ro).is_err());
+    }
+
+    #[test]
+    fn migrate_propagates_version_query_error() {
+        // A pre-existing `schema_migrations` table without a `version` column:
+        // the `CREATE ... IF NOT EXISTS` is a no-op (table exists), then the
+        // `SELECT COALESCE(MAX(version), 0)` `?` propagates (no such column).
+        let conn = db::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE schema_migrations(applied_at TEXT);")
+            .unwrap();
+        assert!(migrate(&conn).is_err());
+    }
+
+    #[test]
+    fn apply_v3_propagates_version_record_error() {
+        // A v2 DB (so `migrate` runs `apply_v3`) whose `project` and worktree
+        // resolution succeed, but the final version-record INSERT fails because
+        // a trigger forbids writes to `schema_migrations` for version 3.
+        let conn = db::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        // Roll the recorded version back to 2 so `apply_v3` re-runs, and install
+        // a trigger that aborts the v3 INSERT specifically.
+        conn.execute_batch(
+            "DELETE FROM schema_migrations WHERE version >= 3;
+             CREATE TRIGGER block_v3 BEFORE INSERT ON schema_migrations
+               WHEN NEW.version = 3
+               BEGIN SELECT RAISE(ABORT, 'no v3'); END;",
+        )
+        .unwrap();
+        let err = apply_v3(&conn).unwrap_err();
+        assert!(matches!(err, crate::Error::Sqlite(_)));
+    }
 }

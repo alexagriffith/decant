@@ -145,6 +145,177 @@ defmodule Decant.DaemonTest do
     end
   end
 
+  describe "list and object endpoints" do
+    setup do
+      # The remaining endpoints all funnel through the same request/handle path;
+      # one generic stub lets us assert each one decodes the envelope it expects.
+      :ok
+    end
+
+    test "by_dimension/2 returns {:ok, rows, meta}" do
+      rows = [%{"key" => "codex", "sessions" => 2}]
+      Req |> expect(:request, fn _req -> ok_response(rows, %{"m" => 1}) end)
+      assert {:ok, ^rows, %{"m" => 1}} = Daemon.by_dimension(:tool, from: "2026-05-01")
+    end
+
+    test "activity/1 unwraps to {:ok, data}" do
+      data = %{"by_hour" => [], "by_weekday" => []}
+      Req |> expect(:request, fn _req -> ok_response(data) end)
+      assert {:ok, ^data} = Daemon.activity([])
+    end
+
+    test "model_sparklines/1 unwraps to {:ok, data}" do
+      data = %{"models" => %{}, "days" => []}
+      Req |> expect(:request, fn _req -> ok_response(data) end)
+      assert {:ok, ^data} = Daemon.model_sparklines([])
+    end
+
+    test "file_hotspots/1 returns {:ok, rows, meta}" do
+      Req |> expect(:request, fn _req -> ok_response([], %{}) end)
+      assert {:ok, [], _meta} = Daemon.file_hotspots(group: "ext")
+    end
+
+    test "tools_usage/1 returns {:ok, rows, meta}" do
+      Req |> expect(:request, fn _req -> ok_response([], %{}) end)
+      assert {:ok, [], _meta} = Daemon.tools_usage([])
+    end
+
+    test "mcp_usage/1 returns {:ok, rows, meta}" do
+      Req |> expect(:request, fn _req -> ok_response([], %{}) end)
+      assert {:ok, [], _meta} = Daemon.mcp_usage([])
+    end
+
+    test "date_bounds/0 unwraps to {:ok, data}" do
+      data = %{"min" => "2026-05-01", "max" => "2026-05-02"}
+      Req |> expect(:request, fn _req -> ok_response(data) end)
+      assert {:ok, ^data} = Daemon.date_bounds()
+    end
+
+    test "recommendations/1 unwraps the list to {:ok, list}" do
+      recs = [%{"key" => "catalog:agents-md"}]
+      Req |> expect(:request, fn _req -> ok_response(recs) end)
+      assert {:ok, ^recs} = Daemon.recommendations("all")
+    end
+
+    test "recommendations/1 passes through an error tuple" do
+      Req
+      |> expect(:request, fn _req ->
+        {:ok, %Req.Response{status: 500, headers: %{"x-decant-api-version" => ["1"]}, body: ""}}
+      end)
+
+      assert {:error, {:http, 500, _}} = Daemon.recommendations("open")
+    end
+
+    test "get_session/1 passes through an error tuple" do
+      Req
+      |> expect(:request, fn _req ->
+        {:ok, %Req.Response{status: 404, headers: %{"x-decant-api-version" => ["1"]}, body: "{}"}}
+      end)
+
+      assert {:error, {:http, 404, _}} = Daemon.get_session(99)
+    end
+  end
+
+  describe "error mapping (transport variants)" do
+    test "a Mint transport error maps to {:error, :service_unavailable}" do
+      Req
+      |> expect(:request, fn _req -> {:error, %Mint.TransportError{reason: :closed}} end)
+
+      assert {:error, :service_unavailable} = Daemon.health()
+    end
+
+    test "any other exception maps to {:error, {:transport, _}}" do
+      Req |> expect(:request, fn _req -> {:error, %RuntimeError{message: "boom"}} end)
+      assert {:error, {:transport, %RuntimeError{}}} = Daemon.health()
+    end
+  end
+
+  describe "envelope and header handling" do
+    test "a missing version header is tolerated (decodes the envelope)" do
+      body = Jason.encode!(%{"data" => %{"ok" => 1}, "meta" => %{}})
+
+      Req
+      |> expect(:request, fn _req ->
+        {:ok, %Req.Response{status: 200, headers: %{}, body: body}}
+      end)
+
+      assert {:ok, %{"ok" => 1}} = Daemon.health()
+    end
+
+    test "list-shaped response headers are read correctly" do
+      body = Jason.encode!(%{"data" => %{"ok" => 1}, "meta" => %{}})
+
+      Req
+      |> expect(:request, fn _req ->
+        {:ok, %Req.Response{status: 200, headers: [{"X-Decant-Api-Version", "1"}], body: body}}
+      end)
+
+      assert {:ok, %{"ok" => 1}} = Daemon.health()
+    end
+
+    test "a binary-valued version header is read correctly" do
+      body = Jason.encode!(%{"data" => %{}, "meta" => %{}})
+
+      Req
+      |> expect(:request, fn _req ->
+        {:ok, %Req.Response{status: 200, headers: %{"x-decant-api-version" => "1"}, body: body}}
+      end)
+
+      assert {:ok, %{}} = Daemon.health()
+    end
+
+    test "a 2xx body that is not a valid envelope maps to {:error, {:invalid_envelope, _}}" do
+      Req
+      |> expect(:request, fn _req ->
+        {:ok,
+         %Req.Response{
+           status: 200,
+           headers: %{"x-decant-api-version" => ["1"]},
+           body: Jason.encode!(%{"nope" => true})
+         }}
+      end)
+
+      assert {:error, {:invalid_envelope, %{"nope" => true}}} = Daemon.health()
+    end
+
+    test "a non-binary error body is passed through unchanged" do
+      Req
+      |> expect(:request, fn _req ->
+        {:ok,
+         %Req.Response{status: 500, headers: %{"x-decant-api-version" => ["1"]}, body: %{a: 1}}}
+      end)
+
+      assert {:error, {:http, 500, %{a: 1}}} = Daemon.list_sessions()
+    end
+
+    test "a list of headers with a stray non-tuple entry is tolerated" do
+      body = Jason.encode!(%{"data" => %{"ok" => 1}, "meta" => %{}})
+
+      Req
+      |> expect(:request, fn _req ->
+        {:ok,
+         %Req.Response{
+           status: 200,
+           headers: [:weird, {"content-type", "application/json"}],
+           body: body
+         }}
+      end)
+
+      # No version header present in the list → tolerated → envelope decodes.
+      assert {:ok, %{"ok" => 1}} = Daemon.health()
+    end
+
+    test "a non-JSON error body is surfaced verbatim" do
+      Req
+      |> expect(:request, fn _req ->
+        {:ok,
+         %Req.Response{status: 503, headers: %{"x-decant-api-version" => ["1"]}, body: "down"}}
+      end)
+
+      assert {:error, {:http, 503, "down"}} = Daemon.list_sessions()
+    end
+  end
+
   describe "config helpers" do
     test "base_url/0 honors DECANT_DAEMON_URL and falls back to the default" do
       System.delete_env("DECANT_DAEMON_URL")
@@ -159,6 +330,25 @@ defmodule Decant.DaemonTest do
       System.put_env("DECANT_DAEMON_TOKEN", "  abc123  ")
       on_exit(fn -> System.delete_env("DECANT_DAEMON_TOKEN") end)
       assert Daemon.token() == "abc123"
+    end
+
+    test "token/0 reads the token file when the env var is blank, else nil" do
+      System.put_env("DECANT_DAEMON_TOKEN", "")
+      on_exit(fn -> System.delete_env("DECANT_DAEMON_TOKEN") end)
+
+      # Resolve `~` to a per-test sandbox so we never touch the real
+      # ~/.decant/daemon.token (Path.expand("~/…") calls System.user_home!/0).
+      home = Path.join(System.tmp_dir!(), "decant-token-#{System.unique_integer([:positive])}")
+      Mimic.stub(System, :user_home!, fn -> home end)
+      path = Path.join([home, ".decant", "daemon.token"])
+      File.mkdir_p!(Path.dirname(path))
+      on_exit(fn -> File.rm_rf!(home) end)
+
+      File.write!(path, "  filetoken  \n")
+      assert Daemon.token() == "filetoken"
+
+      File.rm_rf!(path)
+      assert Daemon.token() == nil
     end
   end
 end

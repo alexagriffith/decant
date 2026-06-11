@@ -159,4 +159,27 @@ mod tests {
         assert_eq!(BlockType::ToolUse.as_str(), "tool_use");
         assert_eq!(ToolKind::Mcp.as_str(), "mcp");
     }
+
+    #[test]
+    fn all_enum_string_arms_are_stable() {
+        // Cover every remaining as_str arm so the wire strings stay pinned.
+        assert_eq!(Tool::Codex.as_str(), "codex");
+
+        assert_eq!(Role::User.as_str(), "user");
+        assert_eq!(Role::Assistant.as_str(), "assistant");
+        assert_eq!(Role::System.as_str(), "system");
+        assert_eq!(Role::Other.as_str(), "other");
+
+        assert_eq!(BlockType::Text.as_str(), "text");
+        assert_eq!(BlockType::Thinking.as_str(), "thinking");
+        assert_eq!(BlockType::ToolResult.as_str(), "tool_result");
+        assert_eq!(BlockType::WebSearch.as_str(), "web_search");
+        assert_eq!(BlockType::Image.as_str(), "image");
+        assert_eq!(BlockType::Other.as_str(), "other");
+
+        assert_eq!(ToolKind::Builtin.as_str(), "builtin");
+        assert_eq!(ToolKind::Custom.as_str(), "custom");
+        assert_eq!(ToolKind::WebSearch.as_str(), "web_search");
+        assert_eq!(ToolKind::ToolSearch.as_str(), "tool_search");
+    }
 }

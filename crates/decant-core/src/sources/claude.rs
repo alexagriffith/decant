@@ -393,4 +393,149 @@ mod tests {
         assert_eq!(s.started_at.as_deref(), Some("2026-05-01T10:00:00.000Z"));
         assert_eq!(s.ended_at.as_deref(), Some("2026-05-01T10:00:10.000Z"));
     }
+
+    #[test]
+    fn malformed_lines_become_issues_and_blank_lines_are_skipped() {
+        let content = "\n   \n{not valid json\n{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n";
+        let parsed = parse_session("s", content);
+        assert_eq!(parsed.issues.len(), 1);
+        assert_eq!(parsed.issues[0].line_no, 3);
+        assert!(!parsed.issues[0].error.is_empty());
+        assert_eq!(parsed.session.messages.len(), 1);
+        assert_eq!(parsed.session.title.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn meta_summary_sets_title_and_system_and_unknown_types_become_messages() {
+        let content = concat!(
+            "{\"type\":\"summary\",\"summary\":\"Synthesized Title\"}\n",
+            "{\"type\":\"system\",\"uuid\":\"s1\",\"timestamp\":\"2026-05-01T10:00:00.000Z\",\"message\":{\"role\":\"system\",\"content\":\"boot\"}}\n",
+            "{\"type\":\"weird-thing\",\"uuid\":\"w1\",\"parentUuid\":\"s1\"}\n",
+        );
+        let parsed = parse_session("s", content);
+        let s = &parsed.session;
+        // Title is synthesized from the `summary` meta record.
+        assert_eq!(s.title.as_deref(), Some("Synthesized Title"));
+        // system -> System role; unknown top-level type -> Other role.
+        let roles: Vec<_> = s.messages.iter().map(|m| m.role).collect();
+        assert_eq!(roles, vec![Role::System, Role::Other]);
+        assert_eq!(s.messages[1].source_uuid.as_deref(), Some("w1"));
+        assert!(s.messages[1].blocks.is_empty());
+    }
+
+    #[test]
+    fn meta_title_field_is_used_when_summary_absent() {
+        let content = "{\"type\":\"ai-title\",\"title\":\"From Title Field\"}\n";
+        let parsed = parse_session("s", content);
+        assert_eq!(parsed.session.title.as_deref(), Some("From Title Field"));
+    }
+
+    #[test]
+    fn unknown_blocks_and_tool_result_arrays_parse() {
+        let content = concat!(
+            // Assistant turn with an unrecognized content block -> Other block.
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-05-01T10:00:00.000Z\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-opus-4-7\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"},{\"type\":\"mystery\",\"foo\":1}]}}\n",
+            // Pure tool-result turn: array content (mixed text + non-text) -> Tool role.
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-05-01T10:00:05.000Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"is_error\":true,\"content\":[{\"type\":\"text\",\"text\":\"line one\"},{\"blob\":42}]},{\"type\":\"mystery\",\"z\":2}]}}\n",
+            // content that is neither string nor array -> no blocks, User role.
+            "{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":\"2026-05-01T10:00:06.000Z\",\"message\":{\"role\":\"user\",\"content\":7}}\n",
+        );
+        let parsed = parse_session("s", content);
+        let m = &parsed.session.messages;
+        assert_eq!(m[0].role, Role::Assistant);
+        assert_eq!(
+            m[0].blocks.iter().map(|b| b.block_type).collect::<Vec<_>>(),
+            vec![BlockType::Text, BlockType::Other]
+        );
+        // Tool-result-only turn collapses to the Tool role.
+        assert_eq!(m[1].role, Role::Tool);
+        let tr = m[1]
+            .blocks
+            .iter()
+            .find(|b| b.block_type == BlockType::ToolResult)
+            .unwrap();
+        // Array content is stringified, joining text with the raw JSON of non-text items.
+        let body = tr.tool_result.clone().unwrap();
+        assert!(body.contains("line one"));
+        assert!(body.contains("blob"));
+        assert_eq!(tr.is_error, Some(true));
+        // The trailing unknown block in the same turn becomes an Other block.
+        assert!(m[1].blocks.iter().any(|b| b.block_type == BlockType::Other));
+        // Non-string/array content yields a User message with no blocks.
+        assert_eq!(m[2].role, Role::User);
+        assert!(m[2].blocks.is_empty());
+    }
+
+    #[test]
+    fn meta_without_title_and_already_titled_meta_are_noops() {
+        // First a real user turn sets the title; a later meta record with no
+        // summary/title field is a no-op (exercises both `if title.is_none()`
+        // = false and, on a title-less meta, the `if let Some(s)` = false arm).
+        let content = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-05-01T10:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"real prompt\"}}\n",
+            // Meta record while title is already set -> `if title.is_none()` false.
+            "{\"type\":\"attachment\",\"summary\":\"ignored\"}\n",
+            // Meta record with neither summary nor title -> inner `if let` false.
+            "{\"type\":\"file-history-snapshot\"}\n",
+        );
+        let parsed = parse_session("s", content);
+        assert_eq!(parsed.session.title.as_deref(), Some("real prompt"));
+    }
+
+    #[test]
+    fn meta_first_then_no_summary_meta() {
+        // A KNOWN_META record that carries neither summary nor title while the
+        // title is still unset -> the inner `if let Some(s)` false arm.
+        let content = "{\"type\":\"attachment\"}\n";
+        let parsed = parse_session("s", content);
+        assert!(parsed.session.title.is_none());
+    }
+
+    #[test]
+    fn assistant_with_string_content_has_no_blocks() {
+        // An assistant message whose `content` is a plain string (not an array)
+        // skips the block loop entirely -> the `if let Some(Value::Array)` else.
+        let content = "{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-05-01T10:00:00.000Z\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-opus-4-7\",\"content\":\"just text\"}}\n";
+        let parsed = parse_session("s", content);
+        assert_eq!(parsed.session.messages.len(), 1);
+        assert!(parsed.session.messages[0].blocks.is_empty());
+    }
+
+    #[test]
+    fn tool_result_scalar_and_missing_content_stringify() {
+        // A tool_result whose `content` is a bare scalar (neither string nor
+        // array) -> the `Some(other) => other.to_string()` arm. A second with no
+        // `content` field at all -> the `None => String::new()` arm.
+        let content = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-05-01T10:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":99}]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":\"2026-05-01T10:00:05.000Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t2\"}]}}\n",
+        );
+        let parsed = parse_session("s", content);
+        let m = &parsed.session.messages;
+        let tr0 = m[0]
+            .blocks
+            .iter()
+            .find(|b| b.block_type == BlockType::ToolResult)
+            .unwrap();
+        assert_eq!(tr0.tool_result.as_deref(), Some("99"));
+        let tr1 = m[1]
+            .blocks
+            .iter()
+            .find(|b| b.block_type == BlockType::ToolResult)
+            .unwrap();
+        assert_eq!(tr1.tool_result.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn primary_model_prefers_priceable_then_frequency() {
+        // Two distinct models force the comparator to run. The unpriceable
+        // `<synthetic>` marker must not win even when it appears more often.
+        let content = concat!(
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-05-01T10:00:00.000Z\",\"message\":{\"role\":\"assistant\",\"model\":\"<synthetic>\",\"content\":[]}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a2\",\"timestamp\":\"2026-05-01T10:00:01.000Z\",\"message\":{\"role\":\"assistant\",\"model\":\"<synthetic>\",\"content\":[]}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a3\",\"timestamp\":\"2026-05-01T10:00:02.000Z\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-opus-4-7\",\"content\":[]}}\n",
+        );
+        let parsed = parse_session("s", content);
+        assert_eq!(parsed.session.model.as_deref(), Some("claude-opus-4-7"));
+    }
 }

@@ -85,4 +85,26 @@ mod tests {
         assert!(md.contains("Read"));
         assert!(md.contains("_thinking:_"));
     }
+
+    #[test]
+    fn renders_unknown_block_types_with_placeholder() {
+        // A block whose type is none of text/thinking/tool_use/tool_result (e.g.
+        // an image or web_search block) renders via the `other` fallback arm.
+        let conn = db::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO project(id, path) VALUES (1, '/p');
+             INSERT INTO session(id, tool, source_session_id, project_id, message_count)
+                VALUES (1, 'claude_code', 's1', 1, 1);
+             INSERT INTO message(id, session_id, seq, role, raw)
+                VALUES (1, 1, 0, 'assistant', '{}');
+             INSERT INTO block(id, message_id, session_id, ordinal, type, text)
+                VALUES (1, 1, 1, 0, 'image', NULL);",
+        )
+        .unwrap();
+
+        let detail = query::get_session(&conn, 1).unwrap().unwrap();
+        let md = to_markdown(&detail);
+        assert!(md.contains("_[image]_"), "unknown block type placeholder");
+    }
 }

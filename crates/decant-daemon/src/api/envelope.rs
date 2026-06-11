@@ -240,4 +240,32 @@ mod tests {
         // cause is preserved in details for logs/debugging.
         assert_eq!(err.details.unwrap()["cause"], "table foo locked");
     }
+
+    #[test]
+    fn from_core_error_maps_to_internal() {
+        let core_err = decant_core::Error::Other("core boom".into());
+        let api: ApiError = core_err.into();
+        assert_eq!(api.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(api.code, "INTERNAL");
+        // The cause is preserved for logs.
+        assert_eq!(api.details.unwrap()["cause"], "core boom");
+    }
+
+    #[test]
+    fn from_rusqlite_error_maps_to_internal() {
+        let api: ApiError = rusqlite::Error::QueryReturnedNoRows.into();
+        assert_eq!(api.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(api.code, "INTERNAL");
+        assert!(api.details.unwrap()["cause"].is_string());
+    }
+
+    #[test]
+    fn not_found_and_bad_request_constructors() {
+        let nf = ApiError::not_found("gone");
+        assert_eq!(nf.status, StatusCode::NOT_FOUND);
+        assert_eq!(nf.code, "NOT_FOUND");
+        let br = ApiError::bad_request("bad");
+        assert_eq!(br.status, StatusCode::BAD_REQUEST);
+        assert_eq!(br.code, "INVALID_REQUEST");
+    }
 }

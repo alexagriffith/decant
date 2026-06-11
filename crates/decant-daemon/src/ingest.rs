@@ -275,4 +275,43 @@ mod tests {
         assert_eq!(cfg.claude_dir, PathBuf::from("/c"));
         assert_eq!(cfg.codex_dir, PathBuf::from("/x"));
     }
+
+    #[test]
+    fn run_sync_once_records_error_when_sync_fails() {
+        // Point at a real fixture so there is a file to ingest, but hand the sync
+        // an UN-migrated connection: writing the parsed session fails because the
+        // schema tables do not exist, driving run_sync_once's error branch.
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join("claude/projects");
+        let sess = claude_dir.join("proj/sess.jsonl");
+        std::fs::create_dir_all(sess.parent().unwrap()).unwrap();
+        let fixture = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/claude/sample.jsonl"
+        ))
+        .unwrap();
+        std::fs::write(&sess, fixture).unwrap();
+
+        let cfg = CoreConfig {
+            db_path: dir.path().join("d.db"),
+            claude_dir,
+            codex_dir: dir.path().join("codex"),
+        };
+
+        // Open WITHOUT migrating: no schema tables.
+        let mut conn = decant_core::db::open(&cfg.db_path).unwrap();
+        let status = SyncStatusHandle::new();
+        let result = run_sync_once(
+            &mut conn,
+            &cfg,
+            &status,
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        assert!(result.is_err(), "sync against an un-migrated DB must error");
+
+        let snap = status.snapshot();
+        assert!(!snap.in_progress, "failure clears in_progress");
+        assert!(snap.last_error.is_some(), "the error is recorded in status");
+        assert!(snap.last_sync_at.is_some());
+    }
 }

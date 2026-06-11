@@ -126,4 +126,26 @@ defmodule DecantWeb.AnalyticsLiveTest do
     # Sub-rows must be gone after the filter change.
     refute html =~ "agate-spire"
   end
+
+  test "clicking a by-model header toggles the model sort", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/analytics")
+
+    html =
+      view
+      |> element(~s(button[phx-value-table="model"][phx-value-col="sessions"]))
+      |> render_click()
+
+    assert html =~ "claude-opus-4-7"
+  end
+
+  test "clicking a by-project header toggles the project sort", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/analytics")
+
+    html =
+      view
+      |> element(~s(button[phx-value-table="project"][phx-value-col="sessions"]))
+      |> render_click()
+
+    assert html =~ "By project"
+  end
 end

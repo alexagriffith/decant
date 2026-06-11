@@ -19,7 +19,24 @@ pub async fn spec() -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::OPENAPI_YAML;
+    use super::{spec, OPENAPI_YAML};
+    use axum::http::header::CONTENT_TYPE;
+    use axum::response::IntoResponse;
+
+    #[tokio::test]
+    async fn spec_serves_yaml_with_content_type() {
+        let resp = spec().await.into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(CONTENT_TYPE).unwrap(),
+            "application/yaml"
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(body.contains("openapi: 3.1.0"));
+    }
 
     #[test]
     fn bundled_spec_is_present_and_versioned() {

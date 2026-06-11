@@ -365,4 +365,43 @@ mod tests {
         );
         assert_eq!(estimate_cost(None, &usage, &pricing), 0.0);
     }
+
+    #[test]
+    fn unrecognized_claude_tier_is_unpriceable() {
+        // A "claude-*" string whose tier we don't recognize falls through to
+        // None (not any of fable/opus/sonnet/haiku).
+        let pricing = default_pricing();
+        let u = usage_1m();
+        assert_eq!(estimate_cost(Some("claude-quill-9"), &u, &pricing), 0.0);
+        assert!(!is_priceable("claude-quill-9"));
+    }
+
+    #[test]
+    fn is_priceable_distinguishes_known_from_unknown() {
+        assert!(is_priceable("claude-haiku-4-5"));
+        assert!(is_priceable("gpt-5.4-mini"));
+        assert!(is_priceable("opus"));
+        assert!(!is_priceable("<synthetic>"));
+        assert!(!is_priceable("exa-research-pro"));
+    }
+
+    #[test]
+    fn known_canonical_key_missing_from_pricing_table_is_zero() {
+        // canonical_model resolves (haiku) but the supplied table lacks that key:
+        // the pricing.get miss returns 0.0 rather than panicking.
+        let mut pricing = HashMap::new();
+        pricing.insert(
+            "claude-opus",
+            Price {
+                input_per_mtok: 5.0,
+                output_per_mtok: 25.0,
+                cache_read_per_mtok: 0.5,
+                cache_write_per_mtok: 6.25,
+            },
+        );
+        assert_eq!(
+            estimate_cost(Some("claude-haiku-4-5"), &usage_1m(), &pricing),
+            0.0
+        );
+    }
 }

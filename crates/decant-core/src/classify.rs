@@ -531,4 +531,37 @@ mod tests {
         let s = session(vec![msg(Role::User, vec![text("hello there")])]);
         assert_eq!(work_type(&s, &[]), None);
     }
+
+    #[test]
+    fn outcome_and_work_type_as_str_round_trip() {
+        assert_eq!(Outcome::Completed.as_str(), "completed");
+        assert_eq!(Outcome::Failed.as_str(), "failed");
+        assert_eq!(Outcome::Abandoned.as_str(), "abandoned");
+        assert_eq!(WorkType::Debugging.as_str(), "debugging");
+        assert_eq!(WorkType::Feature.as_str(), "feature");
+        assert_eq!(WorkType::Refactor.as_str(), "refactor");
+        assert_eq!(WorkType::Research.as_str(), "research");
+        assert_eq!(WorkType::Ops.as_str(), "ops");
+    }
+
+    #[test]
+    fn outcome_none_when_main_thread_has_no_conversational_role() {
+        // The only non-sidechain message is a System/Other row (no User/
+        // Assistant/Tool turn), so `last` finds nothing to judge.
+        let s = session(vec![msg(Role::System, vec![text("boot")])]);
+        assert_eq!(outcome(&s), None);
+    }
+
+    #[test]
+    fn work_type_writes_outweigh_edits_is_feature() {
+        // No qualifying prompt; tool mix has more writes than edits → feature
+        // via the writes>edits branch (not the trailing edits>0 branch).
+        let s = session(vec![msg(Role::Tool, vec![tool_result(false)])]);
+        let refs = vec![
+            fref(Operation::Write),
+            fref(Operation::Write),
+            fref(Operation::Edit),
+        ];
+        assert_eq!(work_type(&s, &refs), Some(WorkType::Feature));
+    }
 }

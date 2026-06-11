@@ -49,4 +49,25 @@ mod tests {
         let third = InstanceLock::acquire(&path);
         assert!(third.is_ok(), "lock available again after release");
     }
+
+    #[test]
+    fn acquire_creates_missing_parent_dirs() {
+        // The lock path's parent does not exist yet; acquire must create it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/deeper/daemon.lock");
+        let held = InstanceLock::acquire(&path).expect("lock under fresh dirs");
+        assert!(path.exists(), "lock file (and parents) created");
+        drop(held);
+    }
+
+    #[test]
+    fn acquire_propagates_parent_create_dir_failure() {
+        // The lock path's parent is an existing *file*, so `create_dir_all`
+        // fails and `acquire` surfaces the io error.
+        let dir = tempfile::tempdir().unwrap();
+        let file_as_parent = dir.path().join("not-a-dir");
+        std::fs::write(&file_as_parent, "x").unwrap();
+        let path = file_as_parent.join("daemon.lock");
+        assert!(InstanceLock::acquire(&path).is_err());
+    }
 }

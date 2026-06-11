@@ -129,4 +129,36 @@ mod tests {
         );
         assert!(!s.in_progress);
     }
+
+    #[test]
+    fn default_handle_starts_blank() {
+        let h = SyncStatusHandle::default();
+        let s = h.snapshot();
+        assert!(s.last_sync_at.is_none());
+        assert!(!s.in_progress);
+        assert!(s.ingested_count.is_none());
+    }
+
+    #[test]
+    fn recovers_a_poisoned_lock_on_write_and_read() {
+        // Poison the inner RwLock by panicking while holding the write guard, then
+        // confirm both the write path (`with`) and the read path (`snapshot`)
+        // recover the inner value instead of propagating the poison.
+        let h = SyncStatusHandle::new();
+        let h2 = h.clone();
+        let _ = std::thread::spawn(move || {
+            h2.with(|s| {
+                s.in_progress = true;
+                panic!("poison the lock while holding the write guard");
+            });
+        })
+        .join();
+
+        // Writing through `with` must still apply the update on a poisoned lock.
+        h.finish_ok(2, "ok after poison");
+        let s = h.snapshot();
+        assert_eq!(s.ingested_count, Some(2));
+        assert_eq!(s.last_report.as_deref(), Some("ok after poison"));
+        assert!(!s.in_progress);
+    }
 }

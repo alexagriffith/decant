@@ -733,6 +733,82 @@ mod tests {
     }
 
     #[test]
+    fn upsert_session_without_project_path_stores_null_project() {
+        // A session whose project_path is None takes the `else` branch (no
+        // project row, project_id stays NULL).
+        let conn = db::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        let mut parsed = sources::claude::parse_session("sess-claude-1", &claude_fixture());
+        parsed.session.project_path = None;
+        let tx = conn.unchecked_transaction().unwrap();
+        let sid = upsert_session(&tx, &parsed, "/x/sample.jsonl", 1, 2, "h").unwrap();
+        tx.commit().unwrap();
+
+        let project_id: Option<i64> = conn
+            .query_row(
+                "SELECT project_id FROM session WHERE id = ?1",
+                params![sid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(project_id, None);
+        let projects: i64 = conn
+            .query_row("SELECT COUNT(*) FROM project", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            projects, 0,
+            "no project row created for a None project_path"
+        );
+    }
+
+    #[test]
+    fn sync_reads_codex_session_index_titles() {
+        // A Codex rollout file plus a session_index.jsonl that names it: the
+        // title from the index must land on the ingested session (exercises
+        // codex_titles' line/JSON/field-extraction path).
+        let dir = tempfile::tempdir().unwrap();
+        let claude_dir = dir.path().join("claude/projects");
+        let codex_dir = dir.path().join("codex");
+
+        let codex_fx = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/codex/sample.jsonl"
+        ))
+        .unwrap();
+        // The rollout file's stem is the fallback id; the index keys by the
+        // session's own id. Discover what id the parser assigns, then key the
+        // index to it.
+        let parsed = sources::codex::parse_session("rollout-x", &codex_fx, &HashMap::new());
+        let sid = parsed.session.source_session_id.clone();
+        write(&codex_dir.join("sessions/rollout-x.jsonl"), &codex_fx);
+        write(
+            &codex_dir.join("session_index.jsonl"),
+            &format!(
+                "{{\"id\":\"{sid}\",\"thread_name\":\"Indexed Title\"}}\nnot json, skipped\n{{\"id\":\"other\"}}\n"
+            ),
+        );
+
+        let config = Config {
+            db_path: dir.path().join("d.db"),
+            claude_dir,
+            codex_dir,
+        };
+        let mut conn = db::open(&config.db_path).unwrap();
+        schema::migrate(&conn).unwrap();
+        let r = sync(&mut conn, &config).unwrap();
+        assert_eq!(r.ingested, 1);
+
+        let title: Option<String> = conn
+            .query_row(
+                "SELECT title FROM session WHERE source_session_id = ?1",
+                params![sid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(title.as_deref(), Some("Indexed Title"));
+    }
+
+    #[test]
     fn sync_handles_duplicate_session_id_across_files() {
         // Two files in different project dirs share the SAME stem -> same
         // source_session_id. The second must REPLACE the first without an FK
@@ -761,5 +837,88 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0))
             .unwrap();
         assert_eq!(sessions, 1);
+    }
+
+    /// Parse the enriched Claude fixture (project path + messages + blocks +
+    /// tool_use + file_refs), so `upsert_session` touches every table.
+    fn enriched_parsed() -> ParsedSession {
+        let content = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/claude/enriched.jsonl"
+        ))
+        .unwrap();
+        sources::claude::parse_session("sess-claude-enr", &content)
+    }
+
+    /// Migrate a fresh in-memory DB, then run `f` to break the schema before
+    /// `upsert_session` runs against it. Foreign keys are disabled so a single
+    /// table can be dropped/recreated in isolation. Asserts `upsert_session`
+    /// surfaces the SQLite error (the `?` propagation on the failing statement).
+    fn assert_upsert_errors(break_schema: &str) {
+        let conn = db::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute_batch(break_schema).unwrap();
+        let parsed = enriched_parsed();
+        let err = upsert_session(&conn, &parsed, "/x/enr.jsonl", 1, 2, "h").unwrap_err();
+        assert!(matches!(err, crate::Error::Sqlite(_)));
+    }
+
+    #[test]
+    fn upsert_errors_when_project_insert_fails() {
+        // No `project` table -> the project INSERT `?` propagates.
+        assert_upsert_errors("DROP TABLE project;");
+    }
+
+    #[test]
+    fn upsert_errors_when_project_select_fails() {
+        // `project` accepts the INSERT (path/name) but has no `id` column, so the
+        // follow-up `SELECT id` `?` propagates.
+        assert_upsert_errors(
+            "DROP TABLE project;
+             CREATE TABLE project(path TEXT PRIMARY KEY, name TEXT, first_seen_at TEXT, last_seen_at TEXT);",
+        );
+    }
+
+    #[test]
+    fn upsert_errors_when_session_delete_fails() {
+        // No `session` table -> the pre-insert DELETE `?` propagates.
+        assert_upsert_errors("DROP TABLE session;");
+    }
+
+    #[test]
+    fn upsert_errors_when_session_insert_fails() {
+        // `session` exists (so the DELETE succeeds) but is missing the wide column
+        // set the INSERT lists, so the session INSERT `?` propagates.
+        assert_upsert_errors(
+            "DROP TABLE session;
+             CREATE TABLE session(id INTEGER PRIMARY KEY, tool TEXT, source_session_id TEXT);",
+        );
+    }
+
+    #[test]
+    fn upsert_errors_when_message_insert_fails() {
+        // No `message` table -> the per-message INSERT `?` propagates.
+        assert_upsert_errors("DROP TABLE message;");
+    }
+
+    #[test]
+    fn upsert_errors_when_block_insert_fails() {
+        // No `block` table -> the per-block INSERT `?` propagates.
+        assert_upsert_errors("DROP TABLE block;");
+    }
+
+    #[test]
+    fn upsert_errors_when_tool_call_insert_fails() {
+        // No `tool_call` table -> the tool-use INSERT `?` propagates (the fixture
+        // has a Read tool_use).
+        assert_upsert_errors("DROP TABLE tool_call;");
+    }
+
+    #[test]
+    fn upsert_errors_when_file_ref_insert_fails() {
+        // No `file_ref` table -> the file-ref INSERT `?` propagates (the fixture
+        // has Read/Edit/Write/NotebookEdit refs).
+        assert_upsert_errors("DROP TABLE file_ref;");
     }
 }

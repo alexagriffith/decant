@@ -55,4 +55,33 @@ defmodule DecantWeb.SessionLive.SearchTest do
     refute html =~ "Fix the failing auth test"
     refute html =~ "List the open TODOs"
   end
+
+  test "a non-matching query shows the 'No matches' empty state", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/search")
+
+    html =
+      view
+      |> form("form", %{"q" => "zzzznomatch"})
+      |> render_change()
+
+    assert html =~ "No matches"
+  end
+
+  test "a deep link with ?q= pre-runs the search", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/search?q=auth")
+    assert html =~ "Fix the failing auth test"
+  end
+
+  test "a raising search degrades to no results", %{conn: conn} do
+    Mimic.stub(Decant.Daemon, :search, fn _q, _opts -> raise "bad FTS syntax" end)
+
+    {:ok, view, _html} = live(conn, ~p"/search")
+
+    html =
+      view
+      |> form("form", %{"q" => "auth"})
+      |> render_change()
+
+    assert html =~ "No matches"
+  end
 end

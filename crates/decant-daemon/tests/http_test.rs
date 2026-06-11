@@ -1,11 +1,11 @@
 use decant_daemon::config::Config;
 
-async fn spawn(token: &str) -> (String, tokio::task::JoinHandle<()>) {
+async fn spawn(token: &str) -> (String, tokio::task::JoinHandle<()>, tempfile::TempDir) {
     let cfg = Config::from_values(Some("0".into()), None, None); // port 0 = OS-assigned
 
-    // A real (migrated) temp DB + read pool so AppState is fully built. Leak the
-    // tempdir so the DB outlives the spawned server for the duration of the test.
-    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    // A real (migrated) temp DB + read pool so AppState is fully built. The caller
+    // holds the TempDir so the DB outlives the spawned server for the test.
+    let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("d.db");
     {
         let conn = decant_core::db::open(&db_path).unwrap();
@@ -28,12 +28,12 @@ async fn spawn(token: &str) -> (String, tokio::task::JoinHandle<()>) {
     let handle = tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    (format!("http://127.0.0.1:{}", addr.port()), handle)
+    (format!("http://127.0.0.1:{}", addr.port()), handle, dir)
 }
 
 #[tokio::test]
 async fn health_is_open_and_reports_version() {
-    let (base, _h) = spawn("secret-token").await;
+    let (base, _h, _dir) = spawn("secret-token").await;
     let res = reqwest::get(format!("{base}/api/v1/health")).await.unwrap();
     assert_eq!(res.status(), 200);
     let body: serde_json::Value = res.json().await.unwrap();
@@ -42,7 +42,7 @@ async fn health_is_open_and_reports_version() {
 
 #[tokio::test]
 async fn protected_route_requires_token_and_good_host() {
-    let (base, _h) = spawn("secret-token").await;
+    let (base, _h, _dir) = spawn("secret-token").await;
     let client = reqwest::Client::new();
 
     let r = client

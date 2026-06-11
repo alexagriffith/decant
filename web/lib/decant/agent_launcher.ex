@@ -51,7 +51,14 @@ defmodule Decant.AgentLauncher do
   def ide_label(key), do: get_in(@ides, [key, :label]) || "IDE"
 
   @doc "True when we can open apps for the user (macOS)."
-  def can_launch?, do: match?({:unix, :darwin}, :os.type())
+  def can_launch? do
+    # Only an explicit boolean override wins; anything else falls back to the
+    # platform check (so a stray string like "false" can't enable launching).
+    case Application.get_env(:decant, :can_launch) do
+      flag when is_boolean(flag) -> flag
+      _ -> match?({:unix, :darwin}, :os.type())
+    end
+  end
 
   @doc "Open `agent` in the preferred terminal seeded with `prompt`. :ok | {:error, msg}."
   def launch(agent, prompt) when is_binary(agent) and is_binary(prompt) do

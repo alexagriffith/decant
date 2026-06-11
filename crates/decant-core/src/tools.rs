@@ -52,6 +52,15 @@ mod tests {
     }
 
     #[test]
+    fn mcp_prefix_without_server_separator() {
+        // `mcp__<base>` with no second `__`: classified MCP but no server name.
+        let (kind, server, base) = classify_tool("mcp__lonely");
+        assert_eq!(kind, ToolKind::Mcp);
+        assert_eq!(server, None);
+        assert_eq!(base, "lonely");
+    }
+
+    #[test]
     fn preview_truncates() {
         assert_eq!(preview("abcdef", 3), "abc…");
         assert_eq!(preview("ab", 3), "ab");

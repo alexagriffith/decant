@@ -63,4 +63,124 @@ defmodule Decant.DaemonEventsTest do
     _ = :sys.get_state(pid)
     assert Process.alive?(pid)
   end
+
+  test ":sse_connected resets the backoff", %{pid: pid} do
+    send(pid, :sse_connected)
+    state = :sys.get_state(pid)
+    assert state.backoff == 1_000
+  end
+
+  test "a matched worker DOWN clears the ref and schedules a reconnect", %{pid: pid} do
+    ref = make_ref()
+    :sys.replace_state(pid, fn s -> %{s | worker_ref: ref, backoff: 1_000} end)
+    send(pid, {:DOWN, ref, :process, self(), :normal})
+    state = :sys.get_state(pid)
+    assert state.worker_ref == nil
+    # Backoff doubled by schedule_reconnect.
+    assert state.backoff == 2_000
+  end
+
+  test "an unrelated message is ignored", %{pid: pid} do
+    send(pid, :something_else)
+    _ = :sys.get_state(pid)
+    assert Process.alive?(pid)
+  end
+
+  test ":reconnect spawns a fresh worker", %{pid: pid} do
+    send(pid, :reconnect)
+    state = :sys.get_state(pid)
+    # connect/1 set a new monitor ref; the GenServer remains alive even when the
+    # spawned worker immediately fails to reach the (absent) daemon.
+    assert is_reference(state.worker_ref)
+    assert Process.alive?(pid)
+  end
+
+  test "a payload with no ingested count broadcasts the generic report", %{pid: pid} do
+    send(pid, {:sse_event, %{event: "archive_updated", data: Jason.encode!(%{"type" => "x"})}})
+    assert_receive {:archive_updated, "archive updated"}
+  end
+
+  test "a payload with ingested but no last_sync_at omits the suffix", %{pid: pid} do
+    send(pid, {:sse_event, %{event: "archive_updated", data: Jason.encode!(%{"ingested" => 2})}})
+    assert_receive {:archive_updated, "2 ingested"}
+  end
+
+  test "an event with non-binary data still broadcasts the generic report", %{pid: pid} do
+    send(pid, {:sse_event, %{event: "archive_updated", data: %{not: "binary"}}})
+    assert_receive {:archive_updated, "archive updated"}
+  end
+end
+
+defmodule Decant.DaemonEventsStreamTest do
+  @moduledoc """
+  Drives the streaming worker (`connect_on_start: true`) with a mocked
+  `Req.request/1`, so the connect/continue/stream/handler path is exercised
+  without a real network connection.
+  """
+  use ExUnit.Case, async: false
+  use Mimic
+
+  alias Decant.DaemonEvents
+
+  setup :set_mimic_global
+
+  test "connecting streams a chunk through the SSE parser and broadcasts" do
+    Phoenix.PubSub.subscribe(Decant.PubSub, DaemonEvents.topic())
+    test_pid = self()
+
+    # Capture the streaming request, feed a single SSE `archive_updated` frame
+    # into its `into:` handler, then return cleanly so the worker exits.
+    Mimic.stub(Req, :request, fn req ->
+      handler = req.into
+      resp = %Req.Response{status: 200, headers: %{}, body: "", private: %{}}
+
+      frame = "event: archive_updated\ndata: {\"ingested\":1}\n\n"
+      {:cont, {_req, _resp}} = handler.({:data, frame}, {req, resp})
+
+      send(test_pid, :streamed)
+      {:ok, resp}
+    end)
+
+    pid = start_supervised!({DaemonEvents, connect_on_start: true})
+    assert_receive :streamed, 1_000
+    assert_receive {:archive_updated, "1 ingested"}, 1_000
+    assert Process.alive?(pid)
+  end
+
+  test "sse_headers include a bearer token when one is configured" do
+    System.put_env("DECANT_DAEMON_TOKEN", "secret-token")
+    on_exit(fn -> System.delete_env("DECANT_DAEMON_TOKEN") end)
+    test_pid = self()
+
+    Mimic.stub(Req, :request, fn req ->
+      send(test_pid, {:headers, req.headers})
+      {:ok, %Req.Response{status: 200, headers: %{}, body: "", private: %{}}}
+    end)
+
+    start_supervised!({DaemonEvents, connect_on_start: true})
+    assert_receive {:headers, headers}, 1_000
+    assert Map.get(headers, "authorization") == ["Bearer secret-token"]
+  end
+
+  test "a transport error from the stream exits the worker and the GenServer survives" do
+    System.delete_env("DECANT_DAEMON_TOKEN")
+    test_pid = self()
+
+    Mimic.stub(Req, :request, fn _req ->
+      send(test_pid, {:worker, self()})
+      {:error, %Req.TransportError{reason: :econnrefused}}
+    end)
+
+    pid = start_supervised!({DaemonEvents, connect_on_start: true})
+
+    # Synchronize on the worker's exit deterministically (no Process.sleep): the
+    # unlinked worker connects, fails, and exits abnormally.
+    assert_receive {:worker, worker_pid}, 1_000
+    ref = Process.monitor(worker_pid)
+    assert_receive {:DOWN, ^ref, :process, ^worker_pid, _reason}, 1_000
+
+    # A successful state read proves the GenServer already processed the worker's
+    # own :DOWN (ahead of this call in the mailbox) and is still alive, reconnecting.
+    assert %{worker_ref: _} = :sys.get_state(pid)
+  end
 end

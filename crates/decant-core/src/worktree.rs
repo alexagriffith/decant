@@ -627,6 +627,85 @@ mod tests {
     }
 
     #[test]
+    fn root_source_as_str_all_arms() {
+        assert_eq!(RootSource::SelfRoot.as_str(), "self");
+        assert_eq!(RootSource::Git.as_str(), "git");
+        assert_eq!(RootSource::Intree.as_str(), "intree");
+        assert_eq!(RootSource::NameMatch.as_str(), "namematch");
+        assert_eq!(RootSource::Synthetic.as_str(), "synthetic");
+    }
+
+    #[test]
+    fn intree_relative_path_joins_without_leading_slash() {
+        // A relative (non-absolute) in-tree path keeps its relative root via the
+        // `join` non-abs branch.
+        let r = classify_intree("repo/.worktrees/feature-y").unwrap();
+        assert_eq!(r.root_path, "repo");
+        assert_eq!(r.worktree_label.as_deref(), Some("feature-y"));
+        assert_eq!(r.worktree_tool.as_deref(), Some("git"));
+    }
+
+    #[test]
+    fn intree_needs_root_before_and_label_after() {
+        // Container is the first segment (no root before it) → None.
+        assert!(classify_intree("/.worktrees/feature").is_none());
+        // Container is the last segment (no label after it) → None.
+        assert!(classify_intree("/Users/x/repo/.worktrees").is_none());
+    }
+
+    #[test]
+    fn external_container_none_when_leaf_missing() {
+        // `.warp-worktrees` is the final segment, so there is no leaf to return.
+        assert!(external_container("/Users/x/.warp-worktrees").is_none());
+    }
+
+    #[test]
+    fn strip_codename_fallback_branches() {
+        // t3 without the `-t3code-` marker is returned unchanged.
+        assert_eq!(strip_codename("t3", "plainname"), "plainname");
+        // warp with fewer than 3 tokens is returned unchanged.
+        assert_eq!(strip_codename("warp", "one-two"), "one-two");
+        // conductor with fewer than 2 tokens is returned unchanged.
+        assert_eq!(strip_codename("conductor", "solo"), "solo");
+        // An unknown tool returns the leaf unchanged (the `_` arm).
+        assert_eq!(strip_codename("unknown-tool", "whatever"), "whatever");
+    }
+
+    #[test]
+    fn classify_external_empty_key_falls_back_to_full_path() {
+        // strip_codename can produce an empty key when the leaf is exactly the
+        // stripped prefix (e.g. conductor leaf "-x" → tokens ["", "x"], len 2,
+        // joined first token = ""). Then resolution keeps the full path.
+        let r = classify_external("conductor", "-x", "/Users/x/conductor/workspaces/-x", &[]);
+        assert_eq!(r.root_path, "/Users/x/conductor/workspaces/-x");
+        assert!(r.worktree_label.is_none());
+        assert_eq!(r.source, RootSource::Synthetic);
+    }
+
+    #[test]
+    fn resolve_git_root_rejects_empty_root_or_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wt = tmp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        // Pointer where the marker is at the very start → empty root_path → None.
+        std::fs::write(wt.join(".git"), "gitdir: /.git/worktrees/wt\n").unwrap();
+        assert!(resolve_git_root(&wt).is_none());
+        // Pointer with an empty worktree name → None.
+        std::fs::write(wt.join(".git"), "gitdir: /Users/x/repo/.git/worktrees/\n").unwrap();
+        assert!(resolve_git_root(&wt).is_none());
+    }
+
+    #[test]
+    fn infer_tool_defaults_and_recognizes_segments() {
+        // External container tool wins.
+        assert_eq!(infer_tool("/u/.warp-worktrees/dosu-x"), "warp");
+        // In-tree claude segment → claude.
+        assert_eq!(infer_tool("/u/repo/.claude-worktrees/x"), "claude");
+        // Anything else defaults to plain git.
+        assert_eq!(infer_tool("/u/repo/plain"), "git");
+    }
+
+    #[test]
     fn basename_handles_trailing_slash_and_empty() {
         assert_eq!(basename("/u/x/dosu/"), "dosu");
         assert_eq!(basename("dosu"), "dosu");
@@ -791,5 +870,49 @@ mod tests {
             "locked row's root is a name-match target"
         );
         assert_eq!(src, "namematch");
+    }
+
+    #[test]
+    fn resolve_worktree_roots_propagates_db_error() {
+        // No `project` table -> the opening `prepare` `?` propagates.
+        let bare = db::open_in_memory().unwrap();
+        assert!(resolve_worktree_roots(&bare).is_err());
+    }
+
+    #[test]
+    fn resolve_uses_on_disk_git_worktree_pointer() {
+        // A project whose path is a real on-disk worktree (a `.git` *file*
+        // pointing at an absolute `/.git/worktrees/<name>` root) takes the
+        // authoritative `resolve_git_root` Some branch: note the root + record a
+        // write.
+        let tmp = tempfile::tempdir().unwrap();
+        let wt = tmp.path().join("agate-spire");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(
+            wt.join(".git"),
+            "gitdir: /Users/onlydole/dosu/dosu/.git/worktrees/agate-spire\n",
+        )
+        .unwrap();
+
+        let conn = db::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO project(path, name) VALUES (?1, 'agate-spire')",
+            [wt.to_string_lossy().to_string()],
+        )
+        .unwrap();
+
+        resolve_worktree_roots(&conn).unwrap();
+
+        let (is_wt, root, src): (i64, String, String) = conn
+            .query_row(
+                "SELECT is_worktree, root_path, root_source FROM project WHERE name = 'agate-spire'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(is_wt, 1);
+        assert_eq!(root, "/Users/onlydole/dosu/dosu");
+        assert_eq!(src, "git");
     }
 }

@@ -265,6 +265,87 @@ async fn run_loop_broadcasts_change_event_on_ingest_but_not_on_noop() {
     joined.unwrap().unwrap();
 }
 
+#[tokio::test]
+async fn run_loop_falls_back_to_periodic_after_watcher_closes() {
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    let core_cfg = seed_core_config(dir.path());
+
+    let conn = decant_core::db::open(&core_cfg.db_path).unwrap();
+    decant_core::schema::migrate(&conn).unwrap();
+    let write = decant_daemon::db::shared_write(conn);
+
+    let status = SyncStatusHandle::new();
+    // Build the trigger channel, then drop the sender immediately so the loop's
+    // `trigger.recv()` returns None on the first poll: this exercises the
+    // "watcher trigger channel closed; periodic sync only" branch.
+    let (trigger_tx, trigger_rx) = tokio::sync::mpsc::channel::<()>(8);
+    drop(trigger_tx);
+
+    let (sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+    let shutdown = async move {
+        while !*sd_rx.borrow() {
+            if sd_rx.changed().await.is_err() {
+                break;
+            }
+        }
+    };
+
+    // A short periodic interval so the timer (not the now-dead watcher) drives
+    // syncs; the boot sync ingests the fixture, then a periodic tick runs again.
+    let loop_handle = tokio::spawn(ingest::run_loop(
+        write,
+        core_cfg.clone(),
+        status.clone(),
+        decant_daemon::events::channel(),
+        trigger_rx,
+        Duration::from_millis(50),
+        shutdown,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    ));
+
+    // Boot sync ingests the fixture.
+    let read = decant_core::db::open(&core_cfg.db_path).unwrap();
+    let mut sessions = 0i64;
+    for _ in 0..100 {
+        sessions = read
+            .query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0))
+            .unwrap();
+        if sessions >= 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(sessions, 1, "boot sync must ingest the fixture");
+
+    // Add a second session; a periodic tick (the only live driver now that the
+    // watcher channel is closed) must pick it up.
+    let sess2 = core_cfg.claude_dir.join("proj2/sess2.jsonl");
+    std::fs::create_dir_all(sess2.parent().unwrap()).unwrap();
+    std::fs::write(&sess2, claude_fixture()).unwrap();
+
+    let mut sessions2 = sessions;
+    for _ in 0..150 {
+        sessions2 = read
+            .query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0))
+            .unwrap();
+        if sessions2 >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        sessions2, 2,
+        "a periodic-fallback sync must ingest the new session"
+    );
+
+    sd_tx.send(true).unwrap();
+    let joined = tokio::time::timeout(Duration::from_secs(5), loop_handle).await;
+    assert!(joined.is_ok(), "ingest loop must stop on shutdown");
+    joined.unwrap().unwrap();
+}
+
 #[test]
 fn core_config_from_daemon_resolves_source_dirs() {
     // Daemon resolves the same source dirs decant-core/CLI use, honoring the

@@ -3,18 +3,17 @@
 # Coverage is uploaded from two CI jobs, each under its own flag:
 #   - rust:   cargo-llvm-cov lcov report from `crates/`
 #   - elixir: excoveralls JSON report from `web/`
-#
-# Statuses are informational while coverage is being bootstrapped so a drop
-# never blocks a PR; flip `informational: false` once a baseline settles.
 
 coverage:
   status:
     project:
       default:
-        informational: true
+        target: auto # never regress below the current baseline (Rust ~99.7% / Elixir 100%)
+        threshold: 0.3% # absorb cargo-llvm-cov subprocess-attribution jitter
+        informational: false
     patch:
       default:
-        informational: true
+        informational: true # advisory: don't hard-block PRs on patch coverage
 
 # Carry coverage forward for a flag when a given build doesn't re-upload it,
 # so the rust and elixir jobs don't clobber each other's totals.
@@ -33,3 +32,12 @@ comment:
   layout: "reach, diff, flags, files"
   behavior: default
   require_changes: false
+
+# Exclude code that can't be exercised by an in-process test: process entrypoints, the daemon bind/serve + OS-signal loop, and the CLI's OS-daemon lifecycle management.
+ignore:
+  - "crates/decant-daemon/src/main.rs" # process entrypoint -> calls run()
+  - "crates/decant-daemon/src/lib.rs" # boot/serve orchestration (binds sockets, spawns tasks)
+  - "crates/decant-daemon/src/http.rs" # TCP bind/serve + SIGINT/SIGTERM signal loop
+  - "crates/decant-cli/src/main.rs" # process entrypoint + clap dispatch
+  - "crates/decant-cli/src/commands/daemon.rs" # spawns/dispatches the OS daemon
+  - "crates/decant-cli/src/commands/daemon/lifecycle.rs" # macOS LaunchAgent / process management

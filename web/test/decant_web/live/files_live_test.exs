@@ -85,6 +85,27 @@ defmodule DecantWeb.FilesLiveTest do
       assert html =~ "src/main.rs"
     end
 
+    test "a path-mode row with no project renders the middot placeholder", %{conn: conn} do
+      Mimic.stub(Decant.Daemon, :file_hotspots, fn _opts ->
+        {:ok,
+         [
+           %{
+             "key" => "orphan.txt",
+             "project" => nil,
+             "reads" => 1,
+             "edits" => 0,
+             "writes" => 0,
+             "deletes" => 0,
+             "sessions" => 1,
+             "last_touched_at" => "2026-05-01T09:00:00Z"
+           }
+         ], %{}}
+      end)
+
+      {:ok, _view, html} = live(conn, ~p"/files")
+      assert html =~ "orphan.txt"
+    end
+
     test "key links to a quoted FTS search", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/files")
       assert html =~ ~s(/search?q=)

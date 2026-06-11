@@ -1,0 +1,7 @@
+{
+  "skip_files": [
+    "test/support",
+    "lib/decant_web/endpoint.ex",
+    "lib/decant_web/router.ex"
+  ]
+}

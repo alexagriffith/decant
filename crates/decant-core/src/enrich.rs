@@ -322,6 +322,21 @@ mod tests {
     }
 
     #[test]
+    fn active_seconds_ignores_nonpositive_gaps_and_missing_timestamps() {
+        // Three turns: the second is *earlier* than the first (gap <= 0, so the
+        // `if gap > 0` body is skipped), and the third has no timestamp at all
+        // (the `if let Some(ts)` else path). active_seconds stays 0.
+        let content = concat!(
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-05-01T10:00:10.000Z\",\"message\":{\"role\":\"user\",\"content\":\"a\"}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-05-01T10:00:05.000Z\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-opus-4-7\",\"content\":[{\"type\":\"text\",\"text\":\"b\"}]}}\n",
+            "{\"type\":\"assistant\",\"uuid\":\"a2\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-opus-4-7\",\"content\":[{\"type\":\"text\",\"text\":\"c\"}]}}\n",
+        );
+        let s = crate::sources::claude::parse_session("s", content).session;
+        let f = facets(&s);
+        assert_eq!(f.active_seconds, 0);
+    }
+
+    #[test]
     fn claude_file_refs_extracted_with_rel_paths_and_exts() {
         let refs = file_refs(&claude_session());
         let got: Vec<_> = refs.iter().map(brief).collect();
@@ -401,6 +416,82 @@ mod tests {
         assert_eq!(extension("Makefile"), None);
         assert_eq!(extension(".env"), None, "dotfile leaf is not an extension");
         assert_eq!(extension("a.tar.gz"), Some("gz".into()));
+    }
+
+    fn tool_use(tool: &str, input: Option<serde_json::Value>) -> NormalizedBlock {
+        NormalizedBlock {
+            ordinal: 0,
+            block_type: BlockType::ToolUse,
+            text: None,
+            tool_name: Some(tool.to_string()),
+            tool_use_id: Some("t1".into()),
+            tool_input: input,
+            tool_result: None,
+            is_error: None,
+        }
+    }
+
+    fn one_block_session(tool: Tool, block: NormalizedBlock) -> NormalizedSession {
+        NormalizedSession {
+            tool,
+            source_session_id: "s".into(),
+            project_path: None,
+            title: None,
+            cwd: None,
+            git_branch: None,
+            model: None,
+            cli_version: None,
+            started_at: None,
+            ended_at: None,
+            is_archived: false,
+            raw_meta: serde_json::Value::Null,
+            totals: TokenUsage::default(),
+            messages: vec![NormalizedMessage {
+                seq: 0,
+                source_uuid: None,
+                parent_source_uuid: None,
+                role: Role::Assistant,
+                model: None,
+                stop_reason: None,
+                timestamp: None,
+                usage: None,
+                raw: serde_json::Value::Null,
+                blocks: vec![block],
+            }],
+        }
+    }
+
+    #[test]
+    fn claude_ref_without_path_input_is_skipped() {
+        // A Read tool_use whose input lacks the `file_path` key yields no ref.
+        let s = one_block_session(
+            Tool::ClaudeCode,
+            tool_use("Read", Some(serde_json::json!({"something_else": 1}))),
+        );
+        assert!(file_refs(&s).is_empty());
+        // ...and an unrecognized tool name also yields nothing (the `_ => return`).
+        let s2 = one_block_session(
+            Tool::ClaudeCode,
+            tool_use("Bash", Some(serde_json::json!({"command": "ls"}))),
+        );
+        assert!(file_refs(&s2).is_empty());
+    }
+
+    #[test]
+    fn codex_apply_patch_with_non_string_input_is_skipped() {
+        // apply_patch's input should be a raw JSON string; an object form is
+        // rejected (no refs) by the `Value::String` guard.
+        let s = one_block_session(
+            Tool::Codex,
+            tool_use("apply_patch", Some(serde_json::json!({"patch": "x"}))),
+        );
+        assert!(file_refs(&s).is_empty());
+        // A non-apply_patch Codex tool is ignored entirely.
+        let s2 = one_block_session(
+            Tool::Codex,
+            tool_use("shell", Some(serde_json::json!("ls -la"))),
+        );
+        assert!(file_refs(&s2).is_empty());
     }
 
     #[test]

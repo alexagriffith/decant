@@ -1313,6 +1313,138 @@ mod tests {
     }
 
     #[test]
+    fn cost_concentration_quiet_when_no_models_or_no_dominance() {
+        // No models at all → no signal (empty `models.first()`).
+        assert!(cost_concentration(&[]).is_empty());
+
+        // Two models, neither at 40% of total → no signal (the else branch).
+        let split = vec![
+            stats::DimRow {
+                key: "a".into(),
+                sessions: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                estimated_cost_usd: 5.0,
+            },
+            stats::DimRow {
+                key: "b".into(),
+                sessions: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                estimated_cost_usd: 5.0,
+            },
+        ];
+        // Top is 50% here — that *would* fire. Make it not dominate:
+        let balanced = vec![
+            stats::DimRow {
+                key: "a".into(),
+                sessions: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                estimated_cost_usd: 3.0,
+            },
+            stats::DimRow {
+                key: "b".into(),
+                sessions: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                estimated_cost_usd: 3.0,
+            },
+            stats::DimRow {
+                key: "c".into(),
+                sessions: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                estimated_cost_usd: 3.0,
+            },
+        ];
+        assert!(
+            cost_concentration(&balanced).is_empty(),
+            "33% top share is below the 40% threshold"
+        );
+        // Zero total cost → no signal even with a top row.
+        let _ = split; // (50% would fire; kept only to document the boundary)
+        let zero = vec![stats::DimRow {
+            key: "a".into(),
+            sessions: 1,
+            input_tokens: 0,
+            output_tokens: 0,
+            estimated_cost_usd: 0.0,
+        }];
+        assert!(cost_concentration(&zero).is_empty(), "no spend, no signal");
+    }
+
+    #[test]
+    fn search_heavy_quiet_when_ratio_below_threshold() {
+        let conn = base();
+        // 20 in-window sessions but only one Grep call total → ratio far below
+        // SEARCH_HEAVY_RATIO, so the signal does not fire.
+        for i in 0..20 {
+            conn.execute(
+                "INSERT INTO session(id, tool, source_session_id, project_id, started_at)
+                 VALUES (?1, 'claude_code', 'lo' || ?1, 1, datetime('now'))",
+                params![600 + i],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO tool_call(session_id, tool_kind, tool_name, timestamp)
+             VALUES (600, 'builtin', 'Grep', datetime('now'))",
+            [],
+        )
+        .unwrap();
+        let recs = signals(&conn).unwrap();
+        assert!(!keys(&recs).contains(&"signal:search-heavy".to_string()));
+    }
+
+    #[test]
+    fn abandoned_rate_quiet_at_or_below_threshold() {
+        let conn = base();
+        // 12 classified, 3 abandoned = 25% which is NOT > 25% → no signal.
+        for i in 0..12 {
+            let outcome = if i < 3 { "abandoned" } else { "completed" };
+            conn.execute(
+                "INSERT INTO session(id, tool, source_session_id, project_id, started_at, outcome)
+                 VALUES (?1, 'claude_code', 'aq' || ?1, 1, datetime('now'), ?2)",
+                params![700 + i, outcome],
+            )
+            .unwrap();
+        }
+        let recs = signals(&conn).unwrap();
+        assert!(!keys(&recs).contains(&"signal:abandoned-rate".to_string()));
+    }
+
+    #[test]
+    fn search_heavy_propagates_db_error() {
+        // No `session` table -> the query_row `?` in `search_heavy` propagates.
+        let bare = db::open_in_memory().unwrap();
+        assert!(search_heavy(&bare).is_err());
+    }
+
+    #[test]
+    fn mark_implemented_propagates_db_error() {
+        // No `recommendation` table -> the UPDATE `?` in `mark_implemented`
+        // propagates.
+        let bare = db::open_in_memory().unwrap();
+        assert!(mark_implemented(&bare, "k", "agent", None).is_err());
+    }
+
+    #[test]
+    fn regenerate_propagates_insert_error() {
+        // `current` succeeds (it produces signals from the seeded data) and the
+        // INSERT statement prepares fine, but a BEFORE INSERT trigger aborts the
+        // per-recommendation `stmt.execute` so the loop-body `?` propagates.
+        let conn = base();
+        seed_tool(&conn, "fetch", "mcp", Some("svc"), 25, 5);
+        conn.execute_batch(
+            "CREATE TRIGGER block_rec BEFORE INSERT ON recommendation
+               BEGIN SELECT RAISE(ABORT, 'no insert'); END;",
+        )
+        .unwrap();
+        assert!(regenerate(&conn).is_err());
+    }
+
+    #[test]
     fn status_filter_parse() {
         assert_eq!(StatusFilter::parse("open"), Some(StatusFilter::Open));
         assert_eq!(

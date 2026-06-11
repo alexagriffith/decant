@@ -265,11 +265,69 @@ mod tests {
     }
 
     #[test]
+    fn list_sessions_filters_by_tool() {
+        let conn = seeded();
+        // Matching tool returns the session via the WHERE s.tool = ?1 branch.
+        let claude = list_sessions(
+            &conn,
+            &ListFilter {
+                tool: Some("claude_code".into()),
+                limit: 10,
+            },
+        )
+        .unwrap();
+        assert_eq!(claude.len(), 1);
+        // A non-matching tool filters everything out.
+        let codex = list_sessions(
+            &conn,
+            &ListFilter {
+                tool: Some("codex".into()),
+                limit: 10,
+            },
+        )
+        .unwrap();
+        assert!(codex.is_empty());
+    }
+
+    #[test]
+    fn get_session_unknown_id_is_none() {
+        let conn = seeded();
+        assert!(get_session(&conn, 999_999).unwrap().is_none());
+    }
+
+    #[test]
+    fn search_no_match_returns_empty() {
+        let conn = seeded();
+        assert!(search(&conn, "zzznotpresentzzz", 10).unwrap().is_empty());
+    }
+
+    #[test]
     fn list_projects_rolls_up() {
         let conn = seeded();
         let projects = list_projects(&conn).unwrap();
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].sessions, 1);
         assert_eq!(projects[0].path, "/Users/dev/proj");
+    }
+
+    #[test]
+    fn queries_propagate_db_errors() {
+        // An un-migrated DB has none of the tables, so each query's `prepare`/
+        // `query_map` `?` propagates the SQLite error.
+        let bare = db::open_in_memory().unwrap();
+        assert!(search(&bare, "x", 10).is_err());
+        assert!(get_session(&bare, 1).is_err());
+        assert!(list_projects(&bare).is_err());
+    }
+
+    #[test]
+    fn get_session_propagates_messages_query_error() {
+        // The summary query succeeds (session exists), then the messages query's
+        // `prepare` `?` fails because the `message` table is gone.
+        let conn = seeded();
+        let id = list_sessions(&conn, &ListFilter::default()).unwrap()[0].id;
+        conn.execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE message;")
+            .unwrap();
+        assert!(get_session(&conn, id).is_err());
     }
 }

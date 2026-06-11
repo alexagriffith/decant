@@ -92,12 +92,12 @@ defmodule Decant.Settings do
   defp sanitize(attrs) do
     attrs
     |> Map.new(fn {k, v} -> {to_atom(k), v} end)
+    # `Map.take` already restricts keys to exactly these three, so the filter only ever sees `:agent`/`:terminal`/`:ide`.
     |> Map.take([:agent, :terminal, :ide])
     |> Enum.filter(fn
       {:agent, v} -> v in @valid_agents
       {:terminal, v} -> v in @valid_terminals
       {:ide, v} -> v in @valid_ides
-      _ -> false
     end)
     |> Map.new()
   end

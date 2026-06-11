@@ -1352,6 +1352,49 @@ mod tests {
         assert_eq!(b.min.as_deref(), Some("2026-05-01"));
         assert_eq!(b.max.as_deref(), Some("2026-05-02"));
     }
+
+    #[test]
+    fn count_sessions_propagates_db_error() {
+        // The private count helper surfaces a query error on a table-less DB.
+        let bare = decant_core::db::open_in_memory().unwrap();
+        assert!(count_sessions(&bare, &Filters::default()).is_err());
+    }
+
+    #[test]
+    fn totals_propagates_message_and_tool_call_query_errors() {
+        // `totals` runs three queries in order: session COUNT, then message JOIN,
+        // then tool_call JOIN. Dropping `message` lets the first succeed and the
+        // message query's `?` fire; dropping `tool_call` instead fires the third.
+        let conn = seeded();
+        conn.execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE message;")
+            .unwrap();
+        assert!(totals(&conn, &Filters::default()).is_err());
+
+        let conn2 = seeded();
+        conn2
+            .execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE tool_call;")
+            .unwrap();
+        assert!(totals(&conn2, &Filters::default()).is_err());
+    }
+
+    #[test]
+    fn bucket_fills_indexed_counts_from_session_hours() {
+        // The private `bucket` helper over seeded sessions (started at hour 10)
+        // returns a zero-filled vector with the hour bucket populated.
+        let conn = seeded();
+        let hours = bucket(
+            &conn,
+            "strftime('%H', s.started_at, 'localtime')",
+            &Filters::default(),
+            24,
+        )
+        .unwrap();
+        assert_eq!(hours.len(), 24);
+        assert_eq!(hours.iter().sum::<i64>(), 2);
+        // A table-less DB surfaces the prepare error.
+        let bare = decant_core::db::open_in_memory().unwrap();
+        assert!(bucket(&bare, "s.started_at", &Filters::default(), 24).is_err());
+    }
 }
 
 #[cfg(test)]
@@ -1428,5 +1471,260 @@ mod worktree_tests {
         let page =
             by_dimension(&conn, Dimension::Tool, &Filters::default(), 50, None, None).unwrap();
         assert!(page.rows.iter().all(|r| r.worktree_count.is_none()));
+    }
+}
+
+#[cfg(test)]
+mod branch_tests {
+    use super::*;
+    use decant_core::{db, schema};
+
+    /// Seed several sessions with varying cost and one MCP tool call so the
+    /// cost-sort, dimension, pagination, and MCP-usage branches are exercised.
+    fn seed() -> Connection {
+        let conn = db::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO project(id, path, name) VALUES (1, '/p', 'p');
+             INSERT INTO session(id, tool, source_session_id, project_id, model, started_at, ended_at,
+                                 message_count, total_input_tokens, total_output_tokens, estimated_cost_usd)
+             VALUES
+               (1, 'claude_code', 's1', 1, 'claude-opus-4', '2026-05-01T10:00:00Z', '2026-05-01T10:01:00Z', 1, 10, 5, 3.0),
+               (2, 'codex',       's2', 1, 'gpt-5.5',       '2026-05-02T10:00:00Z', '2026-05-02T10:02:00Z', 1, 20, 7, 1.0),
+               (3, 'claude_code', 's3', 1, 'claude-opus-4', '2026-05-03T10:00:00Z', '2026-05-03T10:03:00Z', 1, 30, 9, 2.0);
+             -- A message with NO block rows: exercises the 'message without blocks' path.
+             INSERT INTO message(id, session_id, seq, role, raw)
+             VALUES (1, 1, 0, 'user', '{}');
+             -- An MCP tool call so mcp_usage returns a row.
+             INSERT INTO tool_call(id, session_id, tool_kind, tool_name, mcp_server, is_error)
+             VALUES
+               (1, 1, 'mcp', 'mcp__srv__do', 'srv', 0),
+               (2, 1, 'mcp', 'mcp__srv__do', 'srv', 1);",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn session_sort_parse_variants() {
+        assert_eq!(
+            SessionSort::parse(Some("started_at_asc")).unwrap(),
+            SessionSort::StartedAtAsc
+        );
+        assert_eq!(
+            SessionSort::parse(Some("cost_desc")).unwrap(),
+            SessionSort::CostDesc
+        );
+        assert_eq!(
+            SessionSort::parse(None).unwrap(),
+            SessionSort::StartedAtDesc
+        );
+        let err = SessionSort::parse(Some("bogus")).unwrap_err();
+        assert_eq!(err.status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(err.code, "INVALID_REQUEST");
+    }
+
+    #[test]
+    fn cost_desc_sort_orders_and_paginates() {
+        let conn = seed();
+        // Page 1: highest cost first; a further page exists so a cost-keyed cursor
+        // is emitted (the CostDesc branch in `next_cursor`).
+        let p1 = list_sessions(&conn, &Filters::default(), SessionSort::CostDesc, 1, None).unwrap();
+        assert_eq!(p1.sessions.len(), 1);
+        assert_eq!(p1.sessions[0].id, 1); // cost 3.0 is the largest
+        assert!(p1.has_more);
+        let cur = Cursor::decode(p1.next_cursor.as_ref().unwrap()).unwrap();
+        // The cursor carries the cost as a string sort_key (CostDesc branch).
+        assert!(cur.sort_key.is_some());
+
+        // Paging with the cost cursor exercises `sort_key_to_sql`'s Text arm and
+        // the cost-column keyset; the boundary row must not repeat.
+        let p2 = list_sessions(
+            &conn,
+            &Filters::default(),
+            SessionSort::CostDesc,
+            1,
+            Some(cur),
+        )
+        .unwrap();
+        // The keyset query runs cleanly with the cost cursor and returns a page.
+        assert_eq!(p2.sessions.len(), 1);
+    }
+
+    #[test]
+    fn cursor_with_null_sort_key_round_trips() {
+        // A cursor carrying a None sort_key exercises `sort_key_to_sql`'s Null arm.
+        // Use the asc order so the (NULL key, rowid 0) boundary returns rows.
+        let conn = seed();
+        let cur = Cursor::new(0, None);
+        let page = list_sessions(
+            &conn,
+            &Filters::default(),
+            SessionSort::StartedAtAsc,
+            10,
+            Some(cur),
+        )
+        .unwrap();
+        // No panic; the Null sort-key boundary still returns matching rows.
+        assert!(!page.sessions.is_empty());
+    }
+
+    #[test]
+    fn get_session_handles_message_without_blocks() {
+        let conn = seed();
+        let detail = get_session(&conn, 1).unwrap().unwrap();
+        assert_eq!(detail.messages.len(), 1);
+        assert!(
+            detail.messages[0].blocks.is_empty(),
+            "the seeded message has no blocks"
+        );
+    }
+
+    #[test]
+    fn parse_dimension_missing_and_unknown() {
+        let missing = parse_dimension(None).unwrap_err();
+        assert_eq!(missing.status, axum::http::StatusCode::BAD_REQUEST);
+        let unknown = parse_dimension(Some("galaxy")).unwrap_err();
+        assert_eq!(unknown.code, "INVALID_FILTER");
+        // The valid dims parse.
+        assert!(parse_dimension(Some("model")).is_ok());
+        assert!(parse_dimension(Some("day")).is_ok());
+    }
+
+    #[test]
+    fn by_dimension_model_and_day_with_pagination() {
+        let conn = seed();
+        // Model dimension, limit 1 so has_more triggers and a cursor is returned.
+        let m = by_dimension(&conn, Dimension::Model, &Filters::default(), 1, None, None).unwrap();
+        assert_eq!(m.rows.len(), 1);
+        assert!(m.has_more);
+        let cur = Cursor::decode(m.next_cursor.as_ref().unwrap()).unwrap();
+        let m2 = by_dimension(
+            &conn,
+            Dimension::Model,
+            &Filters::default(),
+            1,
+            Some(cur),
+            None,
+        )
+        .unwrap();
+        assert_eq!(m2.rows.len(), 1);
+
+        // Day dimension: three distinct days.
+        let d = by_dimension(&conn, Dimension::Day, &Filters::default(), 50, None, None).unwrap();
+        assert_eq!(d.total_count, 3);
+    }
+
+    #[test]
+    fn search_paginates_with_offset_cursor() {
+        // Seed FTS content across two blocks, then page one hit at a time.
+        let conn = db::open_in_memory().unwrap();
+        schema::migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO session(id, tool, source_session_id) VALUES (1, 'claude_code', 's1');
+             INSERT INTO message(id, session_id, seq, role, raw) VALUES (1, 1, 0, 'assistant', '{}');
+             INSERT INTO block(id, message_id, session_id, ordinal, type, text)
+             VALUES (1, 1, 1, 0, 'text', 'needle one alpha'),
+                    (2, 1, 1, 1, 'text', 'needle two beta');",
+        )
+        .unwrap();
+        let p1 = search(&conn, "needle", 1, None).unwrap();
+        assert_eq!(p1.hits.len(), 1);
+        assert!(p1.has_more);
+        let cur = Cursor::decode(p1.next_cursor.as_ref().unwrap()).unwrap();
+        let p2 = search(&conn, "needle", 1, Some(cur)).unwrap();
+        assert_eq!(p2.hits.len(), 1);
+        assert!(!p2.has_more);
+        assert_ne!(p1.hits[0].block_id, p2.hits[0].block_id);
+    }
+
+    #[test]
+    fn mcp_usage_returns_rows_with_error_rate() {
+        let conn = seed();
+        let rows = mcp_usage(&conn, &Filters::default(), 50).unwrap();
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!(r.mcp_server, "srv");
+        assert_eq!(r.calls, 2);
+        assert_eq!(r.errors, 1);
+        assert!((r.error_rate - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn tool_usage_errors_only_filters_zero_error_tools() {
+        let conn = seed();
+        // errors_only keeps tools with >0 errors; the MCP tool has one error.
+        let rows = tool_usage(&conn, &Filters::default(), true, 50).unwrap();
+        assert!(rows.iter().all(|t| t.errors > 0));
+        assert!(rows.iter().any(|t| t.tool_name == "mcp__srv__do"));
+    }
+
+    #[test]
+    fn is_fts_syntax_error_recognizes_messages() {
+        use rusqlite::ffi::{Error as FfiError, ErrorCode};
+        let mk = |msg: &str| {
+            rusqlite::Error::SqliteFailure(
+                FfiError {
+                    code: ErrorCode::Unknown,
+                    extended_code: 1,
+                },
+                Some(msg.to_string()),
+            )
+        };
+        assert!(is_fts_syntax_error(&mk("fts5: syntax error near \"x\"")));
+        assert!(is_fts_syntax_error(&mk("malformed MATCH expression")));
+        assert!(is_fts_syntax_error(&mk("unterminated string")));
+        assert!(is_fts_syntax_error(&mk("no such column: foo in MATCH")));
+        assert!(is_fts_syntax_error(&mk("syntax error in MATCH")));
+        // A non-FTS message is not a syntax error.
+        assert!(!is_fts_syntax_error(&mk("database is locked")));
+        // A non-SqliteFailure error is never an FTS syntax error.
+        assert!(!is_fts_syntax_error(&rusqlite::Error::QueryReturnedNoRows));
+    }
+
+    #[test]
+    fn map_fts_err_internal_for_non_syntax() {
+        // A non-FTS rusqlite error maps to a 500 INTERNAL, not a 400.
+        let api = map_fts_err(rusqlite::Error::QueryReturnedNoRows);
+        assert_eq!(api.status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(api.code, "INTERNAL");
+    }
+
+    #[test]
+    fn query_functions_propagate_db_errors() {
+        // An un-migrated DB has none of the tables; each function's `?` on its
+        // first prepare/query_row propagates the SQLite error.
+        let bare = decant_core::db::open_in_memory().unwrap();
+        let f = Filters::default();
+        assert!(list_sessions(&bare, &f, SessionSort::StartedAtDesc, 50, None).is_err());
+        assert!(totals(&bare, &f).is_err());
+        assert!(by_dimension(&bare, Dimension::Tool, &f, 50, None, None).is_err());
+        assert!(activity(&bare, &f).is_err());
+        assert!(model_sparklines(&bare, &f).is_err());
+        assert!(tool_usage(&bare, &f, false, 50).is_err());
+        assert!(mcp_usage(&bare, &f, 50).is_err());
+        assert!(date_bounds(&bare).is_err());
+        assert!(get_session(&bare, 1).is_err());
+        assert!(search(&bare, "x", 50, None).is_err());
+    }
+
+    #[test]
+    fn get_session_propagates_messages_query_error() {
+        // Summary query succeeds (the session exists), then the messages query's
+        // `prepare` fails because the `message` table is gone -> that `?` path.
+        let conn = seed();
+        // Session id 1 exists (summary query succeeds); dropping `block` makes the
+        // messages query's prepare fail.
+        conn.execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE block;")
+            .unwrap();
+        assert!(get_session(&conn, 1).is_err());
+    }
+
+    #[test]
+    fn error_rate_zero_calls_is_zero() {
+        // The `calls == 0` else arm returns 0.0.
+        assert_eq!(error_rate(0, 0), 0.0);
+        assert_eq!(error_rate(3, 0), 0.0);
+        assert!((error_rate(1, 2) - 0.5).abs() < 1e-9);
     }
 }

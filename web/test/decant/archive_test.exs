@@ -267,5 +267,62 @@ defmodule Decant.ArchiveTest do
     test "is empty because the fixture has no MCP tool calls" do
       assert Archive.mcp_usage() == []
     end
+
+    test "maps server rows when the daemon returns them" do
+      stub(Decant.Daemon, :mcp_usage, fn _opts ->
+        {:ok, [%{"mcp_server" => "github", "tools" => 4, "calls" => 12, "errors" => 1}], %{}}
+      end)
+
+      assert [row] = Archive.mcp_usage()
+      assert row.server == "github"
+      assert row.tools == 4
+      assert row.calls == 12
+      assert row.errors == 1
+    end
+
+    test "returns [] when the daemon is unreachable" do
+      stub(Decant.Daemon, :mcp_usage, fn _opts -> {:error, :service_unavailable} end)
+      assert Archive.mcp_usage() == []
+    end
+  end
+
+  describe "graceful degradation and mapping edge cases" do
+    test "search returns [] when the daemon is unreachable" do
+      stub(Decant.Daemon, :search, fn _q, _opts -> {:error, :service_unavailable} end)
+      assert Archive.search("auth") == []
+    end
+
+    test "tool_usage returns [] when the daemon is unreachable" do
+      stub(Decant.Daemon, :tools_usage, fn _opts -> {:error, :service_unavailable} end)
+      assert Archive.tool_usage() == []
+    end
+
+    test "model_sparklines returns %{} when the daemon is unreachable" do
+      stub(Decant.Daemon, :model_sparklines, fn _opts -> {:error, :service_unavailable} end)
+      assert Archive.model_sparklines() == %{}
+    end
+
+    test "date_bounds returns nils when the daemon is unreachable" do
+      stub(Decant.Daemon, :date_bounds, fn -> {:error, :service_unavailable} end)
+      assert Archive.date_bounds() == %{min: nil, max: nil}
+    end
+
+    test "activity pads/zeros a malformed (non-list) histogram payload" do
+      stub(Decant.Daemon, :activity, fn _opts ->
+        {:ok, %{"by_hour" => "nope", "by_weekday" => nil}}
+      end)
+
+      a = Archive.activity()
+      assert a.by_hour == List.duplicate(0, 24)
+      assert a.by_weekday == List.duplicate(0, 7)
+    end
+
+    test "list_sessions accepts an ISO date string for from/to" do
+      assert [%{id: 1}] = Archive.list_sessions(%{from: "2026-05-01", to: "2026-05-01"})
+    end
+
+    test "list_sessions treats an empty-string date as no bound" do
+      assert length(Archive.list_sessions(%{from: "", to: ""})) == 2
+    end
   end
 end

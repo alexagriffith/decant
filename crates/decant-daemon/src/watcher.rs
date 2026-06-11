@@ -154,4 +154,69 @@ mod tests {
             "path hook must observe the written file, saw {seen:?}"
         );
     }
+
+    #[tokio::test]
+    async fn watcher_without_path_hook_still_triggers() {
+        // No `on_path` hook: exercises the `Some(hook)` = None branch in the
+        // notify callback. A write must still produce a debounced trigger.
+        let dir = tempfile::tempdir().unwrap();
+        let watched = dir.path().join("projects");
+        std::fs::create_dir_all(&watched).unwrap();
+
+        let (tx, mut rx) = mpsc::channel::<()>(8);
+        let _w = SourceWatcher::start(vec![watched.clone()], tx, Duration::from_millis(100), None)
+            .unwrap();
+
+        std::fs::write(watched.join("sess.jsonl"), "{}\n").unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await;
+        assert!(
+            matches!(got, Ok(Some(()))),
+            "expected a debounced sync trigger without a path hook, got {got:?}"
+        );
+    }
+
+    #[test]
+    fn debounce_loop_returns_when_raw_channel_disconnects_in_quiet_window() {
+        // Send one event, then drop the raw sender while the loop is inside the
+        // quiet window: `recv_timeout` returns Disconnected and the loop returns.
+        let (raw_tx, raw_rx) = std_mpsc::channel::<()>();
+        let (trigger_tx, _trigger_rx) = mpsc::channel::<()>(8);
+        raw_tx.send(()).unwrap();
+        drop(raw_tx); // disconnect: the quiet-window recv sees Disconnected.
+
+        let h = std::thread::spawn(move || {
+            debounce_loop(raw_rx, trigger_tx, Duration::from_secs(30));
+        });
+        // The loop must return promptly (it sees Disconnected, not a 30s timeout).
+        let start = std::time::Instant::now();
+        h.join().unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "debounce_loop must return on disconnect without waiting out the window"
+        );
+    }
+
+    #[test]
+    fn debounce_loop_returns_when_trigger_receiver_gone() {
+        // The trigger receiver is dropped, so `blocking_send` fails and the loop
+        // returns rather than spinning.
+        let (raw_tx, raw_rx) = std_mpsc::channel::<()>();
+        let (trigger_tx, trigger_rx) = mpsc::channel::<()>(8);
+        drop(trigger_rx); // no one to receive the trigger.
+
+        let h = std::thread::spawn(move || {
+            debounce_loop(raw_rx, trigger_tx, Duration::from_millis(20));
+        });
+        // One event drives the loop through the quiet window to the failed send.
+        raw_tx.send(()).unwrap();
+        let start = std::time::Instant::now();
+        h.join().unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "debounce_loop must return when the trigger receiver is gone"
+        );
+        // Keep raw_tx alive until after join so the loop exits via the send-failure
+        // path (line 90), not via raw-channel disconnect.
+        drop(raw_tx);
+    }
 }

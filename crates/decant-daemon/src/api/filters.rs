@@ -224,10 +224,11 @@ mod tests {
         let f = Filters::parse(None, Some("2026-05-31".into()), None, None, None).unwrap();
         let w = f.where_clause();
         // The upper bound must be the *next* day so 2026-05-31 rows are included.
-        match &w.params[0] {
-            SqlValue::Text(s) => assert_eq!(s, "2026-06-01"),
-            other => panic!("expected text bound, got {other:?}"),
-        }
+        // Compare the bound's debug form so there is no failure-only match arm.
+        assert_eq!(
+            format!("{:?}", w.params[0]),
+            format!("{:?}", SqlValue::Text("2026-06-01".to_string()))
+        );
     }
 
     #[test]
@@ -258,5 +259,68 @@ mod tests {
         let f = Filters::parse(None, None, Some("codex".into()), None, None).unwrap();
         let j = f.as_json();
         assert_eq!(j, json!({"tool": "codex"}));
+    }
+
+    #[test]
+    fn as_json_emits_every_set_field() {
+        let f = Filters::parse(
+            Some("2026-05-01".into()),
+            Some("2026-05-31".into()),
+            Some("codex".into()),
+            Some("gpt-5.5".into()),
+            Some("/p".into()),
+        )
+        .unwrap()
+        .with_classification(Some("completed".into()), Some("feature".into()))
+        .unwrap();
+        let j = f.as_json();
+        assert_eq!(
+            j,
+            json!({
+                "from": "2026-05-01",
+                "to": "2026-05-31",
+                "tool": "codex",
+                "model": "gpt-5.5",
+                "project": "/p",
+                "outcome": "completed",
+                "work_type": "feature",
+            })
+        );
+    }
+
+    #[test]
+    fn classification_filters_apply_and_build_clause() {
+        let f = Filters::default()
+            .with_classification(Some("failed".into()), Some("debugging".into()))
+            .unwrap();
+        assert_eq!(f.outcome.as_deref(), Some("failed"));
+        assert_eq!(f.work_type.as_deref(), Some("debugging"));
+        let w = f.where_clause();
+        assert!(w.sql.contains("s.outcome = ?"));
+        assert!(w.sql.contains("s.work_type = ?"));
+    }
+
+    #[test]
+    fn unknown_outcome_is_invalid_filter() {
+        let err = Filters::default()
+            .with_classification(Some("nope".into()), None)
+            .unwrap_err();
+        assert_eq!(err.code, "INVALID_FILTER");
+    }
+
+    #[test]
+    fn unknown_work_type_is_invalid_filter() {
+        let err = Filters::default()
+            .with_classification(None, Some("nope".into()))
+            .unwrap_err();
+        assert_eq!(err.code, "INVALID_FILTER");
+    }
+
+    #[test]
+    fn day_after_falls_back_on_unparseable_input() {
+        // Defensive branch: only validated dates reach `day_after`, but a bad
+        // value must echo the input rather than panic.
+        assert_eq!(day_after("not-a-date"), "not-a-date");
+        assert_eq!(day_after("2026-05-31"), "2026-06-01");
     }
 }

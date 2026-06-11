@@ -17,8 +17,8 @@ const TOKEN: &str = "secret-token";
 
 /// Boot the router over a fresh migrated temp DB and return the base URL plus the
 /// change-event sender so the test can publish events the SSE handler fans out.
-async fn spawn() -> (String, ChangeSender) {
-    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+async fn spawn() -> (String, ChangeSender, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("d.db");
     {
         let conn = decant_core::db::open(&db_path).unwrap();
@@ -42,12 +42,12 @@ async fn spawn() -> (String, ChangeSender) {
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    (format!("http://127.0.0.1:{}", addr.port()), events)
+    (format!("http://127.0.0.1:{}", addr.port()), events, dir)
 }
 
 #[tokio::test]
 async fn events_requires_a_token() {
-    let (base, _tx) = spawn().await;
+    let (base, _tx, _dir) = spawn().await;
     let client = reqwest::Client::new();
 
     // No Authorization header -> 401 from the guard, before any stream opens.
@@ -61,7 +61,7 @@ async fn events_requires_a_token() {
 
 #[tokio::test]
 async fn events_streams_archive_updated_frame() {
-    let (base, tx) = spawn().await;
+    let (base, tx, _dir) = spawn().await;
     let client = reqwest::Client::new();
 
     let resp = client
@@ -130,4 +130,57 @@ async fn events_streams_archive_updated_frame() {
     assert_eq!(json["type"], "archive_updated");
     assert_eq!(json["ingested"], 2);
     assert_eq!(json["last_sync_at"], "2026-06-07T12:00:00Z");
+}
+
+#[tokio::test]
+async fn events_lagged_subscriber_gets_resync_frame() {
+    // When a subscriber falls behind the broadcast buffer, the SSE handler
+    // collapses the `Lagged` error into a single `resync` frame (events.rs).
+    let (base, tx, _dir) = spawn().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/api/v1/events"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+
+    // Flood far past the 64-event buffer in tight bursts (no awaits between
+    // sends) so the handler's receiver wraps and reports `Lagged`. Retry the
+    // burst until the reader observes the resulting `resync` frame.
+    let frame = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            for _ in 0..2000 {
+                tx.send(ChangeEvent::archive_updated(1, "2026-06-07T12:00:00Z").into())
+                    .ok();
+            }
+            // Give the server task a moment to poll the lagged receiver.
+            match tokio::time::timeout(Duration::from_millis(200), stream.next()).await {
+                Ok(Some(chunk)) => {
+                    buf.push_str(&String::from_utf8_lossy(&chunk.expect("chunk")));
+                    if buf.contains("event: resync") {
+                        return buf.clone();
+                    }
+                }
+                Ok(None) => panic!("stream ended unexpectedly; saw: {buf:?}"),
+                Err(_) => continue, // no frame yet; flood again
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for a resync frame");
+
+    assert!(
+        frame.contains("event: resync"),
+        "expected a resync frame, saw: {frame:?}"
+    );
+    assert!(
+        frame.contains(r#"{"type":"resync"}"#),
+        "resync frame must carry the resync payload, saw: {frame:?}"
+    );
 }
