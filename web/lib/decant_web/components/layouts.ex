@@ -19,7 +19,7 @@ defmodule DecantWeb.Layouts do
   @doc """
   The application shell. Wrap each LiveView's content in it:
 
-      <Layouts.app flash={@flash} active={:sessions} page_title="Sessions" syncing={@syncing}>
+      <Layouts.app flash={@flash} active={:sessions} page_title="Sessions">
         ...
         <:actions>...</:actions>
       </Layouts.app>
@@ -27,7 +27,6 @@ defmodule DecantWeb.Layouts do
   attr :flash, :map, required: true, doc: "the map of flash messages"
   attr :active, :atom, default: nil, doc: "the active nav key"
   attr :page_title, :string, default: nil, doc: "title shown in the top bar"
-  attr :syncing, :boolean, default: false, doc: "whether a sync is in progress"
   attr :daemon_ready, :boolean, default: true, doc: "whether the decant daemon is reachable"
   attr :metrics, :map, default: nil, doc: "archive snapshot for the sidebar footer"
   attr :current_scope, :map, default: nil
@@ -121,19 +120,6 @@ defmodule DecantWeb.Layouts do
           </.link>
 
           {render_slot(@actions)}
-
-          <button
-            phx-click="sync"
-            disabled={@syncing}
-            class={[
-              "inline-flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5",
-              "text-sm font-medium text-fg transition-colors hover:bg-elevated hover:border-line-strong",
-              "disabled:opacity-60 disabled:pointer-events-none"
-            ]}
-          >
-            <.icon name="hero-arrow-path" class={["size-4", @syncing && "animate-spin"]} />
-            <span class="hidden sm:inline">{(@syncing && "Syncing…") || "Sync"}</span>
-          </button>
 
           <.link
             navigate={~p"/settings"}

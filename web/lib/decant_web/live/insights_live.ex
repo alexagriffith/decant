@@ -74,7 +74,6 @@ defmodule DecantWeb.InsightsLive do
       flash={@flash}
       active={:insights}
       page_title="Insights"
-      syncing={@syncing}
       daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >

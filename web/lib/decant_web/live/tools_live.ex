@@ -48,7 +48,6 @@ defmodule DecantWeb.ToolsLive do
       flash={@flash}
       active={:tools}
       page_title="Tools & MCP"
-      syncing={@syncing}
       daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >

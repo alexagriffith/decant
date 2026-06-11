@@ -40,7 +40,6 @@ defmodule DecantWeb.SessionLive.Search do
       flash={@flash}
       active={:search}
       page_title="Search"
-      syncing={@syncing}
       daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >

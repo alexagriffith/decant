@@ -141,7 +141,6 @@ defmodule DecantWeb.AnalyticsLive do
       flash={@flash}
       active={:analytics}
       page_title="Analytics"
-      syncing={@syncing}
       daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >
@@ -358,7 +357,11 @@ defmodule DecantWeb.AnalyticsLive do
                     class="border-b border-line/40 bg-elevated/40"
                   >
                     <td class="truncate px-4 py-2 pl-10 font-mono text-xs text-muted">
-                      wt: {w.worktree_label || basename(w.key)}<span :if={w.worktree_tool}>&nbsp;({w.worktree_tool})</span>
+                      <%= if w.key == r.key do %>
+                        root
+                      <% else %>
+                        wt: {w.worktree_label || basename(w.key)}<span :if={w.worktree_tool}>&nbsp;({w.worktree_tool})</span>
+                      <% end %>
                     </td>
                     <td class="px-4 py-2 text-right tabular-nums text-muted">{int(w.sessions)}</td>
                     <td class="px-4 py-2 text-right tabular-nums text-muted">{money(w.cost)}</td>

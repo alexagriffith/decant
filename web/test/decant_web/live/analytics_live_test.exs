@@ -95,6 +95,9 @@ defmodule DecantWeb.AnalyticsLiveTest do
     assert html =~ "warp"
     # Disclosure arrow should flip to ▾ when expanded.
     assert html =~ "▾"
+    # The root checkout's own leaf row reads "root" — it is not a worktree.
+    assert html =~ ~r/>\s*root\s*</
+    refute html =~ "wt: dosu"
   end
 
   test "collapses per-worktree rows on second click", %{conn: conn} do

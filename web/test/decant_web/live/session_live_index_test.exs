@@ -26,23 +26,11 @@ defmodule DecantWeb.SessionLive.IndexTest do
     assert html =~ "gpt-5.4"
   end
 
-  test "renders the refresh control without shelling out", %{conn: conn} do
+  test "renders no manual sync control — the daemon keeps the archive live", %{conn: conn} do
     {:ok, view, html} = live(conn, ~p"/")
 
-    assert html =~ "Sync"
-    assert has_element?(view, "button[phx-click=\"sync\"]")
-  end
-
-  test "the sync button re-fetches the page and flashes (no shelling out)", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/")
-
-    html =
-      view
-      |> element("button[phx-click=\"sync\"]")
-      |> render_click()
-
-    assert html =~ "Refreshed."
-    assert html =~ "Fix the failing auth test"
+    refute has_element?(view, ~s{button[phx-click="sync"]})
+    assert html =~ "Live and auto-syncing"
   end
 
   test "links each session row to its detail page", %{conn: conn} do

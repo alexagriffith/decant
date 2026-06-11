@@ -47,7 +47,6 @@ defmodule DecantWeb.SessionLive.Show do
       flash={@flash}
       active={:sessions}
       page_title={@detail.summary.title || "Session"}
-      syncing={@syncing}
       daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >

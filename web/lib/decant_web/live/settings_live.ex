@@ -35,7 +35,6 @@ defmodule DecantWeb.SettingsLive do
       flash={@flash}
       active={:settings}
       page_title="Settings"
-      syncing={@syncing}
       daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >

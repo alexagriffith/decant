@@ -73,7 +73,6 @@ defmodule DecantWeb.FilesLive do
       flash={@flash}
       active={:files}
       page_title="Files"
-      syncing={@syncing}
       daemon_ready={@daemon_ready}
       metrics={@archive_meta}
     >
