@@ -168,3 +168,21 @@ db-info *ARGS:
 [group('data')]
 hooks:
     pre-commit install
+
+# ── macOS menu bar ───────────────────────────────────────────────────
+
+# Build Decant.app and open it (menu bar drop icon)
+[group('macos')]
+menubar:
+    bash macos/bundle.sh
+    open macos/build/Decant.app
+
+# Build the menu bar app bundle without launching
+[group('macos')]
+menubar-build:
+    bash macos/bundle.sh
+
+# DecantKit tests (swift-testing)
+[group('macos')]
+menubar-test:
+    cd macos && swift test

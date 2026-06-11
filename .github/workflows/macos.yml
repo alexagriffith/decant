@@ -1,0 +1,26 @@
+name: macOS
+
+on:
+  push:
+    branches: [main]
+    paths: ["macos/**", ".github/workflows/macos.yml"]
+  pull_request:
+    paths: ["macos/**", ".github/workflows/macos.yml"]
+
+concurrency:
+  group: macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    name: Swift (build, test)
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: macos
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build -c release
+      - name: Test
+        run: swift test
