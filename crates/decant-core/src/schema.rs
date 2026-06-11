@@ -4,7 +4,7 @@ use rusqlite::Connection;
 pub const SCHEMA_V1: &str = include_str!("schema_v1.sql");
 
 /// The latest schema version `migrate` brings a database to.
-pub const LATEST_VERSION: i64 = 4;
+pub const LATEST_VERSION: i64 = 5;
 
 /// v2: the `recommendation` table (signals + evergreen catalog, materialized
 /// with state by `recommendations::regenerate`). `CREATE TABLE IF NOT EXISTS`
@@ -33,6 +33,21 @@ CREATE TABLE IF NOT EXISTS recommendation (
   implemented_at TEXT
 );";
 
+/// v5: indexes for every FK child column (and the re-ingest delete key).
+/// SQLite checks FK constraints and cascades per deleted parent row; without an
+/// index each check is a full scan of the child table, which made re-ingest of
+/// one active session read the entire archive thousands of times over and
+/// wedged the daemon's sync at ~100% CPU. `IF NOT EXISTS` makes this harmless
+/// on fresh DBs where the v1 batch already created them.
+const MIGRATION_V5: &str = "
+CREATE INDEX IF NOT EXISTS idx_session_source ON session(tool, source_session_id);
+CREATE INDEX IF NOT EXISTS idx_message_parent ON message(parent_id);
+CREATE INDEX IF NOT EXISTS idx_toolcall_message ON tool_call(message_id);
+CREATE INDEX IF NOT EXISTS idx_toolcall_call_block ON tool_call(call_block_id);
+CREATE INDEX IF NOT EXISTS idx_toolcall_result_block ON tool_call(result_block_id);
+CREATE INDEX IF NOT EXISTS idx_fileref_message ON file_ref(message_id);
+CREATE INDEX IF NOT EXISTS idx_ingest_source_session ON ingest_source(session_id);";
+
 /// Apply pending migrations. Idempotent: each version is applied at most once,
 /// gated by the highest recorded version in `schema_migrations`.
 pub fn migrate(conn: &Connection) -> Result<()> {
@@ -58,6 +73,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
     if current < 4 {
         apply_v4(conn)?;
+    }
+    if current < 5 {
+        apply(conn, 5, MIGRATION_V5)?;
     }
     Ok(())
 }
@@ -197,7 +215,7 @@ mod tests {
         let versions: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(versions, 4, "each migration recorded exactly once");
+        assert_eq!(versions, 5, "each migration recorded exactly once");
         let max: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
                 r.get(0)
@@ -244,6 +262,85 @@ mod tests {
             })
             .unwrap();
         assert_eq!(max, LATEST_VERSION);
+    }
+
+    #[test]
+    fn every_foreign_key_column_is_indexed() {
+        // An unindexed FK child column makes every parent-row delete scan the
+        // child table (SQLite checks cascades/constraints per deleted row).
+        // At archive scale that turns re-ingest's delete+reinsert into hours of
+        // full-table scans and wedges the daemon. Every FK's leftmost child
+        // column must be covered by an index (or be the table's sole PK).
+        let conn = db::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let tables: Vec<String> = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            )
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut missing: Vec<String> = Vec::new();
+        for table in &tables {
+            // Leftmost FK child column per FK (seq 0 of each foreign key).
+            let fk_cols: Vec<String> = conn
+                .prepare(&format!("PRAGMA foreign_key_list({table})"))
+                .unwrap()
+                .query_map([], |r| Ok((r.get::<_, i64>(1)?, r.get::<_, String>(3)?)))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .filter(|(seq, _)| *seq == 0)
+                .map(|(_, col)| col)
+                .collect();
+            if fk_cols.is_empty() {
+                continue;
+            }
+
+            // Leftmost column of every index on the table.
+            let index_names: Vec<String> = conn
+                .prepare(&format!("PRAGMA index_list({table})"))
+                .unwrap()
+                .query_map([], |r| r.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect();
+            let mut covered: Vec<String> = index_names
+                .iter()
+                .filter_map(|idx| {
+                    conn.query_row(&format!("PRAGMA index_info({idx})"), [], |r| {
+                        r.get::<_, String>(2)
+                    })
+                    .ok()
+                })
+                .collect();
+            // A single-column PRIMARY KEY is implicitly indexed (rowid alias).
+            let pk_cols: Vec<String> = conn
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap()
+                .query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, i64>(5)?)))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .filter(|(_, pk)| *pk > 0)
+                .map(|(name, _)| name)
+                .collect();
+            if pk_cols.len() == 1 {
+                covered.extend(pk_cols);
+            }
+
+            for col in fk_cols {
+                if !covered.contains(&col) {
+                    missing.push(format!("{table}.{col}"));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "FK columns without a covering index (parent deletes will full-scan): {missing:?}"
+        );
     }
 
     #[test]
@@ -307,7 +404,6 @@ mod tests {
             })
             .unwrap();
         assert_eq!(max, LATEST_VERSION);
-        assert_eq!(LATEST_VERSION, 4);
     }
 
     #[test]
@@ -319,6 +415,9 @@ mod tests {
             "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
              CREATE TABLE session(id INTEGER PRIMARY KEY, tool TEXT NOT NULL,
                                   source_session_id TEXT NOT NULL, is_archived INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE message(id INTEGER PRIMARY KEY, session_id INTEGER, parent_id INTEGER);
+             CREATE TABLE tool_call(id INTEGER PRIMARY KEY, session_id INTEGER, message_id INTEGER,
+                                    call_block_id INTEGER, result_block_id INTEGER);
              CREATE TABLE ingest_source(path TEXT PRIMARY KEY, tool TEXT, size INTEGER, mtime INTEGER,
                                         hash TEXT, session_id INTEGER REFERENCES session(id) ON DELETE SET NULL,
                                         line_count INTEGER, status TEXT, error TEXT, last_ingested_at TEXT);
@@ -352,7 +451,7 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(max, 4);
+        assert_eq!(max, LATEST_VERSION);
     }
 
     #[test]
@@ -394,8 +493,12 @@ mod tests {
             "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
              CREATE TABLE project(id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, name TEXT,
                                   first_seen_at TEXT, last_seen_at TEXT);
-             CREATE TABLE session(id INTEGER PRIMARY KEY, project_id INTEGER, started_at TEXT);
-             CREATE TABLE ingest_source(path TEXT PRIMARY KEY, size INTEGER, mtime INTEGER);
+             CREATE TABLE session(id INTEGER PRIMARY KEY, tool TEXT, source_session_id TEXT,
+                                  project_id INTEGER, started_at TEXT);
+             CREATE TABLE message(id INTEGER PRIMARY KEY, session_id INTEGER, parent_id INTEGER);
+             CREATE TABLE tool_call(id INTEGER PRIMARY KEY, session_id INTEGER, message_id INTEGER,
+                                    call_block_id INTEGER, result_block_id INTEGER);
+             CREATE TABLE ingest_source(path TEXT PRIMARY KEY, size INTEGER, mtime INTEGER, session_id INTEGER);
              INSERT INTO schema_migrations(version, applied_at) VALUES (2, datetime('now'));
              INSERT INTO project(path, name) VALUES ('/home/x/dosu/dosu', 'dosu');
              INSERT INTO project(path, name) VALUES ('/home/x/.warp-worktrees/dosu-agate-spire', 'dosu-agate-spire');",

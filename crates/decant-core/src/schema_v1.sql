@@ -190,6 +190,19 @@ CREATE INDEX IF NOT EXISTS idx_toolcall_name ON tool_call(tool_name);
 CREATE INDEX IF NOT EXISTS idx_fileref_session ON file_ref(session_id);
 CREATE INDEX IF NOT EXISTS idx_fileref_path ON file_ref(rel_path, operation);
 
+-- Every FK child column needs an index: parent deletes check constraints and
+-- cascades per deleted row, and an unindexed check is a full scan of the child
+-- table. Re-ingest (delete+reinsert per session) makes that quadratic at
+-- archive scale. idx_session_source additionally covers the re-ingest DELETE's
+-- own WHERE clause.
+CREATE INDEX IF NOT EXISTS idx_session_source ON session(tool, source_session_id);
+CREATE INDEX IF NOT EXISTS idx_message_parent ON message(parent_id);
+CREATE INDEX IF NOT EXISTS idx_toolcall_message ON tool_call(message_id);
+CREATE INDEX IF NOT EXISTS idx_toolcall_call_block ON tool_call(call_block_id);
+CREATE INDEX IF NOT EXISTS idx_toolcall_result_block ON tool_call(result_block_id);
+CREATE INDEX IF NOT EXISTS idx_fileref_message ON file_ref(message_id);
+CREATE INDEX IF NOT EXISTS idx_ingest_source_session ON ingest_source(session_id);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS block_fts USING fts5(
   text, tool_name, tool_input,
   content='block', content_rowid='id'

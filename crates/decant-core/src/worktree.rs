@@ -104,8 +104,11 @@ pub fn classify_intree(path: &str) -> Option<Resolution> {
 }
 
 /// External worktree container? Recognizes `.warp-worktrees`, `.t3-worktrees`
-/// (parent segment) and `conductor/workspaces` (two segments). Returns
-/// `(tool, leaf)` where `leaf` is the single directory under the container. No I/O.
+/// (parent segment), `conductor/workspaces` and Warp's current
+/// `.warp/worktrees/<repo>` (two segments). Returns `(tool, leaf)` where `leaf`
+/// is the directory under the container — for the nested Warp layout the repo
+/// is explicit, so the leaf is the composite `<repo>-<dir>` that the
+/// name-match and codename-strip paths already understand. No I/O.
 pub fn external_container(path: &str) -> Option<(&'static str, String)> {
     let (_, segs) = segments(path);
     for (i, seg) in segs.iter().enumerate() {
@@ -113,10 +116,15 @@ pub fn external_container(path: &str) -> Option<(&'static str, String)> {
             ".warp-worktrees" => Some("warp"),
             ".t3-worktrees" => Some("t3"),
             "workspaces" if i > 0 && segs[i - 1] == "conductor" => Some("conductor"),
+            "worktrees" if i > 0 && segs[i - 1] == ".warp" => Some("warp"),
             _ => None,
         };
         if let Some(tool) = tool {
-            if let Some(leaf) = segs.get(i + 1) {
+            if *seg == "worktrees" {
+                if let (Some(repo), Some(leaf)) = (segs.get(i + 1), segs.get(i + 2)) {
+                    return Some((tool, format!("{repo}-{leaf}")));
+                }
+            } else if let Some(leaf) = segs.get(i + 1) {
                 return Some((tool, leaf.to_string()));
             }
         }
@@ -440,6 +448,56 @@ mod tests {
             external_container("/Users/onlydole/.t3-worktrees/dosu-t3code-2d73eb17"),
             Some(("t3", "dosu-t3code-2d73eb17".to_string()))
         );
+    }
+
+    #[test]
+    fn external_container_detects_nested_warp_layout() {
+        // Warp's current layout: ~/.warp/worktrees/<repo>/<leaf>. The repo is
+        // explicit, so the returned leaf is the composite `<repo>-<leaf>` the
+        // name-match and codename-strip paths already understand.
+        assert_eq!(
+            external_container("/Users/onlydole/.warp/worktrees/astrocurious/joshua-ristra"),
+            Some(("warp", "astrocurious-joshua-ristra".to_string()))
+        );
+        // The bare repo grouping dir is a container, not a worktree.
+        assert_eq!(
+            external_container("/Users/onlydole/.warp/worktrees/astrocurious"),
+            None
+        );
+        // An unrelated `worktrees` segment is not Warp's container.
+        assert_eq!(
+            external_container("/Users/onlydole/oss/worktrees/decant"),
+            None
+        );
+    }
+
+    #[test]
+    fn nested_warp_leaf_namematches_known_root() {
+        let roots = vec![KnownRoot {
+            path: "/Users/onlydole/oss/astrocurious".into(),
+            basename: "astrocurious".into(),
+            sessions: 10,
+            last_seen: Some("2026-06-01".into()),
+        }];
+        let (tool, leaf) =
+            external_container("/Users/onlydole/.warp/worktrees/astrocurious/joshua-ristra")
+                .unwrap();
+        let r = classify_external(tool, &leaf, "/x", &roots);
+        assert_eq!(r.source, RootSource::NameMatch);
+        assert_eq!(r.root_path, "/Users/onlydole/oss/astrocurious");
+        assert_eq!(r.worktree_label.as_deref(), Some("joshua-ristra"));
+        assert_eq!(r.worktree_tool.as_deref(), Some("warp"));
+    }
+
+    #[test]
+    fn nested_warp_leaf_resolves_synthetically_without_a_known_root() {
+        let (tool, leaf) =
+            external_container("/Users/onlydole/.warp/worktrees/astrocurious/joshua-ristra")
+                .unwrap();
+        let r = classify_external(tool, &leaf, "/x", &[]);
+        assert_eq!(r.source, RootSource::Synthetic);
+        assert_eq!(r.root_path, "astrocurious", "two-word codename stripped");
+        assert_eq!(r.worktree_label.as_deref(), Some("joshua-ristra"));
     }
 
     #[test]

@@ -6,7 +6,7 @@ pub async fn health() -> Json<Value> {
     Json(json!({
         "data": {
             "api_version": crate::API_VERSION,
-            "db_schema_version": 1,
+            "db_schema_version": decant_core::schema::LATEST_VERSION,
             "status": "ok"
         },
         "meta": { "timestamp": null },

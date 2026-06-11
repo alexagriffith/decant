@@ -66,7 +66,7 @@ pub async fn by_dimension(
     Query(params): Query<ByDimensionParams>,
 ) -> Result<Envelope<serde_json::Value>, ApiError> {
     let dim = query::parse_dimension(params.dim.as_deref())?;
-    let root = params.root.clone().filter(|s| !s.is_empty());
+    let root = params.root.filter(|s| !s.is_empty());
     let filters = Filters::parse(
         params.from,
         params.to,

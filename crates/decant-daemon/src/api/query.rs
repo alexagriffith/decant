@@ -692,7 +692,7 @@ pub fn by_dimension(
         Dimension::Tool => ("s.tool", "", "NULL, NULL, NULL", ""),
         Dimension::Model => ("COALESCE(s.model, '(unknown)')", "", "NULL, NULL, NULL", ""),
         Dimension::Project if project_leaf => (
-            "COALESCE(p.path, '(none)')",
+            "p.path",
             "JOIN project p ON p.id = s.project_id",
             "NULL, MAX(p.worktree_label), MAX(p.worktree_tool)",
             "p.root_path = ? AND ",
