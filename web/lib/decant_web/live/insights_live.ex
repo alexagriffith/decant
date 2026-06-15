@@ -88,8 +88,8 @@ defmodule DecantWeb.InsightsLive do
         <section class="space-y-4">
           <div class="flex items-end justify-between gap-3">
             <div>
-              <h2 class="text-sm font-semibold tracking-tight">Signals</h2>
-              <p class="text-xs text-muted">Patterns worth acting on, ranked by impact</p>
+              <h2 class="text-sm font-semibold tracking-tight">Promotion candidates</h2>
+              <p class="text-xs text-muted">Data-backed lessons ranked by impact</p>
             </div>
             <span :if={@signals != []} class="shrink-0 text-xs text-faint tabular-nums">
               {length(@signals)} active
@@ -152,11 +152,12 @@ defmodule DecantWeb.InsightsLive do
                   </h4>
                 </div>
                 <p :if={c["detail"]} class="mt-2 text-sm text-muted">{c["detail"]}</p>
+                <.promotion_panel rec={c} id={"catalog-card-#{c["key"]}"} compact />
                 <div class="mt-auto flex items-center justify-between gap-2 pt-4">
                   <.agent_cta
                     :if={c["prompt"]}
                     id={"rec-#{c["key"]}"}
-                    prompt={c["prompt"]}
+                    prompt={handoff_prompt(c)}
                     mark_key={c["key"]}
                     agents={@agents}
                     default={@default_agent}
@@ -225,11 +226,12 @@ defmodule DecantWeb.InsightsLive do
             </span>
             <p class="mt-0.5 text-sm text-muted">{@signal["suggestion"]}</p>
           </div>
+          <.promotion_panel rec={@signal} id={"signal-card-#{@signal["key"]}"} />
           <div class="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
             <.agent_cta
               :if={@signal["prompt"]}
               id={"sig-#{@signal["key"]}"}
-              prompt={@signal["prompt"]}
+              prompt={handoff_prompt(@signal)}
               mark_key={@signal["key"]}
               agents={@agents}
               default={@default}
@@ -261,12 +263,19 @@ defmodule DecantWeb.InsightsLive do
       <div class="min-w-0 flex-1">
         <p class="truncate text-sm font-medium">{@signal["title"]}</p>
         <p :if={@signal["detail"]} class="truncate text-xs text-faint">{@signal["detail"]}</p>
+        <div
+          :if={promotion_card?(@signal)}
+          class="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-faint"
+        >
+          <span class="rounded border border-line px-1.5 py-0.5">{@signal["memory_layer"]}</span>
+          <span class="truncate">{@signal["promotion_target"]}</span>
+        </div>
       </div>
       <div class="shrink-0">
         <.agent_cta
           :if={@signal["prompt"]}
           id={"sig-#{@signal["key"]}"}
-          prompt={@signal["prompt"]}
+          prompt={handoff_prompt(@signal)}
           mark_key={@signal["key"]}
           agents={@agents}
           default={@default}
@@ -298,9 +307,93 @@ defmodule DecantWeb.InsightsLive do
     """
   end
 
+  attr :rec, :map, required: true
+  attr :id, :string, required: true
+  attr :compact, :boolean, default: false
+
+  defp promotion_panel(assigns) do
+    assigns =
+      assigns
+      |> assign(:has_card, promotion_card?(assigns.rec))
+      |> assign(:copy_id, "#{safe_id(assigns.id)}-copy")
+      |> assign(:copy_text, promotion_text(assigns.rec))
+
+    ~H"""
+    <div :if={@has_card} class={[(@compact && "mt-3") || "mt-4", "border-t border-line pt-3"]}>
+      <div class="mb-2 flex items-center justify-between gap-2">
+        <span class="text-[11px] font-semibold tracking-wider text-faint uppercase">
+          Memory card
+        </span>
+        <.copy_button id={@copy_id} text={@copy_text} title="Copy memory card" class="size-6" />
+      </div>
+      <dl class={[
+        "grid gap-x-4 gap-y-2 text-xs",
+        (@compact && "grid-cols-1") || "sm:grid-cols-2"
+      ]}>
+        <div>
+          <dt class="font-medium text-faint">Layer</dt>
+          <dd class="mt-0.5 text-muted">{@rec["memory_layer"]}</dd>
+        </div>
+        <div>
+          <dt class="font-medium text-faint">Promote to</dt>
+          <dd class="mt-0.5 text-muted">{@rec["promotion_target"]}</dd>
+        </div>
+        <div :if={!@compact} class="sm:col-span-2">
+          <dt class="font-medium text-faint">Trigger</dt>
+          <dd class="mt-0.5 text-muted">{@rec["trigger"]}</dd>
+        </div>
+        <div :if={!@compact} class="sm:col-span-2">
+          <dt class="font-medium text-faint">Done when</dt>
+          <dd class="mt-0.5 text-muted">{@rec["success_metric"]}</dd>
+        </div>
+      </dl>
+    </div>
+    """
+  end
+
   defp agent_label(agents, key) do
     Enum.find_value(agents, key, fn {k, l} -> if k == key, do: l end)
   end
+
+  defp promotion_card?(rec) do
+    present?(rec["memory_layer"]) or present?(rec["promotion_target"]) or present?(rec["trigger"]) or
+      present?(rec["evidence"]) or present?(rec["action"]) or present?(rec["success_metric"])
+  end
+
+  defp promotion_text(rec) do
+    [
+      "# #{rec["title"]}",
+      "Key: #{rec["key"]}",
+      field("Layer", rec["memory_layer"]),
+      field("Promote to", rec["promotion_target"]),
+      field("Trigger", rec["trigger"]),
+      field("Evidence", rec["evidence"]),
+      field("Action", rec["action"]),
+      field("Done when", rec["success_metric"])
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join("\n")
+  end
+
+  defp handoff_prompt(rec) do
+    [
+      rec["prompt"] || rec["action"] || rec["suggestion"],
+      "Use this Decant memory card as the evidence and promotion target:\n#{promotion_text(rec)}"
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join("\n\n")
+  end
+
+  defp field(label, value) do
+    if present?(value), do: "#{label}: #{value}"
+  end
+
+  defp present?(value), do: !blank?(value)
+  defp blank?(nil), do: true
+  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank?(_value), do: false
+
+  defp safe_id(id), do: String.replace(id, ~r/[^A-Za-z0-9_-]/, "-")
 
   defp spotlight?(0, 0), do: true
   defp spotlight?(_group_index, _card_index), do: false

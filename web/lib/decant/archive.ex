@@ -21,11 +21,25 @@ defmodule Decant.Archive do
 
   @doc "List sessions matching `filters`, newest first. `limit` caps the page size."
   def list_sessions(filters \\ %{}, limit \\ 200) do
-    params = to_params(filters) ++ [limit: limit]
+    list_sessions_page(filters, limit).rows
+  end
+
+  @doc """
+  Paginated session summaries plus daemon pagination metadata.
+
+  Options:
+    * `:cursor` - daemon cursor for the next page
+    * `:sort` - daemon sort key (`"started_at_desc"`, `"started_at_asc"`, `"cost_desc"`)
+  """
+  def list_sessions_page(filters \\ %{}, limit \\ 200, opts \\ []) do
+    params = to_params(filters) ++ page_params(limit, opts)
 
     case Daemon.list_sessions(params) do
-      {:ok, rows, _meta} when is_list(rows) -> Enum.map(rows, &to_summary/1)
-      _ -> []
+      {:ok, rows, meta} when is_list(rows) ->
+        page(Enum.map(rows, &to_summary/1), meta)
+
+      _ ->
+        empty_page()
     end
   end
 
@@ -93,9 +107,15 @@ defmodule Decant.Archive do
 
   @doc "Full-text search over blocks (FTS5). Returns ranked hits with snippets."
   def search(query, limit \\ 50) do
-    case Daemon.search(query, limit: limit) do
-      {:ok, hits, _meta} when is_list(hits) ->
-        Enum.map(hits, fn h ->
+    search_page(query, limit).rows
+  end
+
+  @doc "Paginated full-text search hits plus daemon pagination metadata."
+  def search_page(query, limit \\ 50, opts \\ []) do
+    case Daemon.search(query, page_params(limit, opts)) do
+      {:ok, hits, meta} when is_list(hits) ->
+        hits
+        |> Enum.map(fn h ->
           %{
             session_id: h["session_id"],
             title: h["session_title"],
@@ -103,9 +123,10 @@ defmodule Decant.Archive do
             snippet: h["snippet"]
           }
         end)
+        |> page(meta)
 
       _ ->
-        []
+        empty_page()
     end
   end
 
@@ -307,4 +328,25 @@ defmodule Decant.Archive do
 
   defp present(v) when v in [nil, ""], do: nil
   defp present(v), do: v
+
+  defp page_params(limit, opts) do
+    [limit: limit, cursor: opts[:cursor], sort: opts[:sort]]
+    |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
+  end
+
+  defp page(rows, meta), do: %{rows: rows, pagination: pagination(meta)}
+  defp empty_page, do: page([], %{})
+
+  defp pagination(meta) when is_map(meta) do
+    p = Map.get(meta, "pagination", %{})
+
+    %{
+      has_more: Map.get(p, "has_more", false),
+      next_cursor: Map.get(p, "next_cursor"),
+      page_size: Map.get(p, "page_size"),
+      total_count: Map.get(p, "total_count")
+    }
+  end
+
+  defp pagination(_), do: pagination(%{})
 end

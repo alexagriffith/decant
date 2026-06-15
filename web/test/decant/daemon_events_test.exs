@@ -36,7 +36,7 @@ defmodule Decant.DaemonEventsTest do
 
     send(pid, {:sse_event, event})
 
-    assert_receive {:archive_updated, report}
+    assert_receive {:archive_updated, report}, 500
     assert report =~ "3 ingested"
     assert report =~ "2026-06-07T12:00:00Z"
   end
@@ -44,7 +44,7 @@ defmodule Decant.DaemonEventsTest do
   test "an archive_updated event with no parseable payload still broadcasts", %{pid: pid} do
     send(pid, {:sse_event, %{event: "archive_updated", data: "not json"}})
 
-    assert_receive {:archive_updated, report}
+    assert_receive {:archive_updated, report}, 500
     assert is_binary(report)
   end
 

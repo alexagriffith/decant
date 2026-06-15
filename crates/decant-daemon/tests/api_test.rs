@@ -546,6 +546,15 @@ async fn recommendations_list_returns_envelope_with_catalog() {
         .unwrap();
     assert_eq!(agents["kind"], "catalog");
     assert_eq!(agents["title"], "AGENTS.md at the repo root");
+    assert_eq!(agents["memory_layer"], "Hot");
+    assert_eq!(agents["promotion_target"], "AGENTS.md");
+    assert!(agents["trigger"].as_str().unwrap().contains("Every"));
+    assert!(agents["evidence"]
+        .as_str()
+        .unwrap()
+        .contains("machine-readable"));
+    assert!(agents["action"].as_str().unwrap().contains("AGENTS.md"));
+    assert!(agents["success_metric"].is_string());
     assert!(agents["first_seen_at"].is_string());
 }
 

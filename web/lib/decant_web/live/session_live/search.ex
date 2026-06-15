@@ -3,9 +3,11 @@ defmodule DecantWeb.SessionLive.Search do
 
   alias Decant.Archive
 
+  @page_size 25
+
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, assign(socket, q: "", hits: [])}
+    {:ok, assign(socket, q: "", hits: [], pagination: empty_pagination())}
   end
 
   # Deep links (`/search?q=…`, e.g. from a Files hotspot row) pre-fill and run
@@ -15,23 +17,72 @@ defmodule DecantWeb.SessionLive.Search do
   @impl true
   def handle_params(params, _uri, socket) do
     case String.trim(params["q"] || "") do
-      "" -> {:noreply, assign(socket, q: "", hits: [])}
-      q -> {:noreply, assign(socket, q: q, hits: safe_search(q))}
+      "" -> {:noreply, assign(socket, q: "", hits: [], pagination: empty_pagination())}
+      q -> {:noreply, reset_search(socket, q)}
     end
   end
 
   @impl true
   def handle_event("search", %{"q" => q}, socket) do
-    hits = if String.trim(q) == "", do: [], else: safe_search(q)
-    {:noreply, assign(socket, q: q, hits: hits)}
+    {:noreply, reset_search(socket, q)}
+  end
+
+  def handle_event("load_more", _params, socket) do
+    case socket.assigns.pagination.next_cursor do
+      nil ->
+        {:noreply, socket}
+
+      cursor ->
+        page = safe_search(socket.assigns.q, cursor)
+
+        {:noreply,
+         assign(socket,
+           hits: socket.assigns.hits ++ page.rows,
+           pagination: page.pagination
+         )}
+    end
   end
 
   # FTS5 MATCH can raise on malformed query syntax; degrade to no results.
-  defp safe_search(q) do
-    Archive.search(q, 50)
+  defp safe_search(q, cursor \\ nil) do
+    Archive.search_page(q, @page_size, cursor: cursor)
   rescue
-    _ -> []
+    _ -> %{rows: [], pagination: empty_pagination()}
   end
+
+  defp reset_search(socket, q) do
+    case String.trim(q || "") do
+      "" ->
+        assign(socket, q: "", hits: [], pagination: empty_pagination())
+
+      trimmed ->
+        page = safe_search(trimmed)
+        assign(socket, q: trimmed, hits: page.rows, pagination: page.pagination)
+    end
+  end
+
+  defp search_caption(hits, pagination) do
+    count = length(hits)
+
+    cond do
+      is_integer(pagination.total_count) ->
+        "Showing #{format_count(count)} of #{format_count(pagination.total_count)} results"
+
+      pagination.has_more ->
+        "Showing #{format_count(count)} results; more available"
+
+      true ->
+        "#{format_count(count)} #{result_word(count)}"
+    end
+  end
+
+  defp empty_pagination do
+    %{has_more: false, next_cursor: nil, page_size: nil, total_count: nil}
+  end
+
+  defp format_count(n) when is_integer(n), do: Integer.to_string(n)
+  defp result_word(1), do: "result"
+  defp result_word(_), do: "results"
 
   @impl true
   def render(assigns) do
@@ -70,7 +121,7 @@ defmodule DecantWeb.SessionLive.Search do
           </form>
 
           <p :if={String.trim(@q) != ""} class="px-1 text-xs text-faint tabular-nums">
-            {(length(@hits) == 1 && "1 result") || "#{int(length(@hits))} results"}
+            {search_caption(@hits, @pagination)}
           </p>
         </div>
 
@@ -107,6 +158,15 @@ defmodule DecantWeb.SessionLive.Search do
                   </.link>
                 </li>
               </ul>
+              <div :if={@pagination.has_more} class="mt-4 flex justify-center">
+                <button
+                  type="button"
+                  phx-click="load_more"
+                  class="inline-flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-medium text-fg transition-colors hover:bg-elevated"
+                >
+                  <.icon name="hero-arrow-down-tray" class="size-4" /> Load more
+                </button>
+              </div>
           <% end %>
         </div>
       </div>

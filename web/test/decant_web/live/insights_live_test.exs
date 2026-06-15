@@ -14,12 +14,15 @@ defmodule DecantWeb.InsightsLiveTest do
     :ok
   end
 
-  test "renders the Signals, Recommended, and Implemented sections", %{conn: conn} do
+  test "renders promotion candidates, Recommended, and Implemented sections", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/insights")
 
-    assert html =~ "Signals"
+    assert html =~ "Promotion candidates"
     assert html =~ "Read fails 20% of the time"
     assert html =~ "Heavy reliance on the claude_ai_Exa MCP server"
+    assert html =~ "Memory card"
+    assert html =~ "Promote to"
+    assert html =~ "Skill or regression test"
 
     assert html =~ "Recommended for coding agents"
     assert html =~ "Foundations"
@@ -46,9 +49,9 @@ defmodule DecantWeb.InsightsLiveTest do
     # Signals are ranked by score: claude_ai_Exa (60) outranks Read (4), so it
     # is the lead/hero and keeps its full "Suggested" guidance.
     assert html =~ "Package the common workflows"
-    # Lower-ranked signals render compactly — the repeated suggestion blockquote
-    # (the main source of visual noise) is dropped from them.
-    refute html =~ "Codify the recovery path"
+    # Lower-ranked signals render compactly: they still expose their promotion
+    # target, but do not repeat the full memory-card panel.
+    assert html =~ "Skill or regression test"
   end
 
   test "agent menu is toggle-able: CSS-safe id and class-based hiding", %{conn: conn} do
@@ -84,6 +87,9 @@ defmodule DecantWeb.InsightsLiveTest do
 
     assert_receive {:launched, "claude", prompt, "catalog:agents-md"}
     assert prompt =~ "AGENTS.md"
+    assert prompt =~ "Use this Decant memory card"
+    assert prompt =~ "Promote to: AGENTS.md"
+    assert prompt =~ "Done when:"
   end
 
   test "a failed launch surfaces the error as a flash", %{conn: conn} do

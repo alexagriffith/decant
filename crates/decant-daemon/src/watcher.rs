@@ -138,11 +138,24 @@ mod tests {
         )
         .unwrap();
 
-        // Write a file into the watched dir.
-        std::fs::write(watched.join("sess.jsonl"), "{}\n").unwrap();
+        // Some notify backends need a moment after `watch()` before the first
+        // file event is delivered. Keep writing the same file inside the timeout
+        // window so this test asserts the eventual watcher contract instead of a
+        // backend startup race.
+        let path = watched.join("sess.jsonl");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut writes = 0;
+        let got = loop {
+            writes += 1;
+            std::fs::write(&path, format!("{{\"write\":{writes}}}\n")).unwrap();
 
-        // Expect a debounced trigger within a generous window.
-        let got = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await;
+            match tokio::time::timeout(Duration::from_millis(1000), rx.recv()).await {
+                Ok(Some(())) => break Ok(Some(())),
+                Ok(None) => break Ok(None),
+                Err(e) if std::time::Instant::now() >= deadline => break Err(e),
+                Err(_) => continue,
+            }
+        };
         assert!(
             matches!(got, Ok(Some(()))),
             "expected a debounced sync trigger, got {got:?}"

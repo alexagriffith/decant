@@ -57,23 +57,35 @@ defmodule Decant.AgentLauncherTest do
     end
   end
 
-  describe "launch/2,3 (non-macOS)" do
+  describe "launch/2,3 (launch unavailable)" do
+    setup do
+      Application.put_env(:decant, :can_launch, false)
+      on_exit(fn -> Application.delete_env(:decant, :can_launch) end)
+      :ok
+    end
+
     test "an unknown agent is rejected before any OS check" do
       assert {:error, "Unknown agent."} = AgentLauncher.launch("rogue", "prompt")
     end
 
-    test "launch/2 reports the macOS-only limitation on this platform" do
+    test "launch/2 reports the macOS-only limitation" do
       assert {:error, msg} = AgentLauncher.launch("claude", "prompt")
       assert msg =~ "macOS"
     end
 
-    test "launch/3 with a key behaves like launch/2 on this platform" do
+    test "launch/3 with a key behaves like launch/2" do
       assert {:error, msg} = AgentLauncher.launch("claude", "prompt", "signal:error:Read")
       assert msg =~ "macOS"
     end
   end
 
-  describe "open_ide/1 (non-macOS)" do
+  describe "open_ide/1 (launch unavailable)" do
+    setup do
+      Application.put_env(:decant, :can_launch, false)
+      on_exit(fn -> Application.delete_env(:decant, :can_launch) end)
+      :ok
+    end
+
     test "reports the macOS-only limitation" do
       assert {:error, msg} = AgentLauncher.open_ide("/tmp")
       assert msg =~ "macOS"

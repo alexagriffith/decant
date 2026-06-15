@@ -48,6 +48,28 @@ defmodule Decant.ArchiveTest do
       assert [%{id: 2}] = Archive.list_sessions(%{}, 1)
     end
 
+    test "list_sessions_page exposes daemon pagination metadata" do
+      page = Archive.list_sessions_page(%{}, 1)
+
+      assert [%{id: 2}] = page.rows
+      assert page.pagination.has_more
+      assert page.pagination.next_cursor == "1"
+      assert page.pagination.page_size == 1
+      assert page.pagination.total_count == 2
+    end
+
+    test "list_sessions_page tolerates malformed daemon pagination metadata" do
+      stub(Decant.Daemon, :list_sessions, fn _opts ->
+        {:ok, [], []}
+      end)
+
+      page = Archive.list_sessions_page(%{}, 1)
+
+      assert page.rows == []
+      refute page.pagination.has_more
+      assert is_nil(page.pagination.next_cursor)
+    end
+
     test "returns an empty list when the daemon is unreachable" do
       stub(Decant.Daemon, :list_sessions, fn _opts -> {:error, :service_unavailable} end)
       assert Archive.list_sessions() == []
@@ -138,6 +160,15 @@ defmodule Decant.ArchiveTest do
       assert Enum.any?(hits, &(&1.title == "Fix the failing auth test"))
 
       assert Enum.any?(hits, &(&1.snippet =~ "auth"))
+    end
+
+    test "search_page returns hits with pagination metadata" do
+      page = Archive.search_page("auth", 1)
+
+      assert [%{session_id: 1}] = page.rows
+      refute page.pagination.has_more
+      assert page.pagination.page_size == 1
+      assert is_nil(page.pagination.total_count)
     end
 
     test "matches the TODO session for 'TODO'" do

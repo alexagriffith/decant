@@ -725,6 +725,12 @@ pub struct StoredRecommendation {
     pub first_seen_at: Option<String>,
     pub updated_at: Option<String>,
     pub implemented_at: Option<String>,
+    pub memory_layer: Option<String>,
+    pub promotion_target: Option<String>,
+    pub trigger: Option<String>,
+    pub evidence: Option<String>,
+    pub action: Option<String>,
+    pub success_metric: Option<String>,
 }
 
 /// List persisted recommendations filtered by `status`.
@@ -749,7 +755,7 @@ pub fn list(conn: &Connection, status: StatusFilter) -> Result<Vec<StoredRecomme
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map([], |r| {
-            Ok(StoredRecommendation {
+            let mut rec = StoredRecommendation {
                 key: r.get(0)?,
                 kind: r.get(1)?,
                 category: r.get(2)?,
@@ -768,10 +774,200 @@ pub fn list(conn: &Connection, status: StatusFilter) -> Result<Vec<StoredRecomme
                 first_seen_at: r.get(15)?,
                 updated_at: r.get(16)?,
                 implemented_at: r.get(17)?,
-            })
+                memory_layer: None,
+                promotion_target: None,
+                trigger: None,
+                evidence: None,
+                action: None,
+                success_metric: None,
+            };
+            apply_promotion_card(&mut rec);
+            Ok(rec)
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+fn apply_promotion_card(rec: &mut StoredRecommendation) {
+    let card = promotion_card(rec);
+    rec.memory_layer = Some(card.memory_layer.into());
+    rec.promotion_target = Some(card.promotion_target.into());
+    rec.trigger = Some(card.trigger.into());
+    rec.evidence = Some(card.evidence);
+    rec.action = Some(card.action);
+    rec.success_metric = Some(card.success_metric.into());
+}
+
+struct PromotionCard {
+    memory_layer: &'static str,
+    promotion_target: &'static str,
+    trigger: &'static str,
+    evidence: String,
+    action: String,
+    success_metric: &'static str,
+}
+
+fn promotion_card(rec: &StoredRecommendation) -> PromotionCard {
+    let evidence = rec.detail.clone().unwrap_or_else(|| {
+        if rec.kind == "catalog" {
+            "Evergreen recommendation from Decant's coding-agent catalog.".to_string()
+        } else {
+            "Data-derived signal from the local session archive.".to_string()
+        }
+    });
+    let action = rec
+        .suggestion
+        .as_ref()
+        .or(rec.prompt.as_ref())
+        .cloned()
+        .unwrap_or_else(|| "Review the recommendation and promote the durable lesson.".to_string());
+
+    if rec.key.starts_with("signal:error:") {
+        return PromotionCard {
+            memory_layer: "Procedural",
+            promotion_target: "Skill or regression test",
+            trigger: "Before future agents repeat this failing tool workflow.",
+            evidence,
+            action,
+            success_metric: "Tool error rate falls below the signal threshold.",
+        };
+    }
+
+    if rec.key.starts_with("signal:heavy-server:") || rec.key.starts_with("signal:heavy-tool:") {
+        return PromotionCard {
+            memory_layer: "Procedural",
+            promotion_target: "Skill",
+            trigger: "When future agents need this repeated tool or MCP workflow.",
+            evidence,
+            action,
+            success_metric:
+                "Repeated calls per session decline without reducing successful outcomes.",
+        };
+    }
+
+    if rec.key == "signal:cost-concentration" {
+        return PromotionCard {
+            memory_layer: "Hot",
+            promotion_target: "AGENTS.md model-routing rule",
+            trigger: "Before routine work defaults to the most expensive model.",
+            evidence,
+            action,
+            success_metric: "Spend concentration drops below 40 percent of archive cost.",
+        };
+    }
+
+    if rec.key.starts_with("signal:hot-context:") {
+        return PromotionCard {
+            memory_layer: "Hot",
+            promotion_target: "AGENTS.md or Skill",
+            trigger: "At session start, before agents re-read stable context.",
+            evidence,
+            action,
+            success_metric: "Repeat reads of the source file drop or the signal auto-resolves.",
+        };
+    }
+
+    if rec.key.starts_with("signal:churn:") {
+        return PromotionCard {
+            memory_layer: "Cold",
+            promotion_target: "Runbook or regression test",
+            trigger: "Before editing a historically high-churn file.",
+            evidence,
+            action,
+            success_metric: "Future edits land with fewer retries and stronger tests.",
+        };
+    }
+
+    if rec.key == "signal:search-heavy" {
+        return PromotionCard {
+            memory_layer: "Hot",
+            promotion_target: "AGENTS.md code map",
+            trigger: "When agents need to navigate the repo structure.",
+            evidence,
+            action,
+            success_metric: "Grep and Glob calls per session fall below the signal threshold.",
+        };
+    }
+
+    if rec.key == "signal:abandoned-rate" {
+        return PromotionCard {
+            memory_layer: "Governance",
+            promotion_target: "Planning checklist or Skill",
+            trigger: "Before large, ambiguous tasks start.",
+            evidence,
+            action,
+            success_metric: "Abandoned-session share drops below 25 percent.",
+        };
+    }
+
+    match rec.key.as_str() {
+        "catalog:agents-md" => PromotionCard {
+            memory_layer: "Hot",
+            promotion_target: "AGENTS.md",
+            trigger: "Every coding-agent session in this repo.",
+            evidence,
+            action,
+            success_metric:
+                "Agents start with commands, boundaries, and invariants already loaded.",
+        },
+        "catalog:claude-md" => PromotionCard {
+            memory_layer: "Hot",
+            promotion_target: "Project memory",
+            trigger: "Every Claude Code session for this repo.",
+            evidence,
+            action,
+            success_metric: "Durable repo facts stop being re-explained in new sessions.",
+        },
+        "catalog:skills" => PromotionCard {
+            memory_layer: "Procedural",
+            promotion_target: "SKILL.md",
+            trigger: "When a repeated workflow appears in a future task.",
+            evidence,
+            action,
+            success_metric: "The workflow runs from a focused skill instead of being re-derived.",
+        },
+        "catalog:slash-commands" => PromotionCard {
+            memory_layer: "Procedural",
+            promotion_target: "Slash command",
+            trigger: "When a frequent multi-step request recurs.",
+            evidence,
+            action,
+            success_metric: "The repeated request becomes one consistent command.",
+        },
+        "catalog:subagents" => PromotionCard {
+            memory_layer: "Governance",
+            promotion_target: "Subagent workflow",
+            trigger: "When work can be split into independent reviewable lanes.",
+            evidence,
+            action,
+            success_metric:
+                "Parallel lanes finish with explicit review and fewer context collisions.",
+        },
+        "catalog:mcp" => PromotionCard {
+            memory_layer: "Cold",
+            promotion_target: "MCP integration",
+            trigger: "When agents need live tool data instead of pasted context.",
+            evidence,
+            action,
+            success_metric: "Agents fetch source data directly and cite the actual tool result.",
+        },
+        "catalog:hooks" => PromotionCard {
+            memory_layer: "Governance",
+            promotion_target: "Hook or preflight gate",
+            trigger: "Before changes drift away from the repo's validation contract.",
+            evidence,
+            action,
+            success_metric: "Format, lint, and tests run earlier with fewer end-of-task surprises.",
+        },
+        _ => PromotionCard {
+            memory_layer: "Cold",
+            promotion_target: "Runbook",
+            trigger: "When this recommendation becomes relevant again.",
+            evidence,
+            action,
+            success_metric: "Future sessions can retrieve the lesson with cited evidence.",
+        },
+    }
 }
 
 #[cfg(test)]
@@ -1448,6 +1644,159 @@ mod tests {
         )
         .unwrap();
         assert!(regenerate(&conn).is_err());
+    }
+
+    #[test]
+    fn list_adds_promotion_card_fields_without_schema_state() {
+        let conn = base();
+        seed_file_sessions(&conn, 100, 9, "AGENTS.md", "read");
+        regenerate(&conn).unwrap();
+
+        let rows = list(&conn, StatusFilter::All).unwrap();
+        let hot = rows
+            .iter()
+            .find(|r| r.key == "signal:hot-context:AGENTS.md")
+            .expect("hot-context recommendation");
+        assert_eq!(hot.memory_layer.as_deref(), Some("Hot"));
+        assert_eq!(hot.promotion_target.as_deref(), Some("AGENTS.md or Skill"));
+        assert!(hot.trigger.as_deref().unwrap().contains("session start"));
+        assert!(hot
+            .evidence
+            .as_deref()
+            .unwrap()
+            .contains("distinct sessions"));
+        assert!(hot.action.as_deref().unwrap().contains("Distill"));
+        assert!(hot
+            .success_metric
+            .as_deref()
+            .unwrap()
+            .contains("auto-resolves"));
+
+        let hooks = rows
+            .iter()
+            .find(|r| r.key == "catalog:hooks")
+            .expect("hooks catalog recommendation");
+        assert_eq!(hooks.memory_layer.as_deref(), Some("Governance"));
+        assert_eq!(
+            hooks.promotion_target.as_deref(),
+            Some("Hook or preflight gate")
+        );
+    }
+
+    #[test]
+    fn promotion_card_maps_every_key_family() {
+        let cases = [
+            (
+                "signal:error:Read",
+                "signal",
+                "Procedural",
+                "Skill or regression test",
+            ),
+            ("signal:heavy-server:Exa", "signal", "Procedural", "Skill"),
+            ("signal:heavy-tool:Bash", "signal", "Procedural", "Skill"),
+            (
+                "signal:cost-concentration",
+                "signal",
+                "Hot",
+                "AGENTS.md model-routing rule",
+            ),
+            (
+                "signal:hot-context:AGENTS.md",
+                "signal",
+                "Hot",
+                "AGENTS.md or Skill",
+            ),
+            (
+                "signal:churn:src/lib.rs",
+                "signal",
+                "Cold",
+                "Runbook or regression test",
+            ),
+            ("signal:search-heavy", "signal", "Hot", "AGENTS.md code map"),
+            (
+                "signal:abandoned-rate",
+                "signal",
+                "Governance",
+                "Planning checklist or Skill",
+            ),
+            ("catalog:agents-md", "catalog", "Hot", "AGENTS.md"),
+            ("catalog:claude-md", "catalog", "Hot", "Project memory"),
+            ("catalog:skills", "catalog", "Procedural", "SKILL.md"),
+            (
+                "catalog:slash-commands",
+                "catalog",
+                "Procedural",
+                "Slash command",
+            ),
+            (
+                "catalog:subagents",
+                "catalog",
+                "Governance",
+                "Subagent workflow",
+            ),
+            ("catalog:mcp", "catalog", "Cold", "MCP integration"),
+            (
+                "catalog:hooks",
+                "catalog",
+                "Governance",
+                "Hook or preflight gate",
+            ),
+            ("signal:unknown", "signal", "Cold", "Runbook"),
+        ];
+
+        for (key, kind, layer, target) in cases {
+            let card = promotion_card(&stored_rec(key, kind));
+            assert_eq!(card.memory_layer, layer, "{key}");
+            assert_eq!(card.promotion_target, target, "{key}");
+        }
+
+        let catalog = promotion_card(&stored_rec("catalog:unknown", "catalog"));
+        assert_eq!(
+            catalog.evidence,
+            "Evergreen recommendation from Decant's coding-agent catalog."
+        );
+        assert_eq!(
+            catalog.action,
+            "Review the recommendation and promote the durable lesson."
+        );
+
+        let mut prompted = stored_rec("signal:unknown", "signal");
+        prompted.prompt = Some("Use the prompt".to_string());
+        let prompted = promotion_card(&prompted);
+        assert_eq!(
+            prompted.evidence,
+            "Data-derived signal from the local session archive."
+        );
+        assert_eq!(prompted.action, "Use the prompt");
+    }
+
+    fn stored_rec(key: &str, kind: &str) -> StoredRecommendation {
+        StoredRecommendation {
+            key: key.to_string(),
+            kind: kind.to_string(),
+            category: None,
+            title: "Title".to_string(),
+            detail: None,
+            suggestion: None,
+            prompt: None,
+            url: None,
+            link_label: None,
+            icon: None,
+            tone: None,
+            score: None,
+            status: "open".to_string(),
+            status_source: None,
+            note: None,
+            first_seen_at: None,
+            updated_at: None,
+            implemented_at: None,
+            memory_layer: None,
+            promotion_target: None,
+            trigger: None,
+            evidence: None,
+            action: None,
+            success_metric: None,
+        }
     }
 
     #[test]

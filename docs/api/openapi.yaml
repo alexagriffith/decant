@@ -1147,6 +1147,26 @@ components:
         first_seen_at: { type: [string, "null"], format: date-time }
         updated_at: { type: [string, "null"], format: date-time }
         implemented_at: { type: [string, "null"], format: date-time }
+        memory_layer:
+          type: [string, "null"]
+          description: >
+            Suggested memory layer for the promotion card, such as `Hot`,
+            `Cold`, `Procedural`, or `Governance`.
+        promotion_target:
+          type: [string, "null"]
+          description: Concrete artifact this recommendation should become.
+        trigger:
+          type: [string, "null"]
+          description: Future condition where this memory should be recalled.
+        evidence:
+          type: [string, "null"]
+          description: Local archive evidence that supports the card.
+        action:
+          type: [string, "null"]
+          description: Reviewable action to promote the lesson.
+        success_metric:
+          type: [string, "null"]
+          description: How to tell the promoted memory is paying off.
       required: [key, kind, title, status]
 
     SyncStatus:

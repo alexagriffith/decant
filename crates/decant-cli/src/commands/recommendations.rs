@@ -107,7 +107,7 @@ fn mark(cli: &Cli, args: &MarkArgs) -> anyhow::Result<i32> {
                 "error": detail.trim_start_matches(": "),
             }))?;
         } else if !out.quiet {
-            eprintln!("failed to mark {} ({status}){detail}", args.key);
+            eprintln!("failed to mark {} via {base} ({status}){detail}", args.key);
         }
         Ok(1)
     }

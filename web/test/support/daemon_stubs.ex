@@ -260,13 +260,18 @@ defmodule Decant.DaemonStubs do
   def recommendations, do: @recommendations
 
   defp list_sessions(opts) do
-    rows =
+    opts = opts_map(opts)
+
+    all_rows =
       @sessions
       |> filter(opts)
-      |> Enum.sort_by(& &1["started_at"], :desc)
-      |> take(opts)
+      |> sort_sessions(opts)
 
-    {:ok, rows, paginated_meta()}
+    limit = limit(opts, length(all_rows))
+    offset = cursor_offset(opts["cursor"])
+    rows = all_rows |> Enum.drop(offset) |> Enum.take(limit)
+
+    {:ok, rows, paginated_meta(length(all_rows), limit, offset)}
   end
 
   defp get_session(id) do
@@ -284,18 +289,25 @@ defmodule Decant.DaemonStubs do
     end
   end
 
-  defp search(q, _opts) do
-    hits =
+  defp search(q, opts) do
+    opts = opts_map(opts)
+
+    all_hits =
       cond do
         String.contains?(String.downcase(q), "auth") -> [hit(1, "auth")]
         String.contains?(String.downcase(q), "todo") -> [hit(2, "TODO")]
         true -> []
       end
 
-    {:ok, hits, %{"timestamp" => "2026-05-02T00:00:00Z"}}
+    limit = limit(opts, length(all_hits))
+    offset = cursor_offset(opts["cursor"])
+    hits = all_hits |> Enum.drop(offset) |> Enum.take(limit)
+
+    {:ok, hits, paginated_meta(nil, limit, offset, length(all_hits))}
   end
 
   defp analytics_summary(opts) do
+    opts = opts_map(opts)
     rows = filter(@sessions, opts)
 
     {:ok,
@@ -312,6 +324,7 @@ defmodule Decant.DaemonStubs do
   end
 
   defp by_dimension(dim, opts) do
+    opts = opts_map(opts)
     key = dimension_key(dim)
 
     rows =
@@ -333,6 +346,7 @@ defmodule Decant.DaemonStubs do
   end
 
   defp activity(opts) do
+    opts = opts_map(opts)
     rows = filter(@sessions, opts)
 
     # Bucket each session by the hour/weekday of its (UTC) start. The exact
@@ -351,6 +365,7 @@ defmodule Decant.DaemonStubs do
   end
 
   defp model_sparklines(opts) do
+    opts = opts_map(opts)
     rows = filter(@sessions, opts)
     days = rows |> Enum.map(&day(&1["started_at"])) |> Enum.uniq() |> Enum.sort()
 
@@ -366,6 +381,8 @@ defmodule Decant.DaemonStubs do
   end
 
   defp tools_usage(opts) do
+    opts = opts_map(opts)
+
     rows =
       @sessions
       |> filter(opts)
@@ -436,12 +453,65 @@ defmodule Decant.DaemonStubs do
         _ -> @recommendations
       end
 
-    {:ok, rows}
+    {:ok, Enum.map(rows, &with_promotion_card/1)}
+  end
+
+  defp with_promotion_card(%{"key" => key} = rec) do
+    defaults = %{
+      "memory_layer" => "Cold",
+      "promotion_target" => "Runbook",
+      "trigger" => "When this recommendation becomes relevant again.",
+      "evidence" =>
+        rec["detail"] || "Evergreen recommendation from Decant's coding-agent catalog.",
+      "action" => rec["suggestion"] || rec["prompt"],
+      "success_metric" => "Future sessions can retrieve the lesson with cited evidence."
+    }
+
+    card =
+      cond do
+        String.starts_with?(key, "signal:error:") ->
+          %{
+            "memory_layer" => "Procedural",
+            "promotion_target" => "Skill or regression test",
+            "trigger" => "Before future agents repeat this failing tool workflow.",
+            "success_metric" => "Tool error rate falls below the signal threshold."
+          }
+
+        String.starts_with?(key, "signal:heavy-server:") ->
+          %{
+            "memory_layer" => "Procedural",
+            "promotion_target" => "Skill",
+            "trigger" => "When future agents need this repeated tool or MCP workflow.",
+            "success_metric" =>
+              "Repeated calls per session decline without reducing successful outcomes."
+          }
+
+        key == "catalog:agents-md" ->
+          %{
+            "memory_layer" => "Hot",
+            "promotion_target" => "AGENTS.md",
+            "trigger" => "Every coding-agent session in this repo.",
+            "success_metric" =>
+              "Agents start with commands, boundaries, and invariants already loaded."
+          }
+
+        key == "catalog:hooks" ->
+          %{
+            "memory_layer" => "Governance",
+            "promotion_target" => "Hook or preflight gate",
+            "trigger" => "Before changes drift away from the repo's validation contract.",
+            "success_metric" =>
+              "Format, lint, and tests run earlier with fewer end-of-task surprises."
+          }
+
+        true ->
+          %{}
+      end
+
+    Map.merge(rec, Map.merge(defaults, card))
   end
 
   defp filter(sessions, opts) do
-    opts = Map.new(opts, fn {k, v} -> {to_string(k), v} end)
-
     Enum.filter(sessions, fn s ->
       match_from?(s, opts["from"]) and match_to?(s, opts["to"]) and
         match_eq?(s["tool"], opts["tool"]) and match_eq?(s["model"], opts["model"]) and
@@ -458,11 +528,33 @@ defmodule Decant.DaemonStubs do
   defp match_eq?(_value, nil), do: true
   defp match_eq?(value, expected), do: value == expected
 
-  defp take(rows, opts) do
-    case opts |> Map.new(fn {k, v} -> {to_string(k), v} end) |> Map.get("limit") do
-      nil -> rows
-      limit -> Enum.take(rows, limit)
+  defp opts_map(opts), do: Map.new(opts, fn {k, v} -> {to_string(k), v} end)
+
+  defp sort_sessions(rows, opts) do
+    case opts["sort"] do
+      "started_at_asc" -> Enum.sort_by(rows, & &1["started_at"], :asc)
+      "cost_desc" -> Enum.sort_by(rows, & &1["estimated_cost_usd"], :desc)
+      _ -> Enum.sort_by(rows, & &1["started_at"], :desc)
     end
+  end
+
+  defp limit(opts, fallback) do
+    case opts["limit"] do
+      n when is_integer(n) and n > 0 -> n
+      n when is_binary(n) -> String.to_integer(n)
+      _ -> fallback
+    end
+  rescue
+    ArgumentError -> fallback
+  end
+
+  defp cursor_offset(nil), do: 0
+  defp cursor_offset(n) when is_integer(n), do: max(n, 0)
+
+  defp cursor_offset(n) when is_binary(n) do
+    n |> String.to_integer() |> max(0)
+  rescue
+    ArgumentError -> 0
   end
 
   defp find_session(id) do
@@ -549,12 +641,22 @@ defmodule Decant.DaemonStubs do
 
   defp sum(rows, field), do: Enum.reduce(rows, 0, fn r, acc -> acc + (r[field] || 0) end)
 
-  defp paginated_meta do
+  defp paginated_meta(
+         total_count \\ length(@sessions),
+         page_size \\ 50,
+         offset \\ 0,
+         known_count \\ nil
+       ) do
+    count = known_count || total_count || 0
+    next_offset = offset + page_size
+    has_more = next_offset < count
+
     %{
       "pagination" => %{
-        "has_more" => false,
-        "page_size" => 50,
-        "total_count" => length(@sessions)
+        "has_more" => has_more,
+        "next_cursor" => if(has_more, do: Integer.to_string(next_offset)),
+        "page_size" => page_size,
+        "total_count" => total_count
       }
     }
   end
