@@ -4,6 +4,7 @@ pub mod classify;
 pub mod config;
 pub mod cost;
 pub mod db;
+pub mod distill;
 pub mod enrich;
 pub mod error;
 pub mod export;

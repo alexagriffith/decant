@@ -16,6 +16,10 @@ transcripts never leave your machine.
 ## Features
 
 - **One archive for both tools** — Claude Code and Codex sessions in a single SQLite DB.
+- **Distill into runnable artifacts** — `decant distill` turns the history of what
+  *actually worked* into a workflow **script** (frequency-ranked real commands), a
+  faithful session **replay**, or a pre-filled **skill / AGENTS.md** file.
+  Deterministic, secret-redacted, review-before-run — no LLM, no network.
 - **Full-text search** (SQLite FTS5) across every message and tool call.
 - **Usage & cost analytics** — rollups by tool, model, project, or day, with cost
   estimates (Claude and GPT-5 families, including Bedrock-style model ids).
@@ -39,6 +43,9 @@ cargo build --release
 ./target/release/decant stats --by model     # usage & cost rollup (tool|model|project|day)
 ./target/release/decant mcp stats            # MCP server leaderboard (calls, tools, errors)
 ./target/release/decant tool stats           # tool usage: built-in vs MCP, with error counts
+./target/release/decant distill script        # workflow script mined from your real command history
+./target/release/decant distill replay 1       # reproduce a session's commands + file writes
+./target/release/decant distill skill --kind agents  # AGENTS.md section from hot files + proven commands
 ./target/release/decant export 1 > s1.md     # export a transcript (Markdown, or --json)
 ./target/release/decant ls --json            # machine-readable output (stable DTO contract)
 ./target/release/decant project ls           # projects by session count + cost

@@ -463,3 +463,150 @@ fn show_prints_facets_line() {
         .stdout(predicate::str::contains("1 interruptions"))
         .stdout(predicate::str::contains("refactor"));
 }
+
+/// Build a temp archive whose one Claude session has Bash commands + a Write +
+/// an Edit + a secret + a destructive command (the distill fixture).
+fn write_distill_tree(
+    root: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let claude_dir = root.join("claude/projects/proj");
+    let codex_dir = root.join("codex");
+    let db = root.join("d.db");
+    fs::create_dir_all(&claude_dir).unwrap();
+    let sample = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/claude/distill.jsonl"
+    ))
+    .unwrap();
+    fs::write(claude_dir.join("sess.jsonl"), sample).unwrap();
+    (db, root.join("claude/projects"), codex_dir)
+}
+
+fn synced_distill_db(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let (db, claude_dir, codex_dir) = write_distill_tree(dir.path());
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--db"])
+        .arg(&db)
+        .arg("sync")
+        .env("DECANT_CLAUDE_DIR", &claude_dir)
+        .env("DECANT_CODEX_DIR", &codex_dir)
+        .assert()
+        .success();
+    db
+}
+
+#[test]
+fn distill_script_emits_safe_bash() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = synced_distill_db(&dir);
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--db"])
+        .arg(&db)
+        .args(["distill", "script"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("#!/usr/bin/env bash"))
+        .stdout(predicate::str::contains("cargo build --workspace"))
+        .stdout(predicate::str::contains("# REVIEW: destructive"))
+        .stdout(predicate::str::contains("<REDACTED>"))
+        .stdout(predicate::str::contains("ghp_").not());
+}
+
+#[test]
+fn distill_script_json_has_ops_and_artifact() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = synced_distill_db(&dir);
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--json", "--db"])
+        .arg(&db)
+        .args(["distill", "script"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"ops\""))
+        .stdout(predicate::str::contains("\"artifact\""));
+}
+
+#[test]
+fn distill_replay_reproduces_commands_and_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = synced_distill_db(&dir);
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--db"])
+        .arg(&db)
+        .args(["distill", "replay", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cat > 'NOTES.md'"))
+        .stdout(predicate::str::contains("# EDIT src/main.rs"));
+}
+
+#[test]
+fn distill_skill_agents_section() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = synced_distill_db(&dir);
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--db"])
+        .arg(&db)
+        .args(["distill", "skill", "--kind", "agents", "--project", "proj"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("### Commands"))
+        .stdout(predicate::str::contains("cargo build --workspace"));
+}
+
+#[test]
+fn distill_bad_format_exits_two() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = synced_distill_db(&dir);
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--db"])
+        .arg(&db)
+        .args(["distill", "script", "--as", "bogus"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn distill_replay_unknown_session_exits_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = synced_distill_db(&dir);
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--db"])
+        .arg(&db)
+        .args(["distill", "replay", "999"])
+        .assert()
+        .code(1);
+}
+
+#[test]
+fn distill_script_rejects_bad_min_frequency() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = synced_distill_db(&dir);
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--db"])
+        .arg(&db)
+        .args(["distill", "script", "--min-frequency", "nan"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn distill_skill_empty_scope_exits_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = synced_distill_db(&dir);
+    Command::cargo_bin("decant")
+        .unwrap()
+        .args(["--db"])
+        .arg(&db)
+        .args(["distill", "skill", "--project", "no-such-project-xyz"])
+        .assert()
+        .code(1);
+}

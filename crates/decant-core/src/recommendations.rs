@@ -283,10 +283,10 @@ fn hot_context_files(conn: &Connection) -> Result<Vec<Recommendation>> {
                 "{readers} distinct sessions read it in the last 30 days, with almost no edits — that's stable context being re-derived with tokens each time."
             )),
             suggestion: Some(format!(
-                "Distill what agents need from {path} into AGENTS.md (or a Skill) so they stop re-reading and re-deriving it."
+                "Distill what agents need from {path} into AGENTS.md (or a Skill) so they stop re-reading and re-deriving it. Scaffold a starting point with `decant distill skill --kind agents` (scope with --project)."
             )),
             prompt: Some(format!(
-                "Agents read {path} in {readers} separate sessions over the last 30 days while barely editing it. Read it, distill the parts agents actually need (contracts, invariants, gotchas) into AGENTS.md or a focused Skill, and keep the summary maintainable. Follow this repo's conventions."
+                "Agents read {path} in {readers} separate sessions over the last 30 days while barely editing it. Scaffold a deterministic starting point with `decant distill skill --kind agents`, then read {path}, distill the parts agents actually need (contracts, invariants, gotchas) into AGENTS.md or a focused Skill, and keep the summary maintainable. Follow this repo's conventions."
             )),
             url: Some(SKILLS_URL.into()),
             link_label: Some("Skills guide".into()),
@@ -851,6 +851,12 @@ mod tests {
             .expect("hot-context signal must fire at 9 read sessions");
         assert_eq!(hot.tone.as_deref(), Some("accent"));
         assert!(hot.suggestion.as_deref().unwrap().contains("AGENTS.md"));
+        // advice → runnable command (closes the loop with `decant distill`).
+        assert!(hot
+            .suggestion
+            .as_deref()
+            .unwrap()
+            .contains("decant distill skill"));
         assert!(hot.score > 0.0);
     }
 

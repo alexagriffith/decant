@@ -1,6 +1,7 @@
 pub mod completion;
 pub mod daemon;
 pub mod db;
+pub mod distill;
 pub mod export;
 pub mod files;
 pub mod mcp;

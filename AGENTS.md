@@ -56,6 +56,7 @@ cargo run -p decant-cli -- daemon logs -f     # tail the daemon log
 # CLI read commands (binary is `decant`; or `cargo run -p decant-cli -- <args>`)
 cargo run -p decant-cli -- ls                 # list sessions
 cargo run -p decant-cli -- search "<query>"   # full-text search
+cargo run -p decant-cli -- distill script     # runnable workflow script from real history (also: replay, skill)
 cargo run -p decant-cli -- --db /tmp/x.db ls  # read a specific DB file directly (headless)
 
 # Web (run inside web/; needs a running daemon — start `daemon serve` first)

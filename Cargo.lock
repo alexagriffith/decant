@@ -454,6 +454,7 @@ dependencies = [
  "blake3",
  "directories",
  "rayon",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

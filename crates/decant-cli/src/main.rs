@@ -49,6 +49,9 @@ pub enum Commands {
     Stats(commands::stats::StatsArgs),
     /// File hotspots: which files agents read/edit most (--group path|ext).
     Files(commands::files::FilesArgs),
+    /// Generate runnable artifacts from history: `distill script|replay|skill`.
+    #[command(subcommand)]
+    Distill(commands::distill::DistillCmd),
     /// Tool usage (built-in vs MCP): `tool ls` / `tool stats`.
     #[command(subcommand)]
     Tool(commands::tool::ToolCmd),
@@ -101,6 +104,7 @@ fn run(cli: &Cli) -> anyhow::Result<i32> {
         Commands::Search(args) => commands::search::run(cli, args),
         Commands::Stats(args) => commands::stats::run(cli, args),
         Commands::Files(args) => commands::files::run(cli, args),
+        Commands::Distill(cmd) => commands::distill::run(cli, cmd),
         Commands::Tool(cmd) => commands::tool::run(cli, cmd),
         Commands::Mcp(cmd) => commands::mcp::run(cli, cmd),
         Commands::Export(args) => commands::export::run(cli, args),
@@ -132,6 +136,13 @@ mod conformance {
     #[test]
     fn every_command_has_help() {
         assert_has_help(&Cli::command());
+    }
+
+    /// clap's own validation — catches arg-id collisions (e.g. a subcommand flag
+    /// shadowing a global like `--format` with a different type).
+    #[test]
+    fn cli_definition_is_valid() {
+        Cli::command().debug_assert();
     }
 
     #[test]
