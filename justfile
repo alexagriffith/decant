@@ -107,12 +107,29 @@ web-fmt:
 # ── Stack ────────────────────────────────────────────────────────────
 
 # Bring up the stack: daemon (detached, skipped if already healthy), then
-# the web dev server in the foreground (Ctrl-C leaves the daemon running)
+# the web dev server in the foreground (Ctrl-C leaves the daemon running).
+# If the web is already up on :4000, report status and exit 0 (no duplicate).
 [group('stack')]
 up:
-    @curl -sf -m 2 -o /dev/null http://localhost:4000/ && { echo "web already running on :4000"; exit 1; } || true
-    @for i in $(seq 1 15); do curl -sf -m 2 http://127.0.0.1:4577/api/v1/health >/dev/null && break; cargo run -q -p decant-cli -- daemon start >/dev/null 2>&1 || true; sleep 2; done
-    @curl -sf -m 2 http://127.0.0.1:4577/api/v1/health >/dev/null && echo "daemon :4577 healthy" || { echo "daemon failed to start — see: just daemon-logs"; exit 1; }
+    #!/usr/bin/env sh
+    if curl -sf -m 2 -o /dev/null http://localhost:4000/; then
+        echo "stack already up — web on :4000"
+        curl -sf -m 2 http://127.0.0.1:4577/api/v1/health >/dev/null \
+            && echo "daemon :4577 healthy" \
+            || echo "daemon :4577 not responding — run: just daemon-start"
+        exit 0
+    fi
+    for i in $(seq 1 15); do
+        curl -sf -m 2 http://127.0.0.1:4577/api/v1/health >/dev/null && break
+        cargo run -q -p decant-cli -- daemon start >/dev/null 2>&1 || true
+        sleep 2
+    done
+    if curl -sf -m 2 http://127.0.0.1:4577/api/v1/health >/dev/null; then
+        echo "daemon :4577 healthy"
+    else
+        echo "daemon failed to start — see: just daemon-logs"
+        exit 1
+    fi
     cd web && mix phx.server
 
 # Stop the detached daemon (the web server is foreground — Ctrl-C it)
