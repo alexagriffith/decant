@@ -88,7 +88,11 @@ defmodule Decant.MixProject do
     [
       setup: ["deps.get", "assets.setup", "assets.build"],
       test: ["test"],
-      "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
+      "assets.setup": [
+        "tailwind.install --if-missing",
+        "esbuild.install --if-missing",
+        "cmd --cd assets npm install"
+      ],
       "assets.build": ["compile", "tailwind decant", "esbuild decant"],
       "assets.deploy": [
         "tailwind decant --minify",
