@@ -133,7 +133,15 @@ defmodule Decant.ArchiveTest do
 
       assert detail.stats.input_tokens == 1200
       assert detail.stats.output_tokens == 800
+      assert detail.stats.reasoning_tokens == 0
       assert detail.stats.duration_seconds == 1200
+    end
+
+    test "surfaces codex reasoning tokens on the stats" do
+      # Session 2 (codex) reports reasoning=120, a breakdown of output=300.
+      detail = Archive.get_session(2)
+      assert detail.stats.reasoning_tokens == 120
+      assert detail.stats.reasoning_tokens <= detail.stats.output_tokens
     end
 
     test "accepts a string id (as passed from route params)" do
@@ -194,6 +202,8 @@ defmodule Decant.ArchiveTest do
       assert totals.cost > 0
       assert totals.input_tokens > 0
       assert totals.output_tokens > 0
+      # Only the codex fixture reports reasoning (120); claude reports none.
+      assert totals.reasoning_tokens == 120
     end
 
     test "returns zeroed totals when the daemon is unreachable" do
@@ -205,6 +215,7 @@ defmodule Decant.ArchiveTest do
                tool_calls: 0,
                input_tokens: 0,
                output_tokens: 0,
+               reasoning_tokens: 0,
                cost: 0.0
              }
     end
@@ -218,6 +229,10 @@ defmodule Decant.ArchiveTest do
       assert "claude-opus-4-7" in keys
       assert "gpt-5.4" in keys
       assert Enum.all?(rows, &(&1.sessions >= 1))
+      # Reasoning rolls up per model: gpt-5.4 (codex) 120, claude 0.
+      gpt = Enum.find(rows, &(&1.key == "gpt-5.4"))
+      assert gpt.reasoning_tokens == 120
+      assert gpt.reasoning_tokens <= gpt.output_tokens
     end
 
     test ":tool includes both fixture tools" do

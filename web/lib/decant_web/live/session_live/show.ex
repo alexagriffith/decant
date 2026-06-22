@@ -83,6 +83,12 @@ defmodule DecantWeb.SessionLive.Show do
               </span>
               tokens
             </span>
+            <span :if={@stats.reasoning_tokens > 0}>
+              <span class="font-medium text-fg tabular-nums">
+                {compact(@stats.reasoning_tokens)}
+              </span>
+              reasoning
+            </span>
             <span class="font-medium text-fg tabular-nums">{money(@detail.summary.cost)}</span>
             <span :if={@stats.duration} class="inline-flex items-center gap-1">
               <.icon name="hero-clock" class="size-3.5 text-faint" />
@@ -267,6 +273,7 @@ defmodule DecantWeb.SessionLive.Show do
         ),
       input_tokens: session_stats.input_tokens,
       output_tokens: session_stats.output_tokens,
+      reasoning_tokens: session_stats.reasoning_tokens,
       duration: session_stats.duration_seconds
     }
   end

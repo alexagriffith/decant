@@ -813,6 +813,13 @@ components:
         total_output_tokens: { type: integer }
         total_cache_read_tokens: { type: integer }
         total_cache_creation_tokens: { type: integer }
+        total_reasoning_tokens:
+          type: integer
+          description: >
+            Codex `reasoning_output_tokens`, summed per session — output spent on
+            internal reasoning ("planning"). A breakdown of `total_output_tokens`,
+            not additive, so it is never priced separately. Claude reports none
+            (always 0).
         estimated_cost_usd: { type: number }
         is_archived: { type: boolean }
         facets: { $ref: "#/components/schemas/SessionFacets" }
@@ -825,6 +832,7 @@ components:
         - total_output_tokens
         - total_cache_read_tokens
         - total_cache_creation_tokens
+        - total_reasoning_tokens
         - estimated_cost_usd
         - is_archived
         - facets
@@ -942,6 +950,11 @@ components:
         output_tokens: { type: integer }
         cache_read_tokens: { type: integer }
         cache_creation_tokens: { type: integer }
+        reasoning_tokens:
+          type: integer
+          description: >
+            Reasoning sub-component of `output_tokens` (Codex only; a breakdown of
+            output, not additive — so it does not appear in `cost_breakdown`).
         estimated_cost_usd: { type: number }
         cost_breakdown: { $ref: "#/components/schemas/CostBreakdown" }
       required:
@@ -949,6 +962,7 @@ components:
         - output_tokens
         - cache_read_tokens
         - cache_creation_tokens
+        - reasoning_tokens
         - estimated_cost_usd
         - cost_breakdown
 
@@ -1008,6 +1022,10 @@ components:
         output_tokens: { type: integer }
         cache_read_tokens: { type: integer }
         cache_creation_tokens: { type: integer }
+        reasoning_tokens:
+          type: integer
+          description: >
+            Reasoning sub-component of `output_tokens` (Codex only). Not additive.
         estimated_cost_usd: { type: number }
       required:
         - sessions
@@ -1017,6 +1035,7 @@ components:
         - output_tokens
         - cache_read_tokens
         - cache_creation_tokens
+        - reasoning_tokens
         - estimated_cost_usd
 
     DimensionRow:
@@ -1030,6 +1049,10 @@ components:
         sessions: { type: integer }
         input_tokens: { type: integer }
         output_tokens: { type: integer }
+        reasoning_tokens:
+          type: integer
+          description: >
+            Reasoning sub-component of `output_tokens` (Codex only). Not additive.
         estimated_cost_usd: { type: number }
         worktree_count:
           type: integer
@@ -1049,7 +1072,7 @@ components:
             Per-worktree leaf rows only — the worktree tool
             (warp|t3|conductor|claude|git). The root-checkout row and all
             other rows omit it.
-      required: [key, sessions, input_tokens, output_tokens, estimated_cost_usd]
+      required: [key, sessions, input_tokens, output_tokens, reasoning_tokens, estimated_cost_usd]
 
     Activity:
       type: object

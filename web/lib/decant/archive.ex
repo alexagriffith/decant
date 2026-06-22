@@ -83,6 +83,7 @@ defmodule Decant.Archive do
     %{
       input_tokens: stats["input_tokens"] || 0,
       output_tokens: stats["output_tokens"] || 0,
+      reasoning_tokens: stats["reasoning_tokens"] || 0,
       cache_tokens: (stats["cache_read_tokens"] || 0) + (stats["cache_creation_tokens"] || 0),
       duration_seconds: stats["duration_seconds"]
     }
@@ -140,6 +141,7 @@ defmodule Decant.Archive do
           tool_calls: t["tool_calls"] || 0,
           input_tokens: t["input_tokens"] || 0,
           output_tokens: t["output_tokens"] || 0,
+          reasoning_tokens: t["reasoning_tokens"] || 0,
           cost: t["estimated_cost_usd"] || 0.0
         }
 
@@ -149,7 +151,15 @@ defmodule Decant.Archive do
   end
 
   defp empty_totals do
-    %{sessions: 0, messages: 0, tool_calls: 0, input_tokens: 0, output_tokens: 0, cost: 0.0}
+    %{
+      sessions: 0,
+      messages: 0,
+      tool_calls: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      reasoning_tokens: 0,
+      cost: 0.0
+    }
   end
 
   @doc "Per-dimension rollup within `filters`. `dim` is :tool | :model | :project | :day."
@@ -162,6 +172,7 @@ defmodule Decant.Archive do
             sessions: r["sessions"] || 0,
             input_tokens: r["input_tokens"] || 0,
             output_tokens: r["output_tokens"] || 0,
+            reasoning_tokens: r["reasoning_tokens"] || 0,
             cost: r["estimated_cost_usd"] || 0.0,
             worktree_count: r["worktree_count"],
             worktree_label: r["worktree_label"],

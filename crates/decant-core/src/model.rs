@@ -88,6 +88,11 @@ pub struct TokenUsage {
     pub output: i64,
     pub cache_read: i64,
     pub cache_creation: i64,
+    /// Output tokens spent on internal reasoning ("planning"). A *sub-component*
+    /// of `output`, not additive to it — informational/analytics only, never
+    /// priced separately. Codex reports it via `reasoning_output_tokens`; Claude
+    /// redacts its thinking text and reports no count, so this stays 0 there.
+    pub reasoning: i64,
 }
 
 #[derive(Debug, Clone)]

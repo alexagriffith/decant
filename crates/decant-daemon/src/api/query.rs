@@ -50,6 +50,10 @@ pub struct SessionSummary {
     pub total_output_tokens: i64,
     pub total_cache_read_tokens: i64,
     pub total_cache_creation_tokens: i64,
+    /// Codex `reasoning_output_tokens`, summed per session. A breakdown of
+    /// `total_output_tokens` (not additive), so it is never priced separately.
+    /// Claude reports none, so it is 0 there.
+    pub total_reasoning_tokens: i64,
     pub estimated_cost_usd: f64,
     pub is_archived: bool,
     pub facets: SessionFacets,
@@ -79,7 +83,8 @@ const SESSION_COLS: &str = "s.id, s.tool, s.source_session_id, s.title, s.model,
      s.total_cache_read_tokens, s.total_cache_creation_tokens, s.estimated_cost_usd, s.is_archived, \
      s.turn_count, s.error_count, s.interruption_count, s.compaction_count, \
      s.sidechain_message_count, s.agent_spawn_count, s.skill_count, s.command_count, \
-     s.thinking_block_count, s.thinking_chars, s.active_seconds, s.outcome, s.work_type";
+     s.thinking_block_count, s.thinking_chars, s.active_seconds, s.outcome, s.work_type, \
+     s.total_reasoning_tokens";
 
 fn map_summary(r: &rusqlite::Row) -> rusqlite::Result<SessionSummary> {
     Ok(SessionSummary {
@@ -98,6 +103,8 @@ fn map_summary(r: &rusqlite::Row) -> rusqlite::Result<SessionSummary> {
         total_cache_creation_tokens: r.get(12)?,
         estimated_cost_usd: r.get(13)?,
         is_archived: r.get::<_, i64>(14)? != 0,
+        // Appended to SESSION_COLS, so it lands after the facet columns (15..27).
+        total_reasoning_tokens: r.get(28)?,
         facets: SessionFacets {
             turn_count: r.get(15)?,
             error_count: r.get(16)?,
@@ -274,6 +281,9 @@ pub struct SessionStats {
     pub output_tokens: i64,
     pub cache_read_tokens: i64,
     pub cache_creation_tokens: i64,
+    /// Reasoning sub-component of `output_tokens` (Codex only; see
+    /// [`SessionSummary::total_reasoning_tokens`]). Not priced separately.
+    pub reasoning_tokens: i64,
     pub estimated_cost_usd: f64,
     pub cost_breakdown: CostBreakdown,
 }
@@ -431,6 +441,9 @@ fn session_stats(s: &SessionSummary) -> SessionStats {
         output_tokens: s.total_output_tokens,
         cache_read_tokens: s.total_cache_read_tokens,
         cache_creation_tokens: s.total_cache_creation_tokens,
+        // A breakdown of output, already priced as output — so it is reported
+        // alongside the tokens but contributes nothing extra to cost_breakdown.
+        reasoning_tokens: s.total_reasoning_tokens,
         estimated_cost_usd: s.estimated_cost_usd,
         cost_breakdown: CostBreakdown {
             input,
@@ -574,6 +587,8 @@ pub struct Totals {
     pub output_tokens: i64,
     pub cache_read_tokens: i64,
     pub cache_creation_tokens: i64,
+    /// Reasoning sub-component of `output_tokens` (Codex only). Not additive.
+    pub reasoning_tokens: i64,
     pub estimated_cost_usd: f64,
 }
 
@@ -582,12 +597,13 @@ pub fn totals(conn: &Connection, filters: &Filters) -> Result<Totals, ApiError> 
     let where_c = filters.where_clause();
     let p = || rusqlite::params_from_iter(where_c.params.iter());
 
-    let (sessions, intok, outtok, cread, ccreate, cost) = conn.query_row(
+    let (sessions, intok, outtok, cread, ccreate, reasoning, cost) = conn.query_row(
         &format!(
             "SELECT COUNT(*), COALESCE(SUM(s.total_input_tokens),0), \
                     COALESCE(SUM(s.total_output_tokens),0), \
                     COALESCE(SUM(s.total_cache_read_tokens),0), \
                     COALESCE(SUM(s.total_cache_creation_tokens),0), \
+                    COALESCE(SUM(s.total_reasoning_tokens),0), \
                     COALESCE(SUM(s.estimated_cost_usd),0.0) \
              FROM session s WHERE {}",
             where_c.sql
@@ -601,6 +617,7 @@ pub fn totals(conn: &Connection, filters: &Filters) -> Result<Totals, ApiError> 
                 r.get(3)?,
                 r.get(4)?,
                 r.get(5)?,
+                r.get(6)?,
             ))
         },
     )?;
@@ -630,6 +647,7 @@ pub fn totals(conn: &Connection, filters: &Filters) -> Result<Totals, ApiError> 
         output_tokens: outtok,
         cache_read_tokens: cread,
         cache_creation_tokens: ccreate,
+        reasoning_tokens: reasoning,
         estimated_cost_usd: cost,
     })
 }
@@ -640,6 +658,8 @@ pub struct DimRow {
     pub sessions: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
+    /// Reasoning sub-component of `output_tokens` (Codex only). Not additive.
+    pub reasoning_tokens: i64,
     pub estimated_cost_usd: f64,
     /// Rolled-up project rows only: number of distinct worktrees folded in.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -713,6 +733,7 @@ pub fn by_dimension(
         "SELECT {expr} AS k, COUNT(*) AS sessions, \
                 COALESCE(SUM(s.total_input_tokens),0), \
                 COALESCE(SUM(s.total_output_tokens),0), \
+                COALESCE(SUM(s.total_reasoning_tokens),0), \
                 COALESCE(SUM(s.estimated_cost_usd),0.0), \
                 {extra_cols} \
          FROM session s {join} WHERE {root_pred}{} \
@@ -736,10 +757,11 @@ pub fn by_dimension(
                 sessions: r.get(1)?,
                 input_tokens: r.get(2)?,
                 output_tokens: r.get(3)?,
-                estimated_cost_usd: r.get(4)?,
-                worktree_count: r.get::<_, Option<i64>>(5)?,
-                worktree_label: r.get::<_, Option<String>>(6)?,
-                worktree_tool: r.get::<_, Option<String>>(7)?,
+                reasoning_tokens: r.get(4)?,
+                estimated_cost_usd: r.get(5)?,
+                worktree_count: r.get::<_, Option<i64>>(6)?,
+                worktree_label: r.get::<_, Option<String>>(7)?,
+                worktree_tool: r.get::<_, Option<String>>(8)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1259,6 +1281,34 @@ mod tests {
     }
 
     #[test]
+    fn codex_session_surfaces_reasoning_without_inflating_cost() {
+        // The codex sample's latest token_count reports reasoning=60 (a breakdown
+        // of output=150). It must appear on both the summary and the stats, and
+        // must not be double-counted into the cost breakdown.
+        let conn = seeded();
+        let list = list_sessions(
+            &conn,
+            &Filters::parse(None, None, Some("codex".into()), None, None).unwrap(),
+            SessionSort::StartedAtDesc,
+            10,
+            None,
+        )
+        .unwrap();
+        let summary = &list.sessions[0];
+        assert_eq!(summary.total_reasoning_tokens, 60);
+        assert!(summary.total_reasoning_tokens <= summary.total_output_tokens);
+
+        let detail = get_session(&conn, summary.id).unwrap().unwrap();
+        assert_eq!(detail.stats.reasoning_tokens, 60);
+        // cost_breakdown is built only from input/output/cache — reasoning is
+        // already inside output, so the components still sum to the total.
+        let cb = &detail.stats.cost_breakdown;
+        assert!(
+            (cb.total - (cb.input + cb.output + cb.cache_read + cb.cache_creation)).abs() < 1e-9
+        );
+    }
+
+    #[test]
     fn get_missing_session_is_none() {
         let conn = seeded();
         assert!(get_session(&conn, 99999).unwrap().is_none());
@@ -1290,6 +1340,9 @@ mod tests {
         let conn = seeded();
         let all = totals(&conn, &Filters::default()).unwrap();
         assert_eq!(all.sessions, 2);
+        // Only the codex sample reports reasoning (latest token_count = 60);
+        // claude reports none, so the archive-wide reasoning total is 60.
+        assert_eq!(all.reasoning_tokens, 60);
         let codex = totals(
             &conn,
             &Filters::parse(None, None, Some("codex".into()), None, None).unwrap(),
@@ -1297,6 +1350,11 @@ mod tests {
         .unwrap();
         assert_eq!(codex.sessions, 1);
         assert!(codex.tool_calls >= 1);
+        assert_eq!(codex.reasoning_tokens, 60);
+        assert!(
+            codex.reasoning_tokens <= codex.output_tokens,
+            "reasoning is a breakdown of output"
+        );
     }
 
     #[test]
@@ -1308,6 +1366,12 @@ mod tests {
         let keys: Vec<_> = page.rows.iter().map(|r| r.key.as_str()).collect();
         assert!(keys.contains(&"codex"));
         assert!(keys.contains(&"claude_code"));
+        // Reasoning rolls up per tool: codex 60, claude 0.
+        let codex = page.rows.iter().find(|r| r.key == "codex").unwrap();
+        let claude = page.rows.iter().find(|r| r.key == "claude_code").unwrap();
+        assert_eq!(codex.reasoning_tokens, 60);
+        assert!(codex.reasoning_tokens <= codex.output_tokens);
+        assert_eq!(claude.reasoning_tokens, 0);
     }
 
     #[test]

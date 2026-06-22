@@ -250,6 +250,8 @@ fn parse_assistant(v: &Value, seq: i64, totals: &mut TokenUsage) -> NormalizedMe
             output: g("output_tokens"),
             cache_read: g("cache_read_input_tokens"),
             cache_creation: g("cache_creation_input_tokens"),
+            // Claude redacts its thinking text and reports no reasoning count.
+            reasoning: 0,
         }
     });
     if let Some(u) = &usage {

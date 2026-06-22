@@ -266,6 +266,13 @@ defmodule DecantWeb.AnalyticsLive do
                     align="right"
                   />
                   <.sort_header
+                    col="reasoning_tokens"
+                    label="Reason tok"
+                    sort={@model_sort}
+                    table="model"
+                    align="right"
+                  />
+                  <.sort_header
                     col="cost"
                     label="Cost"
                     sort={@model_sort}
@@ -295,6 +302,9 @@ defmodule DecantWeb.AnalyticsLive do
                   </td>
                   <td class="px-4 py-2.5 text-right tabular-nums text-muted">
                     {compact(r.output_tokens)}
+                  </td>
+                  <td class="px-4 py-2.5 text-right tabular-nums text-muted">
+                    {compact(r.reasoning_tokens)}
                   </td>
                   <td class="px-4 py-2.5 text-right tabular-nums">{money(r.cost)}</td>
                   <td class="w-40 px-4 py-2.5">

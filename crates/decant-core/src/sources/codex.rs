@@ -88,6 +88,9 @@ pub fn parse_session(
                     output: g("output_tokens"),
                     cache_read: cached,
                     cache_creation: 0,
+                    // reasoning_output_tokens is a breakdown of output_tokens, not
+                    // additive — captured for analytics, never priced separately.
+                    reasoning: g("reasoning_output_tokens"),
                 };
             }
             "response_item" => {
@@ -316,12 +319,14 @@ mod tests {
     fn cumulative_token_count_becomes_session_totals() {
         let parsed = parse_session("fallback", &fixture(), &HashMap::new());
         // Latest token_count wins (cumulative): info.total_token_usage with
-        // input_tokens=900, cached=400, output=150. Codex's input_tokens
-        // includes the cached portion, so the billable input is 900-400=500
-        // and cache_read captures the 400 cached tokens separately.
+        // input_tokens=900, cached=400, output=150, reasoning=60. Codex's
+        // input_tokens includes the cached portion, so the billable input is
+        // 900-400=500 and cache_read captures the 400 cached tokens separately.
         assert_eq!(parsed.session.totals.input, 500);
         assert_eq!(parsed.session.totals.output, 150);
         assert_eq!(parsed.session.totals.cache_read, 400);
+        // reasoning_output_tokens is captured as a breakdown of output (60 ≤ 150).
+        assert_eq!(parsed.session.totals.reasoning, 60);
     }
 
     #[test]

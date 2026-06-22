@@ -11,6 +11,9 @@ pub struct Totals {
     pub output_tokens: i64,
     pub cache_read_tokens: i64,
     pub cache_creation_tokens: i64,
+    /// Output tokens spent on internal reasoning (Codex only; a breakdown of
+    /// `output_tokens`, not additive). Claude reports none, so it stays 0 there.
+    pub reasoning_tokens: i64,
     pub estimated_cost_usd: f64,
 }
 
@@ -25,6 +28,7 @@ pub fn totals(conn: &Connection) -> Result<Totals> {
            (SELECT COALESCE(SUM(total_output_tokens),0) FROM session),
            (SELECT COALESCE(SUM(total_cache_read_tokens),0) FROM session),
            (SELECT COALESCE(SUM(total_cache_creation_tokens),0) FROM session),
+           (SELECT COALESCE(SUM(total_reasoning_tokens),0) FROM session),
            (SELECT COALESCE(SUM(estimated_cost_usd),0.0) FROM session)",
         [],
         |r| {
@@ -36,7 +40,8 @@ pub fn totals(conn: &Connection) -> Result<Totals> {
                 output_tokens: r.get(4)?,
                 cache_read_tokens: r.get(5)?,
                 cache_creation_tokens: r.get(6)?,
-                estimated_cost_usd: r.get(7)?,
+                reasoning_tokens: r.get(7)?,
+                estimated_cost_usd: r.get(8)?,
             })
         },
     )?;
@@ -70,6 +75,8 @@ pub struct DimRow {
     pub sessions: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
+    /// Reasoning sub-component of `output_tokens` (Codex only; see [`Totals`]).
+    pub reasoning_tokens: i64,
     pub estimated_cost_usd: f64,
 }
 
@@ -90,6 +97,7 @@ pub fn by_dimension(conn: &Connection, dim: Dimension) -> Result<Vec<DimRow>> {
                 COUNT(*) AS sessions,
                 COALESCE(SUM(s.total_input_tokens),0),
                 COALESCE(SUM(s.total_output_tokens),0),
+                COALESCE(SUM(s.total_reasoning_tokens),0),
                 COALESCE(SUM(s.estimated_cost_usd),0.0)
          FROM session s {join}
          GROUP BY k
@@ -103,7 +111,8 @@ pub fn by_dimension(conn: &Connection, dim: Dimension) -> Result<Vec<DimRow>> {
                 sessions: r.get(1)?,
                 input_tokens: r.get(2)?,
                 output_tokens: r.get(3)?,
-                estimated_cost_usd: r.get(4)?,
+                reasoning_tokens: r.get(4)?,
+                estimated_cost_usd: r.get(5)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -426,6 +435,26 @@ mod tests {
         assert_eq!(t.messages, 4);
         assert_eq!(t.tool_calls, 1);
         assert_eq!(t.input_tokens, 2700);
+    }
+
+    #[test]
+    fn reasoning_tokens_surface_in_rollups() {
+        // The codex enriched fixture's token_count carries
+        // reasoning_output_tokens=40; claude reports none. The reasoning total
+        // must surface in the whole-archive rollup and the per-tool breakdown,
+        // attributed entirely to the codex session.
+        let conn = seeded_enriched();
+        assert_eq!(totals(&conn).unwrap().reasoning_tokens, 40);
+
+        let by_tool = by_dimension(&conn, Dimension::Tool).unwrap();
+        let codex = by_tool.iter().find(|r| r.key == "codex").unwrap();
+        let claude = by_tool.iter().find(|r| r.key == "claude_code").unwrap();
+        assert_eq!(codex.reasoning_tokens, 40);
+        assert!(
+            codex.reasoning_tokens <= codex.output_tokens,
+            "reasoning is a breakdown of output"
+        );
+        assert_eq!(claude.reasoning_tokens, 0, "claude reports no reasoning");
     }
 
     #[test]

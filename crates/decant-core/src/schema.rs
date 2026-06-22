@@ -4,7 +4,7 @@ use rusqlite::Connection;
 pub const SCHEMA_V1: &str = include_str!("schema_v1.sql");
 
 /// The latest schema version `migrate` brings a database to.
-pub const LATEST_VERSION: i64 = 5;
+pub const LATEST_VERSION: i64 = 6;
 
 /// v2: the `recommendation` table (signals + evergreen catalog, materialized
 /// with state by `recommendations::regenerate`). `CREATE TABLE IF NOT EXISTS`
@@ -76,6 +76,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
     if current < 5 {
         apply(conn, 5, MIGRATION_V5)?;
+    }
+    if current < 6 {
+        apply_v6(conn)?;
     }
     Ok(())
 }
@@ -163,6 +166,29 @@ fn apply_v4(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// v6: add `session.total_reasoning_tokens` (Codex `reasoning_output_tokens`,
+/// summed per session — a breakdown of output, never priced separately), then
+/// invalidate the ingest size memo (`size = -1`) so the next sync re-parses every
+/// source file and backfills the reasoning total for the whole archive. The
+/// column guard and memo reset are idempotent, and everything commits in one
+/// transaction: a mid-way failure re-runs v6 from the top.
+fn apply_v6(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    add_column_if_missing(
+        &tx,
+        "session",
+        "total_reasoning_tokens",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    tx.execute("UPDATE ingest_source SET size = -1", [])?;
+    tx.execute(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES (6, datetime('now'))",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Add a column to `table` only if it does not already exist.
 fn add_column_if_missing(conn: &Connection, table: &str, col: &str, decl: &str) -> Result<()> {
     let exists = conn
@@ -215,7 +241,7 @@ mod tests {
         let versions: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(versions, 5, "each migration recorded exactly once");
+        assert_eq!(versions, 6, "each migration recorded exactly once");
         let max: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
                 r.get(0)
@@ -452,6 +478,65 @@ mod tests {
             })
             .unwrap();
         assert_eq!(max, LATEST_VERSION);
+    }
+
+    #[test]
+    fn v6_adds_reasoning_column_idempotently() {
+        let conn = db::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap(); // idempotent
+
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(session)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            cols.contains(&"total_reasoning_tokens".to_string()),
+            "missing session column total_reasoning_tokens"
+        );
+        let max: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(max, LATEST_VERSION);
+    }
+
+    #[test]
+    fn v6_invalidates_ingest_memo_for_backfill() {
+        // Model a DB at v5 (session has the v1..v5 columns but not the new
+        // reasoning column) with one already-ingested file memoized. v6 must add
+        // the column and reset the size memo so the next sync re-parses and
+        // backfills the reasoning total.
+        let conn = db::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+             CREATE TABLE session(id INTEGER PRIMARY KEY, tool TEXT NOT NULL,
+                                  source_session_id TEXT NOT NULL);
+             CREATE TABLE ingest_source(path TEXT PRIMARY KEY, tool TEXT, size INTEGER, mtime INTEGER);
+             INSERT INTO schema_migrations(version, applied_at) VALUES (5, datetime('now'));
+             INSERT INTO ingest_source(path, tool, size, mtime) VALUES ('/x/sess.jsonl', 'codex', 100, 1700000000);",
+        )
+        .unwrap();
+
+        apply_v6(&conn).unwrap();
+
+        let (size, mtime): (i64, i64) = conn
+            .query_row("SELECT size, mtime FROM ingest_source", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(
+            size, -1,
+            "v6 must invalidate the size memo so sync re-ingests"
+        );
+        assert_eq!(
+            mtime, 1700000000,
+            "mtime preserved; size alone breaks the match"
+        );
     }
 
     #[test]

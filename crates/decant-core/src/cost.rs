@@ -229,6 +229,7 @@ mod tests {
             output: 1_000_000,
             cache_read: 0,
             cache_creation: 0,
+            reasoning: 0,
         }
     }
 
@@ -241,6 +242,22 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_tokens_do_not_change_cost() {
+        // reasoning is a *sub-component* of output (already priced as output), so
+        // setting it must not move the estimate. Two usages identical except for
+        // reasoning must cost exactly the same.
+        let pricing = default_pricing();
+        let without = usage_1m();
+        let with = TokenUsage {
+            reasoning: 750_000,
+            ..usage_1m()
+        };
+        let a = estimate_cost(Some("claude-opus-4-8"), &without, &pricing);
+        let b = estimate_cost(Some("claude-opus-4-8"), &with, &pricing);
+        assert_eq!(a, b, "reasoning is inside output; it must not add to cost");
+    }
+
+    #[test]
     fn cache_tokens_are_priced() {
         let pricing = default_pricing();
         let usage = TokenUsage {
@@ -248,6 +265,7 @@ mod tests {
             output: 0,
             cache_read: 1_000_000,
             cache_creation: 1_000_000,
+            reasoning: 0,
         };
         // opus: cache read $0.50 + cache write $6.25 = $6.75.
         let cost = estimate_cost(Some("claude-opus-4-8"), &usage, &pricing);
@@ -352,6 +370,7 @@ mod tests {
             output: 5_000,
             cache_read: 0,
             cache_creation: 0,
+            reasoning: 0,
         };
         // Strings we deliberately don't price (no per-token rate or not an LLM).
         assert_eq!(estimate_cost(Some("<synthetic>"), &usage, &pricing), 0.0);

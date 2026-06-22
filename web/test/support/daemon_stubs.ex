@@ -33,6 +33,7 @@ defmodule Decant.DaemonStubs do
       "total_output_tokens" => 800,
       "total_cache_read_tokens" => 0,
       "total_cache_creation_tokens" => 0,
+      "total_reasoning_tokens" => 0,
       "estimated_cost_usd" => 0.42,
       "is_archived" => false
     },
@@ -50,6 +51,7 @@ defmodule Decant.DaemonStubs do
       "total_output_tokens" => 300,
       "total_cache_read_tokens" => 0,
       "total_cache_creation_tokens" => 0,
+      "total_reasoning_tokens" => 120,
       "estimated_cost_usd" => 0.18,
       "is_archived" => false
     }
@@ -319,6 +321,7 @@ defmodule Decant.DaemonStubs do
        "output_tokens" => sum(rows, "total_output_tokens"),
        "cache_read_tokens" => 0,
        "cache_creation_tokens" => 0,
+       "reasoning_tokens" => sum(rows, "total_reasoning_tokens"),
        "estimated_cost_usd" => sum(rows, "estimated_cost_usd")
      }}
   end
@@ -337,6 +340,7 @@ defmodule Decant.DaemonStubs do
           "sessions" => length(group),
           "input_tokens" => sum(group, "total_input_tokens"),
           "output_tokens" => sum(group, "total_output_tokens"),
+          "reasoning_tokens" => sum(group, "total_reasoning_tokens"),
           "estimated_cost_usd" => sum(group, "estimated_cost_usd")
         }
       end)
@@ -572,6 +576,7 @@ defmodule Decant.DaemonStubs do
       "output_tokens" => session["total_output_tokens"],
       "cache_read_tokens" => 0,
       "cache_creation_tokens" => 0,
+      "reasoning_tokens" => session["total_reasoning_tokens"],
       "estimated_cost_usd" => session["estimated_cost_usd"],
       "cost_breakdown" => %{
         "input" => session["estimated_cost_usd"],

@@ -1526,6 +1526,7 @@ mod tests {
                 sessions: 1,
                 input_tokens: 0,
                 output_tokens: 0,
+                reasoning_tokens: 0,
                 estimated_cost_usd: 5.0,
             },
             stats::DimRow {
@@ -1533,6 +1534,7 @@ mod tests {
                 sessions: 1,
                 input_tokens: 0,
                 output_tokens: 0,
+                reasoning_tokens: 0,
                 estimated_cost_usd: 5.0,
             },
         ];
@@ -1543,6 +1545,7 @@ mod tests {
                 sessions: 1,
                 input_tokens: 0,
                 output_tokens: 0,
+                reasoning_tokens: 0,
                 estimated_cost_usd: 3.0,
             },
             stats::DimRow {
@@ -1550,6 +1553,7 @@ mod tests {
                 sessions: 1,
                 input_tokens: 0,
                 output_tokens: 0,
+                reasoning_tokens: 0,
                 estimated_cost_usd: 3.0,
             },
             stats::DimRow {
@@ -1557,6 +1561,7 @@ mod tests {
                 sessions: 1,
                 input_tokens: 0,
                 output_tokens: 0,
+                reasoning_tokens: 0,
                 estimated_cost_usd: 3.0,
             },
         ];
@@ -1571,6 +1576,7 @@ mod tests {
             sessions: 1,
             input_tokens: 0,
             output_tokens: 0,
+            reasoning_tokens: 0,
             estimated_cost_usd: 0.0,
         }];
         assert!(cost_concentration(&zero).is_empty(), "no spend, no signal");
