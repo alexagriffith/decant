@@ -30,6 +30,9 @@ defmodule DecantWeb.AnalyticsLiveTest do
 
     # Cost is rendered with a dollar sign and 2 decimals (best-effort, not the SVG).
     assert html =~ "$"
+
+    # The Reason tok column marks Claude's value as estimated (≈); Codex is exact.
+    assert html =~ "≈"
   end
 
   # Shared stub for the project worktree tests.

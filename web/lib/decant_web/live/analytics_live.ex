@@ -304,7 +304,14 @@ defmodule DecantWeb.AnalyticsLive do
                     {compact(r.output_tokens)}
                   </td>
                   <td class="px-4 py-2.5 text-right tabular-nums text-muted">
-                    {compact(r.reasoning_tokens)}
+                    <span :if={r.reasoning_tokens > 0}>{compact(r.reasoning_tokens)}</span>
+                    <span
+                      :if={r.reasoning_tokens == 0 and r.est_reasoning_tokens > 0}
+                      title="estimated (Claude reports no exact count)"
+                    >
+                      ≈{compact(r.est_reasoning_tokens)}
+                    </span>
+                    <span :if={r.reasoning_tokens == 0 and r.est_reasoning_tokens == 0}>—</span>
                   </td>
                   <td class="px-4 py-2.5 text-right tabular-nums">{money(r.cost)}</td>
                   <td class="w-40 px-4 py-2.5">

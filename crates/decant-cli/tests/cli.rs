@@ -343,7 +343,7 @@ fn db_info_reports_counts() {
         .args(["db", "info"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("schema:     v6"))
+        .stdout(predicate::str::contains("schema:     v8"))
         .stdout(predicate::str::contains("sessions:   1"));
 }
 

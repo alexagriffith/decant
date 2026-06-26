@@ -95,6 +95,32 @@ pub struct TokenUsage {
     pub reasoning: i64,
 }
 
+/// Provenance of a session's reasoning-token figure, so consumers can tell an
+/// exact count from an estimate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReasoningSource {
+    /// The tool reported an exact count (Codex `reasoning_output_tokens`); read
+    /// it from [`TokenUsage::reasoning`].
+    Reported,
+    /// No exact count; estimated by subtracting visible output from the turn's
+    /// total (Claude). Read [`NormalizedSession::est_reasoning_tokens`]; treat as
+    /// approximate (±soft).
+    Inferred,
+    /// No exact count and nothing to estimate from (no reasoning/thinking).
+    #[default]
+    None,
+}
+
+impl ReasoningSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReasoningSource::Reported => "reported",
+            ReasoningSource::Inferred => "inferred",
+            ReasoningSource::None => "none",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NormalizedBlock {
     pub ordinal: i64,
@@ -137,6 +163,14 @@ pub struct NormalizedSession {
     pub raw_meta: Value,
     /// Session-level token totals (Codex sets these directly; Claude sums per-message).
     pub totals: TokenUsage,
+    /// Estimated reasoning tokens when the tool reports no exact count: per Claude
+    /// turn, `max(0, turn_output − est(visible text + tool args))`, summed. Always
+    /// `<= totals.output`. 0 (and `reasoning_source = None`) when there's nothing
+    /// to estimate; 0 for Codex (which reports the exact count in `totals.reasoning`).
+    pub est_reasoning_tokens: i64,
+    /// Whether the reasoning figure is exact (`Reported`), estimated (`Inferred`),
+    /// or unavailable (`None`). See [`ReasoningSource`].
+    pub reasoning_source: ReasoningSource,
     pub messages: Vec<NormalizedMessage>,
 }
 
@@ -186,5 +220,10 @@ mod tests {
         assert_eq!(ToolKind::Custom.as_str(), "custom");
         assert_eq!(ToolKind::WebSearch.as_str(), "web_search");
         assert_eq!(ToolKind::ToolSearch.as_str(), "tool_search");
+
+        assert_eq!(ReasoningSource::Reported.as_str(), "reported");
+        assert_eq!(ReasoningSource::Inferred.as_str(), "inferred");
+        assert_eq!(ReasoningSource::None.as_str(), "none");
+        assert_eq!(ReasoningSource::default(), ReasoningSource::None);
     }
 }

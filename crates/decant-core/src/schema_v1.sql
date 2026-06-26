@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS session (
   total_cache_read_tokens INTEGER NOT NULL DEFAULT 0,
   total_cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
   total_reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+  est_reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+  reasoning_source TEXT,
   estimated_cost_usd REAL NOT NULL DEFAULT 0,
   is_archived INTEGER NOT NULL DEFAULT 0,
   source_path TEXT,

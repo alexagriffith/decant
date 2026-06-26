@@ -18,6 +18,9 @@ pub fn parse_session(
     let mut ended_at: Option<String> = None;
     let mut title: Option<String> = None;
     let mut totals = TokenUsage::default();
+    // Codex reports exact usage (incl. `reasoning_output_tokens`) in `token_count`
+    // events; seeing one means the reasoning figure is exact (`Reported`).
+    let mut saw_token_count = false;
     let mut raw_meta = Value::Null;
     let mut messages: Vec<NormalizedMessage> = Vec::new();
     let mut seq: i64 = 0;
@@ -81,6 +84,7 @@ pub fn parse_session(
                     .get("info")
                     .and_then(|i| i.get("total_token_usage"))
                     .unwrap_or(&payload);
+                saw_token_count = true;
                 let g = |k: &str| src.get(k).and_then(Value::as_i64).unwrap_or(0);
                 let cached = g("cached_input_tokens");
                 totals = TokenUsage {
@@ -121,6 +125,14 @@ pub fn parse_session(
         is_archived: false,
         raw_meta,
         totals,
+        // Codex reports reasoning exactly (in `totals.reasoning`), so there is
+        // nothing to estimate; `Reported` when a token_count was seen.
+        est_reasoning_tokens: 0,
+        reasoning_source: if saw_token_count {
+            ReasoningSource::Reported
+        } else {
+            ReasoningSource::None
+        },
         messages,
     };
     ParsedSession { session, issues }
@@ -327,6 +339,9 @@ mod tests {
         assert_eq!(parsed.session.totals.cache_read, 400);
         // reasoning_output_tokens is captured as a breakdown of output (60 ≤ 150).
         assert_eq!(parsed.session.totals.reasoning, 60);
+        // Codex reports reasoning exactly: source is `reported`, nothing inferred.
+        assert_eq!(parsed.session.reasoning_source, ReasoningSource::Reported);
+        assert_eq!(parsed.session.est_reasoning_tokens, 0);
     }
 
     #[test]

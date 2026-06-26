@@ -11,9 +11,12 @@ pub struct Totals {
     pub output_tokens: i64,
     pub cache_read_tokens: i64,
     pub cache_creation_tokens: i64,
-    /// Output tokens spent on internal reasoning (Codex only; a breakdown of
-    /// `output_tokens`, not additive). Claude reports none, so it stays 0 there.
+    /// Output tokens spent on internal reasoning, exact (Codex only; a breakdown
+    /// of `output_tokens`, not additive). Claude reports none, so it stays 0 here.
     pub reasoning_tokens: i64,
+    /// Estimated reasoning tokens where no exact count exists (Claude, by
+    /// subtraction). Soft; reported separately so exact and estimated never mix.
+    pub est_reasoning_tokens: i64,
     pub estimated_cost_usd: f64,
 }
 
@@ -29,6 +32,7 @@ pub fn totals(conn: &Connection) -> Result<Totals> {
            (SELECT COALESCE(SUM(total_cache_read_tokens),0) FROM session),
            (SELECT COALESCE(SUM(total_cache_creation_tokens),0) FROM session),
            (SELECT COALESCE(SUM(total_reasoning_tokens),0) FROM session),
+           (SELECT COALESCE(SUM(est_reasoning_tokens),0) FROM session),
            (SELECT COALESCE(SUM(estimated_cost_usd),0.0) FROM session)",
         [],
         |r| {
@@ -41,7 +45,8 @@ pub fn totals(conn: &Connection) -> Result<Totals> {
                 cache_read_tokens: r.get(5)?,
                 cache_creation_tokens: r.get(6)?,
                 reasoning_tokens: r.get(7)?,
-                estimated_cost_usd: r.get(8)?,
+                est_reasoning_tokens: r.get(8)?,
+                estimated_cost_usd: r.get(9)?,
             })
         },
     )?;
@@ -75,8 +80,10 @@ pub struct DimRow {
     pub sessions: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
-    /// Reasoning sub-component of `output_tokens` (Codex only; see [`Totals`]).
+    /// Exact reasoning sub-component of `output_tokens` (Codex only; see [`Totals`]).
     pub reasoning_tokens: i64,
+    /// Estimated reasoning where no exact count exists (Claude; see [`Totals`]).
+    pub est_reasoning_tokens: i64,
     pub estimated_cost_usd: f64,
 }
 
@@ -98,6 +105,7 @@ pub fn by_dimension(conn: &Connection, dim: Dimension) -> Result<Vec<DimRow>> {
                 COALESCE(SUM(s.total_input_tokens),0),
                 COALESCE(SUM(s.total_output_tokens),0),
                 COALESCE(SUM(s.total_reasoning_tokens),0),
+                COALESCE(SUM(s.est_reasoning_tokens),0),
                 COALESCE(SUM(s.estimated_cost_usd),0.0)
          FROM session s {join}
          GROUP BY k
@@ -112,7 +120,8 @@ pub fn by_dimension(conn: &Connection, dim: Dimension) -> Result<Vec<DimRow>> {
                 input_tokens: r.get(2)?,
                 output_tokens: r.get(3)?,
                 reasoning_tokens: r.get(4)?,
-                estimated_cost_usd: r.get(5)?,
+                est_reasoning_tokens: r.get(5)?,
+                estimated_cost_usd: r.get(6)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;

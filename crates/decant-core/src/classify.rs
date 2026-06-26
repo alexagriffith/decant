@@ -364,6 +364,8 @@ mod tests {
             is_archived: false,
             raw_meta: serde_json::Value::Null,
             totals: TokenUsage::default(),
+            est_reasoning_tokens: 0,
+            reasoning_source: ReasoningSource::None,
             messages,
         }
     }

@@ -819,7 +819,23 @@ components:
             Codex `reasoning_output_tokens`, summed per session — output spent on
             internal reasoning ("planning"). A breakdown of `total_output_tokens`,
             not additive, so it is never priced separately. Claude reports none
-            (always 0).
+            (always 0; see `est_reasoning_tokens`).
+        est_reasoning_tokens:
+          type: integer
+          description: >
+            Estimated reasoning tokens when the tool reports no exact count
+            (Claude): per turn, `max(0, turn_output − est(visible text + tool
+            args))`, summed. A soft estimate (~chars/4, no tokenizer); always
+            `<= total_output_tokens`. 0 for Codex, which reports the exact count
+            in `total_reasoning_tokens`. Use `reasoning_source` to disambiguate.
+        reasoning_source:
+          type: [string, "null"]
+          enum: [reported, inferred, none, null]
+          description: >
+            Provenance of the reasoning figures: `reported` = exact count from the
+            tool (read `total_reasoning_tokens`); `inferred` = estimated by
+            subtraction (read `est_reasoning_tokens`, treat as approximate);
+            `none` = no reasoning information.
         estimated_cost_usd: { type: number }
         is_archived: { type: boolean }
         facets: { $ref: "#/components/schemas/SessionFacets" }
@@ -833,6 +849,7 @@ components:
         - total_cache_read_tokens
         - total_cache_creation_tokens
         - total_reasoning_tokens
+        - est_reasoning_tokens
         - estimated_cost_usd
         - is_archived
         - facets
@@ -953,8 +970,19 @@ components:
         reasoning_tokens:
           type: integer
           description: >
-            Reasoning sub-component of `output_tokens` (Codex only; a breakdown of
-            output, not additive — so it does not appear in `cost_breakdown`).
+            Reasoning sub-component of `output_tokens`, exact (Codex only; a
+            breakdown of output, not additive — so it does not appear in
+            `cost_breakdown`).
+        est_reasoning_tokens:
+          type: integer
+          description: >
+            Estimated reasoning when no exact count exists (Claude, by
+            subtraction). Soft; see `reasoning_source`.
+        reasoning_source:
+          type: [string, "null"]
+          enum: [reported, inferred, none, null]
+          description: >
+            `reported` (exact, Codex) | `inferred` (estimated, Claude) | `none`.
         estimated_cost_usd: { type: number }
         cost_breakdown: { $ref: "#/components/schemas/CostBreakdown" }
       required:
@@ -963,6 +991,7 @@ components:
         - cache_read_tokens
         - cache_creation_tokens
         - reasoning_tokens
+        - est_reasoning_tokens
         - estimated_cost_usd
         - cost_breakdown
 
@@ -1025,7 +1054,13 @@ components:
         reasoning_tokens:
           type: integer
           description: >
-            Reasoning sub-component of `output_tokens` (Codex only). Not additive.
+            Reasoning sub-component of `output_tokens`, exact (Codex only). Not
+            additive.
+        est_reasoning_tokens:
+          type: integer
+          description: >
+            Estimated reasoning where no exact count exists (Claude). Reported
+            separately so exact and estimated figures never mix in one number.
         estimated_cost_usd: { type: number }
       required:
         - sessions
@@ -1036,6 +1071,7 @@ components:
         - cache_read_tokens
         - cache_creation_tokens
         - reasoning_tokens
+        - est_reasoning_tokens
         - estimated_cost_usd
 
     DimensionRow:
@@ -1052,7 +1088,11 @@ components:
         reasoning_tokens:
           type: integer
           description: >
-            Reasoning sub-component of `output_tokens` (Codex only). Not additive.
+            Reasoning sub-component of `output_tokens`, exact (Codex only). Not
+            additive.
+        est_reasoning_tokens:
+          type: integer
+          description: Estimated reasoning where no exact count exists (Claude).
         estimated_cost_usd: { type: number }
         worktree_count:
           type: integer
@@ -1072,7 +1112,7 @@ components:
             Per-worktree leaf rows only — the worktree tool
             (warp|t3|conductor|claude|git). The root-checkout row and all
             other rows omit it.
-      required: [key, sessions, input_tokens, output_tokens, reasoning_tokens, estimated_cost_usd]
+      required: [key, sessions, input_tokens, output_tokens, reasoning_tokens, est_reasoning_tokens, estimated_cost_usd]
 
     Activity:
       type: object

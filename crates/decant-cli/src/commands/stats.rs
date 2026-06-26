@@ -38,6 +38,7 @@ pub fn run(cli: &Cli, args: &StatsArgs) -> anyhow::Result<i32> {
                     "IN_TOK",
                     "OUT_TOK",
                     "REASON_TOK",
+                    "EST_REASON",
                     "COST$",
                 ]);
                 for r in &rows {
@@ -47,6 +48,7 @@ pub fn run(cli: &Cli, args: &StatsArgs) -> anyhow::Result<i32> {
                         r.input_tokens.to_string(),
                         r.output_tokens.to_string(),
                         r.reasoning_tokens.to_string(),
+                        r.est_reasoning_tokens.to_string(),
                         format!("{:.2}", r.estimated_cost_usd),
                     ]);
                 }
@@ -63,7 +65,10 @@ pub fn run(cli: &Cli, args: &StatsArgs) -> anyhow::Result<i32> {
                 println!("tool calls: {}", t.tool_calls);
                 println!("input tok:  {}", t.input_tokens);
                 println!("output tok: {}", t.output_tokens);
-                println!("reason tok: {}", t.reasoning_tokens);
+                println!(
+                    "reason tok: {} (exact) / ~{} (est)",
+                    t.reasoning_tokens, t.est_reasoning_tokens
+                );
                 println!("est. cost:  ${:.2}", t.estimated_cost_usd);
             }
         }

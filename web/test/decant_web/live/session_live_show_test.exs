@@ -20,6 +20,10 @@ defmodule DecantWeb.SessionLive.ShowTest do
     assert html =~ "claude-opus-4-7"
 
     assert html =~ "auth"
+
+    # Claude has no exact reasoning count, so the header shows the estimate (≈).
+    assert html =~ "reasoning (est)"
+    assert html =~ "≈"
   end
 
   test "redirects to the index for a non-existent session id", %{conn: conn} do

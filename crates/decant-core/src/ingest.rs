@@ -61,9 +61,10 @@ pub fn upsert_session(
             ingested_at, source_mtime, source_size, source_hash,
             turn_count, error_count, interruption_count, compaction_count, sidechain_message_count,
             agent_spawn_count, skill_count, command_count, thinking_block_count, thinking_chars,
-            active_seconds, outcome, work_type)
+            active_seconds, outcome, work_type,
+            est_reasoning_tokens, reasoning_source)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,datetime('now'),?21,?22,?23,
-                 ?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36)",
+                 ?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38)",
         params![
             s.tool.as_str(), s.source_session_id, project_id, s.title, s.cwd, s.git_branch, s.model, s.cli_version,
             s.started_at, s.ended_at, s.messages.len() as i64,
@@ -75,6 +76,7 @@ pub fn upsert_session(
             facets.sidechain_message_count, facets.agent_spawn_count, facets.skill_count,
             facets.command_count, facets.thinking_block_count, facets.thinking_chars,
             facets.active_seconds, outcome.map(|o| o.as_str()), work_type.map(|w| w.as_str()),
+            s.est_reasoning_tokens, s.reasoning_source.as_str(),
         ],
     )?;
     let session_id = conn.last_insert_rowid();

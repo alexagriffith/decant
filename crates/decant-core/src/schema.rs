@@ -4,7 +4,7 @@ use rusqlite::Connection;
 pub const SCHEMA_V1: &str = include_str!("schema_v1.sql");
 
 /// The latest schema version `migrate` brings a database to.
-pub const LATEST_VERSION: i64 = 6;
+pub const LATEST_VERSION: i64 = 8;
 
 /// v2: the `recommendation` table (signals + evergreen catalog, materialized
 /// with state by `recommendations::regenerate`). `CREATE TABLE IF NOT EXISTS`
@@ -79,6 +79,12 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
     if current < 6 {
         apply_v6(conn)?;
+    }
+    if current < 7 {
+        apply_v7(conn)?;
+    }
+    if current < 8 {
+        apply_v8(conn)?;
     }
     Ok(())
 }
@@ -189,6 +195,47 @@ fn apply_v6(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// v7: re-ingest backfill, no schema change. Claude Code logs one API turn as
+/// several JSONL lines (one per content block) and stamps the SAME `usage` on
+/// each; the parser now bills a turn's tokens once (keyed by `requestId`) instead
+/// of summing the duplicates, which previously inflated Claude token totals and
+/// cost (~2.5x output on real archives). Invalidate the ingest size memo
+/// (`size = -1`) so the next sync re-parses every file with the corrected
+/// accounting. Memo reset + version record commit together; idempotent.
+fn apply_v7(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("UPDATE ingest_source SET size = -1", [])?;
+    tx.execute(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES (7, datetime('now'))",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// v8: add the inferred-reasoning columns — `est_reasoning_tokens` (Claude:
+/// `max(0, turn_output − est(visible))` summed; 0 for Codex) and
+/// `reasoning_source` (`reported` | `inferred` | `none`). Then invalidate the
+/// ingest size memo so the next sync re-parses every file and backfills them.
+/// Column guards + memo reset are idempotent; all commit together.
+fn apply_v8(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    add_column_if_missing(
+        &tx,
+        "session",
+        "est_reasoning_tokens",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(&tx, "session", "reasoning_source", "TEXT")?;
+    tx.execute("UPDATE ingest_source SET size = -1", [])?;
+    tx.execute(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES (8, datetime('now'))",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Add a column to `table` only if it does not already exist.
 fn add_column_if_missing(conn: &Connection, table: &str, col: &str, decl: &str) -> Result<()> {
     let exists = conn
@@ -241,7 +288,7 @@ mod tests {
         let versions: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(versions, 6, "each migration recorded exactly once");
+        assert_eq!(versions, 8, "each migration recorded exactly once");
         let max: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
                 r.get(0)
@@ -537,6 +584,61 @@ mod tests {
             mtime, 1700000000,
             "mtime preserved; size alone breaks the match"
         );
+    }
+
+    #[test]
+    fn v7_invalidates_ingest_memo_for_reparse() {
+        // Model a DB at v6 with one already-ingested file memoized. v7 carries no
+        // schema change; it only resets the size memo so the next sync re-parses
+        // every file with the corrected Claude per-turn usage accounting.
+        let conn = db::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+             CREATE TABLE ingest_source(path TEXT PRIMARY KEY, tool TEXT, size INTEGER, mtime INTEGER);
+             INSERT INTO schema_migrations(version, applied_at) VALUES (6, datetime('now'));
+             INSERT INTO ingest_source(path, tool, size, mtime) VALUES ('/x/sess.jsonl', 'claude_code', 100, 1700000000);",
+        )
+        .unwrap();
+
+        apply_v7(&conn).unwrap();
+
+        let (size, mtime): (i64, i64) = conn
+            .query_row("SELECT size, mtime FROM ingest_source", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(
+            size, -1,
+            "v7 must invalidate the size memo so sync re-parses"
+        );
+        assert_eq!(
+            mtime, 1700000000,
+            "mtime preserved; size alone breaks match"
+        );
+    }
+
+    #[test]
+    fn v8_adds_inferred_reasoning_columns_idempotently() {
+        let conn = db::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        migrate(&conn).unwrap(); // idempotent
+
+        let cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(session)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for c in ["est_reasoning_tokens", "reasoning_source"] {
+            assert!(cols.contains(&c.to_string()), "missing session column {c}");
+        }
+        let max: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(max, LATEST_VERSION);
     }
 
     #[test]

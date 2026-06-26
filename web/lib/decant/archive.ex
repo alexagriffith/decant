@@ -84,6 +84,8 @@ defmodule Decant.Archive do
       input_tokens: stats["input_tokens"] || 0,
       output_tokens: stats["output_tokens"] || 0,
       reasoning_tokens: stats["reasoning_tokens"] || 0,
+      est_reasoning_tokens: stats["est_reasoning_tokens"] || 0,
+      reasoning_source: stats["reasoning_source"],
       cache_tokens: (stats["cache_read_tokens"] || 0) + (stats["cache_creation_tokens"] || 0),
       duration_seconds: stats["duration_seconds"]
     }
@@ -142,6 +144,7 @@ defmodule Decant.Archive do
           input_tokens: t["input_tokens"] || 0,
           output_tokens: t["output_tokens"] || 0,
           reasoning_tokens: t["reasoning_tokens"] || 0,
+          est_reasoning_tokens: t["est_reasoning_tokens"] || 0,
           cost: t["estimated_cost_usd"] || 0.0
         }
 
@@ -158,6 +161,7 @@ defmodule Decant.Archive do
       input_tokens: 0,
       output_tokens: 0,
       reasoning_tokens: 0,
+      est_reasoning_tokens: 0,
       cost: 0.0
     }
   end
@@ -173,6 +177,7 @@ defmodule Decant.Archive do
             input_tokens: r["input_tokens"] || 0,
             output_tokens: r["output_tokens"] || 0,
             reasoning_tokens: r["reasoning_tokens"] || 0,
+            est_reasoning_tokens: r["est_reasoning_tokens"] || 0,
             cost: r["estimated_cost_usd"] || 0.0,
             worktree_count: r["worktree_count"],
             worktree_label: r["worktree_label"],

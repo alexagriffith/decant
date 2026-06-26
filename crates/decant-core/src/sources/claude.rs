@@ -1,5 +1,6 @@
 use crate::model::*;
 use serde_json::Value;
+use std::collections::HashMap;
 
 const KNOWN_META: &[&str] = &[
     "summary",
@@ -21,7 +22,21 @@ pub fn parse_session(source_session_id: &str, content: &str) -> ParsedSession {
     let mut started_at: Option<String> = None;
     let mut ended_at: Option<String> = None;
     let mut title: Option<String> = None;
-    let mut totals = TokenUsage::default();
+    // Claude Code logs one API turn as several JSONL lines (one per content
+    // block). `usage.input/cache` repeat unchanged on every line, but
+    // `usage.output_tokens` is CUMULATIVE — it grows block by block, so the
+    // turn's true total is the final (largest) line. Naively summing per line
+    // therefore multiplies a turn's tokens by its block count (~2.5x output on
+    // real archives), inflating totals and cost. `billed` maps each `requestId`
+    // to the index of the message currently holding that turn's usage; as larger
+    // cumulative lines arrive we move the usage onto the latest one and clear the
+    // earlier (so exactly one line per turn carries usage). Session totals are
+    // then just the sum of the surviving per-message usages.
+    let mut billed: HashMap<String, usize> = HashMap::new();
+    // Per-turn inputs for the reasoning estimate (keyed like `billed`). Claude
+    // redacts thinking text and reports no reasoning count, so we infer it by
+    // subtraction: `reasoning ≈ turn_output − est(visible text + tool args)`.
+    let mut turns: HashMap<String, TurnAcc> = HashMap::new();
     let mut seq: i64 = 0;
 
     for (i, line) in content.lines().enumerate() {
@@ -66,8 +81,20 @@ pub fn parse_session(source_session_id: &str, content: &str) -> ParsedSession {
                 seq += 1;
             }
             "assistant" => {
-                let msg = parse_assistant(&v, seq, &mut totals);
-                messages.push(msg);
+                let msg = parse_assistant(&v, seq);
+                let request_id = v.get("requestId").and_then(Value::as_str);
+                // Fold this line into its turn's reasoning-estimate inputs before
+                // billing moves `msg`. No `requestId` (synthetic/compact) -> its
+                // own turn, keyed so it can't collide with a real requestId.
+                let key = request_id
+                    .map(String::from)
+                    .unwrap_or_else(|| format!("\u{0}seq{seq}"));
+                let (out, visible, has_thinking) = line_reasoning_inputs(&msg);
+                let acc = turns.entry(key).or_default();
+                acc.output = acc.output.max(out); // output is cumulative; max = turn total
+                acc.visible += visible;
+                acc.has_thinking |= has_thinking;
+                bill_assistant(&mut messages, &mut billed, msg, request_id);
                 seq += 1;
             }
             "system" => {
@@ -92,6 +119,34 @@ pub fn parse_session(source_session_id: &str, content: &str) -> ParsedSession {
         }
     }
 
+    // Each turn's usage now sits on exactly one message (the others were cleared
+    // by `bill_assistant`), so the session totals are just their sum.
+    let mut totals = TokenUsage::default();
+    for m in &messages {
+        if let Some(u) = &m.usage {
+            totals.input += u.input;
+            totals.output += u.output;
+            totals.cache_read += u.cache_read;
+            totals.cache_creation += u.cache_creation;
+            totals.reasoning += u.reasoning;
+        }
+    }
+
+    // Estimate reasoning by subtraction on turns that did some thinking:
+    // `max(0, turn_output − est(visible)/4)`. Each term is `<= turn_output`, so
+    // the sum is `<= totals.output`. `inferred` when any turn thought (even if the
+    // estimate rounds to 0); `none` when there was no thinking to estimate from.
+    let est_reasoning_tokens: i64 = turns
+        .values()
+        .filter(|t| t.has_thinking)
+        .map(|t| (t.output - t.visible / CHARS_PER_TOKEN).max(0))
+        .sum();
+    let reasoning_source = if turns.values().any(|t| t.has_thinking) {
+        ReasoningSource::Inferred
+    } else {
+        ReasoningSource::None
+    };
+
     let session = NormalizedSession {
         tool: Tool::ClaudeCode,
         source_session_id: source_session_id.to_string(),
@@ -106,9 +161,49 @@ pub fn parse_session(source_session_id: &str, content: &str) -> ParsedSession {
         is_archived: false,
         raw_meta: Value::Null,
         totals,
+        est_reasoning_tokens,
+        reasoning_source,
         messages,
     };
     ParsedSession { session, issues }
+}
+
+/// Rough tokens-per-character for the reasoning estimate. decant ships no
+/// tokenizer (offline, deterministic), so visible output is sized at ~4 bytes per
+/// token — the standard English-text proxy. The estimate is intentionally soft.
+const CHARS_PER_TOKEN: i64 = 4;
+
+/// Per-turn accumulator for the reasoning estimate. `output` is the turn's total
+/// (the max of its cumulative per-line `output_tokens`); `visible` is the byte
+/// length of the turn's user-facing output (text blocks + serialized tool args).
+#[derive(Default)]
+struct TurnAcc {
+    output: i64,
+    visible: i64,
+    has_thinking: bool,
+}
+
+/// Extract one assistant line's contribution to its turn: cumulative output so
+/// far, visible bytes (text + serialized tool input), and whether it thought.
+fn line_reasoning_inputs(msg: &NormalizedMessage) -> (i64, i64, bool) {
+    let output = msg.usage.as_ref().map(|u| u.output).unwrap_or(0);
+    let mut visible = 0;
+    let mut has_thinking = false;
+    for b in &msg.blocks {
+        match b.block_type {
+            BlockType::Thinking => has_thinking = true,
+            BlockType::Text => visible += b.text.as_deref().map(|t| t.len() as i64).unwrap_or(0),
+            BlockType::ToolUse => {
+                visible += b
+                    .tool_input
+                    .as_ref()
+                    .map(|v| v.to_string().len() as i64)
+                    .unwrap_or(0)
+            }
+            _ => {}
+        }
+    }
+    (output, visible, has_thinking)
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -233,7 +328,7 @@ fn parse_user(v: &Value, seq: i64) -> NormalizedMessage {
     }
 }
 
-fn parse_assistant(v: &Value, seq: i64, totals: &mut TokenUsage) -> NormalizedMessage {
+fn parse_assistant(v: &Value, seq: i64) -> NormalizedMessage {
     let m = v.get("message");
     let model = m
         .and_then(|m| m.get("model"))
@@ -243,6 +338,9 @@ fn parse_assistant(v: &Value, seq: i64, totals: &mut TokenUsage) -> NormalizedMe
         .and_then(|m| m.get("stop_reason"))
         .and_then(Value::as_str)
         .map(String::from);
+    // Raw per-line usage as logged. `bill_assistant` decides whether this line's
+    // usage actually counts toward the session (Claude repeats a turn's usage
+    // across its split lines, with a cumulative `output_tokens`).
     let usage = m.and_then(|m| m.get("usage")).map(|u| {
         let g = |k: &str| u.get(k).and_then(Value::as_i64).unwrap_or(0);
         TokenUsage {
@@ -254,12 +352,6 @@ fn parse_assistant(v: &Value, seq: i64, totals: &mut TokenUsage) -> NormalizedMe
             reasoning: 0,
         }
     });
-    if let Some(u) = &usage {
-        totals.input += u.input;
-        totals.output += u.output;
-        totals.cache_read += u.cache_read;
-        totals.cache_creation += u.cache_creation;
-    }
     let mut blocks = Vec::new();
     if let Some(Value::Array(items)) = m.and_then(|m| m.get("content")) {
         for (ord, item) in items.iter().enumerate() {
@@ -311,6 +403,48 @@ fn parse_assistant(v: &Value, seq: i64, totals: &mut TokenUsage) -> NormalizedMe
         raw: v.clone(),
         blocks,
     }
+}
+
+/// Push an assistant message, keeping each API turn's usage on exactly one line.
+///
+/// Claude Code splits one turn across several JSONL lines (one per content
+/// block). `usage.input`/cache repeat unchanged, but `usage.output_tokens` is
+/// CUMULATIVE — it grows block by block — so the turn's true usage is its final
+/// (largest-output) line. We keep usage on the largest-output line seen so far
+/// for each `requestId` and clear it from the earlier one, so summing the
+/// surviving per-message usages yields each turn exactly once. Lines without a
+/// `requestId` (synthetic / compact records) can't be grouped, so each keeps its
+/// own usage; lines without usage are pushed unchanged.
+fn bill_assistant(
+    messages: &mut Vec<NormalizedMessage>,
+    billed: &mut HashMap<String, usize>,
+    mut msg: NormalizedMessage,
+    request_id: Option<&str>,
+) {
+    match (&msg.usage, request_id) {
+        (Some(u), Some(rid)) => match billed.get(rid).copied() {
+            Some(prev) if u.output <= prev_output(messages, prev) => {
+                // Not larger than the line already billed for this turn: drop it.
+                msg.usage = None;
+                messages.push(msg);
+            }
+            Some(prev) => {
+                // A later, larger cumulative line wins; demote the previous one.
+                messages[prev].usage = None;
+                billed.insert(rid.to_string(), messages.len());
+                messages.push(msg);
+            }
+            None => {
+                billed.insert(rid.to_string(), messages.len());
+                messages.push(msg);
+            }
+        },
+        _ => messages.push(msg),
+    }
+}
+
+fn prev_output(messages: &[NormalizedMessage], idx: usize) -> i64 {
+    messages[idx].usage.as_ref().map(|u| u.output).unwrap_or(0)
 }
 
 fn text_block(ordinal: i64, text: &str) -> NormalizedBlock {
@@ -394,6 +528,83 @@ mod tests {
         assert_eq!(s.totals.output, 340 + 120);
         assert_eq!(s.started_at.as_deref(), Some("2026-05-01T10:00:00.000Z"));
         assert_eq!(s.ended_at.as_deref(), Some("2026-05-01T10:00:10.000Z"));
+    }
+
+    #[test]
+    fn split_turn_bills_cumulative_output_once_at_the_max() {
+        // Claude Code splits one API turn across several lines (one per content
+        // block). input/cache repeat unchanged, but output_tokens is CUMULATIVE.
+        // Turn `req-1` streams a thinking line (output=200 so far) then a tool_use
+        // line (output=959 final): the turn's output is 959 (the max), not 200
+        // (first line) and not 1159 (naive per-line sum).
+        // `req-2` is its own turn; the last line has no requestId.
+        let content = concat!(
+            "{\"type\":\"assistant\",\"requestId\":\"req-1\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":100,\"output_tokens\":200,\"cache_read_input_tokens\":10,\"cache_creation_input_tokens\":5},\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"sig\"}]}}\n",
+            "{\"type\":\"assistant\",\"requestId\":\"req-1\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":100,\"output_tokens\":959,\"cache_read_input_tokens\":10,\"cache_creation_input_tokens\":5},\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"id\":\"t1\",\"input\":{\"file_path\":\"/x\"}}]}}\n",
+            "{\"type\":\"assistant\",\"requestId\":\"req-2\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":200,\"output_tokens\":50,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n",
+        );
+        let s = &parse_session("s", content).session;
+        // req-1: input/cache once (100/10/5), output at the max (959).
+        // + req-2 (200/50) + no-id line (7/3).
+        assert_eq!(s.totals.input, 100 + 200 + 7);
+        assert_eq!(s.totals.output, 959 + 50 + 3);
+        assert_eq!(s.totals.cache_read, 10);
+        assert_eq!(s.totals.cache_creation, 5);
+        // Billing lives on the larger (final) line of req-1; the earlier line is
+        // cleared, so the per-message usages still sum to the session totals.
+        assert!(s.messages[0].usage.is_none());
+        assert_eq!(s.messages[1].usage.as_ref().unwrap().output, 959);
+        let per_msg: i64 = s
+            .messages
+            .iter()
+            .filter_map(|m| m.usage.as_ref())
+            .map(|u| u.output)
+            .sum();
+        assert_eq!(
+            per_msg, s.totals.output,
+            "per-message usages sum to session totals"
+        );
+    }
+
+    #[test]
+    fn turn_with_a_usageless_leading_line_is_still_billed() {
+        // A turn's first line may carry no usage; the later usage-bearing line of
+        // the same requestId must still be billed.
+        let content = concat!(
+            "{\"type\":\"assistant\",\"requestId\":\"r9\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"s\"}]}}\n",
+            "{\"type\":\"assistant\",\"requestId\":\"r9\",\"message\":{\"role\":\"assistant\",\"usage\":{\"input_tokens\":0,\"output_tokens\":500,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},\"content\":[{\"type\":\"text\",\"text\":\"x\"}]}}\n",
+        );
+        let s = &parse_session("s", content).session;
+        assert_eq!(s.totals.output, 500);
+    }
+
+    #[test]
+    fn reasoning_is_estimated_by_subtraction_on_thinking_turns() {
+        // Turn `req-e` thinks (output=300 so far, no visible), then emits a
+        // tool_use (output=400 final, tool_input `{"a":"bbbb"}` = 12 bytes). With
+        // no exact count, reasoning ≈ 400 − 12/4 = 397, and source is `inferred`.
+        let content = concat!(
+            "{\"type\":\"assistant\",\"requestId\":\"req-e\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":50,\"output_tokens\":300,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"sig\"}]}}\n",
+            "{\"type\":\"assistant\",\"requestId\":\"req-e\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":50,\"output_tokens\":400,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},\"content\":[{\"type\":\"tool_use\",\"name\":\"x\",\"id\":\"t1\",\"input\":{\"a\":\"bbbb\"}}]}}\n",
+        );
+        let s = &parse_session("s", content).session;
+        assert_eq!(s.reasoning_source, ReasoningSource::Inferred);
+        assert_eq!(s.est_reasoning_tokens, 400 - 12 / 4);
+        assert_eq!(s.totals.reasoning, 0, "Claude reports no exact reasoning");
+        assert!(
+            s.est_reasoning_tokens <= s.totals.output,
+            "estimate never exceeds output"
+        );
+    }
+
+    #[test]
+    fn no_thinking_means_no_reasoning_estimate() {
+        // A session that never thinks: source `none`, estimate 0.
+        let content = "{\"type\":\"assistant\",\"requestId\":\"r\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":10,\"output_tokens\":20,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0},\"content\":[{\"type\":\"text\",\"text\":\"hi there\"}]}}\n";
+        let s = &parse_session("s", content).session;
+        assert_eq!(s.reasoning_source, ReasoningSource::None);
+        assert_eq!(s.est_reasoning_tokens, 0);
     }
 
     #[test]
