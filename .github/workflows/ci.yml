@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -51,7 +51,7 @@ jobs:
         run: cargo test --workspace --doc
 
       - name: Upload Rust coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         if: ${{ !cancelled() }}
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -61,7 +61,7 @@ jobs:
           fail_ci_if_error: false
 
       - name: Publish Rust test report
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@v3
         # Runs on success or failure (but not cancellation) so results are
         # surfaced even when tests fail.
         if: ${{ !cancelled() }}
@@ -74,7 +74,7 @@ jobs:
           fail-on-error: false
 
       - name: Upload Rust JUnit report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: rust-junit
@@ -91,7 +91,7 @@ jobs:
     env:
       MIX_ENV: test
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Erlang/Elixir
         uses: erlef/setup-beam@v1
@@ -100,7 +100,7 @@ jobs:
           elixir-version: "1.18"
 
       - name: Cache deps and build
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             web/deps
@@ -121,7 +121,7 @@ jobs:
         run: mix coveralls.json
 
       - name: Upload Elixir coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         if: ${{ !cancelled() }}
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -131,7 +131,7 @@ jobs:
           fail_ci_if_error: false
 
       - name: Publish Elixir test report
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@v3
         # Runs on success or failure (but not cancellation) so results are
         # surfaced even when tests fail.
         if: ${{ !cancelled() }}
@@ -144,7 +144,7 @@ jobs:
           fail-on-error: false
 
       - name: Upload Elixir JUnit report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
           name: elixir-junit
