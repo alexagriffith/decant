@@ -38,7 +38,7 @@ pub fn router(state: AppState) -> Router {
         )
         // Sessions
         .route("/api/v1/sessions", get(crate::api::sessions::list))
-        .route("/api/v1/sessions/:id", get(crate::api::sessions::detail))
+        .route("/api/v1/sessions/{id}", get(crate::api::sessions::detail))
         // Search
         .route("/api/v1/search", post(crate::api::search::search))
         // Analytics

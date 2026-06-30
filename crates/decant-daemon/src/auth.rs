@@ -1,4 +1,4 @@
-use rand::RngCore;
+use rand::TryRng;
 use std::io;
 use std::path::Path;
 
@@ -15,7 +15,9 @@ pub fn load_or_create(path: &Path) -> io::Result<String> {
         std::fs::create_dir_all(parent)?;
     }
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .map_err(io::Error::other)?;
     let token = hex::encode(bytes);
     std::fs::write(path, &token)?;
     set_0600(path)?;

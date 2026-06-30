@@ -180,8 +180,7 @@ defmodule DecantWeb.SessionLive.Show do
                     <span
                       class="hero-clipboard-document ml-auto size-4 shrink-0 text-muted"
                       data-copy-icon
-                    >
-                    </span>
+                    ></span>
                   </button>
                 </div>
                 <p class="mt-3 text-xs text-muted">

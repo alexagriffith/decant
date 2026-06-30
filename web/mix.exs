@@ -49,7 +49,7 @@ defmodule Decant.MixProject do
       {:phoenix, "~> 1.8.7"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
-      {:phoenix_live_view, "~> 1.1.0"},
+      {:phoenix_live_view, "~> 1.2.5"},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},
@@ -68,7 +68,7 @@ defmodule Decant.MixProject do
       {:contex, "~> 0.5"},
       {:file_system, "~> 1.0"},
       # HTTP client for the local decant daemon API (pulls in Finch).
-      {:req, "~> 0.5.18"},
+      {:req, "~> 0.6.2"},
       # SSE parsing for the daemon change-stream (GET /api/v1/events).
       {:server_sent_events, "~> 1.1"},
       # Mock the HTTP layer in tests (no real network connections).

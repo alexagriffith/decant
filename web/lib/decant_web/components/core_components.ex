@@ -288,7 +288,7 @@ defmodule DecantWeb.CoreComponents do
   attr :row_click, :any, default: nil, doc: "the function for handling phx-click on each row"
 
   attr :row_item, :any,
-    default: &Function.identity/1,
+    default: nil,
     doc: "the function for mapping each row before calling the :col and :action slots"
 
   slot :col, required: true do
@@ -299,8 +299,12 @@ defmodule DecantWeb.CoreComponents do
 
   def table(assigns) do
     assigns =
-      with %{rows: %Phoenix.LiveView.LiveStream{}} <- assigns do
-        assign(assigns, row_id: assigns.row_id || fn {id, _item} -> id end)
+      if is_struct(assigns.rows, Phoenix.LiveView.LiveStream) do
+        assigns
+        |> assign(:row_id, assigns.row_id || fn {id, _item} -> id end)
+        |> assign(:row_item, assigns.row_item || fn {_id, item} -> item end)
+      else
+        assign(assigns, :row_item, assigns.row_item || (&Function.identity/1))
       end
 
     ~H"""
