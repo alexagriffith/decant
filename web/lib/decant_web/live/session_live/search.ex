@@ -103,7 +103,7 @@ defmodule DecantWeb.SessionLive.Search do
         </header>
 
         <div class="space-y-1.5">
-          <form phx-change="search">
+          <form id="session-search-form" phx-change="search">
             <div class="relative">
               <.icon
                 name="hero-magnifying-glass"

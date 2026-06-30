@@ -187,7 +187,7 @@ defmodule DecantWeb.CoreComponentsTest do
       stream = %Phoenix.LiveView.LiveStream{
         name: :rows,
         ref: "0",
-        inserts: [{"rows-1", -1, %{id: 1, name: "streamed"}, nil}],
+        inserts: [{"rows-1", -1, %{id: 1, name: "streamed"}, nil, nil}],
         deletes: [],
         reset?: false,
         consumable?: false,

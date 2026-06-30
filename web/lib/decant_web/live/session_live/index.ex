@@ -169,7 +169,7 @@ defmodule DecantWeb.SessionLive.Index do
 
         <.panel title="Sessions" body_class="p-0">
           <:actions>
-            <form phx-change="filter" class="w-56 sm:w-72">
+            <form id="session-filter-form" phx-change="filter" class="w-56 sm:w-72">
               <input
                 type="text"
                 name="q"

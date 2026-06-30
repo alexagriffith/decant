@@ -47,7 +47,7 @@ defmodule DecantWeb.SettingsLive do
         </header>
 
         <.panel>
-          <form phx-change="save" class="space-y-6">
+          <form id="settings-form" phx-change="save" class="space-y-6">
             <.setting_field
               name="agent"
               label="Preferred agent"

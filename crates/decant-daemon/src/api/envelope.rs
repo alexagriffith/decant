@@ -188,9 +188,7 @@ pub fn now_rfc3339() -> String {
 
 /// A short random request id for error correlation. Hex of 8 random bytes.
 fn new_request_id() -> String {
-    use rand::RngCore;
-    let mut buf = [0u8; 8];
-    rand::thread_rng().fill_bytes(&mut buf);
+    let buf: [u8; 8] = rand::random();
     hex::encode(buf)
 }
 
