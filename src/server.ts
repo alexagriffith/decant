@@ -33,6 +33,7 @@ export interface ServeOptions {
 }
 
 type Db = ReturnType<typeof openDb>;
+type ServerEvent = { type: string };
 
 const syncStatus = {
   last_sync_at: null as string | null,
@@ -41,6 +42,13 @@ const syncStatus = {
   last_error: null as string | null,
   ingested_count: null as number | null,
 };
+const eventClients = new Set<(event: ServerEvent) => void>();
+
+export function publishServerEvent<T extends ServerEvent>(event: T): void {
+  for (const send of eventClients) {
+    send(event);
+  }
+}
 
 export async function handleRequest(request: Request, config: Config): Promise<Response> {
   const url = new URL(request.url);
@@ -50,6 +58,9 @@ export async function handleRequest(request: Request, config: Config): Promise<R
     }
     if (request.method === "GET" && url.pathname === "/api/health") {
       return json({ ok: true });
+    }
+    if (request.method === "GET" && url.pathname === "/api/events") {
+      return eventStream();
     }
     if (request.method === "GET" && url.pathname === "/api/config") {
       return json({
@@ -193,6 +204,14 @@ function syncNow(config: Config): Response {
         `scanned ${report.scanned}, ingested ${report.ingested}, skipped ${report.skipped}, ` +
         `issues ${report.issues}, failed ${report.failed}`;
       syncStatus.ingested_count = report.ingested;
+      publishServerEvent({ type: "sync", reason: "manual", report, status: { ...syncStatus } });
+      if (report.ingested > 0) {
+        publishServerEvent({
+          type: "archive_updated",
+          ingested: report.ingested,
+          last_sync_at: syncStatus.last_sync_at,
+        });
+      }
       return json(report);
     });
   } catch (error) {
@@ -201,6 +220,37 @@ function syncNow(config: Config): Response {
     syncStatus.last_error = error instanceof Error ? error.message : String(error);
     throw error;
   }
+}
+
+function eventStream(): Response {
+  const encoder = new TextEncoder();
+  let client: ((event: ServerEvent) => void) | null = null;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const send = (event: ServerEvent): void => {
+        controller.enqueue(encoder.encode(formatSse(event)));
+      };
+      client = send;
+      eventClients.add(send);
+      send({ type: "hello", timestamp: new Date().toISOString() } as ServerEvent);
+    },
+    cancel() {
+      if (client != null) {
+        eventClients.delete(client);
+      }
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    },
+  });
+}
+
+function formatSse(event: ServerEvent): string {
+  return `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
 export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {

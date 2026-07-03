@@ -117,6 +117,7 @@ function App() {
   const [data, setData] = useState<DashboardData>(emptyData);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     const onPop = () => setPath(window.location.pathname);
@@ -126,7 +127,7 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    setLoading(reloadKey === 0);
     Promise.all([
       getJson<Summary>("/api/stats/summary"),
       getJson<SessionSummary[]>("/api/sessions?limit=12"),
@@ -156,6 +157,18 @@ function App() {
       });
     return () => {
       cancelled = true;
+    };
+  }, [reloadKey]);
+
+  useEffect(() => {
+    const events = new EventSource("/api/events");
+    const refresh = () => setReloadKey((key) => key + 1);
+    events.addEventListener("sync", refresh);
+    events.addEventListener("archive_updated", refresh);
+    return () => {
+      events.removeEventListener("sync", refresh);
+      events.removeEventListener("archive_updated", refresh);
+      events.close();
     };
   }, []);
 

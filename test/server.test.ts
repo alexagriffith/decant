@@ -7,7 +7,7 @@ import type { Config } from "../src/config.ts";
 import { openDb } from "../src/db.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { regenerate } from "../src/recommendations.ts";
-import { handleRequest } from "../src/server.ts";
+import { handleRequest, publishServerEvent } from "../src/server.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 
@@ -118,6 +118,27 @@ describe("server routes", () => {
       claudeDir: config.claudeDir,
       codexDir: config.codexDir,
     });
+  });
+
+  test("events route streams hello and published updates", async () => {
+    const config = freshConfig();
+    const response = await handleRequest(new Request("http://decant.test/api/events"), config);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
+
+    const reader = response.body?.getReader();
+    if (reader == null) {
+      throw new Error("missing SSE body");
+    }
+    const hello = await reader.read();
+    expect(new TextDecoder().decode(hello.value)).toContain("event: hello");
+
+    publishServerEvent({ type: "archive_updated", ingested: 2 });
+    const update = await reader.read();
+    await reader.cancel();
+    const frame = new TextDecoder().decode(update.value);
+    expect(frame).toContain("event: archive_updated");
+    expect(frame).toContain('"ingested":2');
   });
 
   test("lists, gets, and searches sessions", async () => {

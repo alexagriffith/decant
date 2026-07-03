@@ -25,7 +25,7 @@ import {
   parseStatusFilter,
   regenerate as regenerateRecommendations,
 } from "./recommendations.ts";
-import { serve as serveApp } from "./server.ts";
+import { publishServerEvent, serve as serveApp } from "./server.ts";
 import {
   byDimension,
   fileHotspots,
@@ -200,6 +200,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     );
 
   const emitWatchEvent = (event: WatchEvent): void => {
+    publishServerEvent(event);
     if (isJson(globals())) {
       io.writeOut(`${JSON.stringify(event)}\n`);
     } else if (!globals().quiet) {
