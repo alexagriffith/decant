@@ -8,6 +8,7 @@ import { defaultPricing, estimateCost } from "./cost.ts";
 import { facets, fileRefs } from "./enrich.ts";
 import { canonicalJson } from "./json.ts";
 import type { Json, NormalizedBlock, ParsedSession, Tool } from "./model.ts";
+import { regenerate as regenerateRecommendations } from "./recommendations.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { parseCodexSession } from "./sources/codex.ts";
 import { classifyTool } from "./tools.ts";
@@ -139,6 +140,7 @@ export function sync(
   if (report.ingested > 0) {
     resolveWorktreeRoots(db);
   }
+  regenerateRecommendations(db);
 
   return report;
 }

@@ -20,6 +20,7 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -66,6 +67,56 @@ function rust(args: string[], options: { allowExit3?: boolean } = {}): string {
     );
   }
   return proc.stdout.toString();
+}
+
+function rustRegenerateRecommendations(): void {
+  const helperDir = join(workDir, "recommendations-helper");
+  mkdirSync(join(helperDir, "src"), { recursive: true });
+  writeFileSync(
+    join(helperDir, "Cargo.toml"),
+    `[package]
+name = "decant-recommendations-golden"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+decant-core = { path = "${join(repoRoot, "crates", "decant-core")}" }
+`,
+  );
+  writeFileSync(
+    join(helperDir, "src", "main.rs"),
+    `use std::{env, error::Error, path::PathBuf};
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let path = PathBuf::from(env::args().nth(1).expect("db path"));
+    let conn = decant_core::db::open(&path)?;
+    decant_core::schema::migrate(&conn)?;
+    decant_core::recommendations::regenerate(&conn)?;
+    Ok(())
+}
+`,
+  );
+  const proc = Bun.spawnSync(
+    [
+      "cargo",
+      "run",
+      "--offline",
+      "-q",
+      "--manifest-path",
+      join(helperDir, "Cargo.toml"),
+      "--",
+      dbPath,
+    ],
+    {
+      cwd: repoRoot,
+      env: { ...process.env, CARGO_TARGET_DIR: join(repoRoot, "target") },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  if (!proc.success) {
+    throw new Error(`recommendations helper failed: ${proc.stderr.toString()}`);
+  }
 }
 
 function canonicalize(text: string): string {
@@ -205,6 +256,11 @@ const ROW_QUERIES: Record<string, string> = {
     LEFT JOIN message m ON m.id = f.message_id
     JOIN session s ON s.id = f.session_id
     ORDER BY s.tool, s.source_session_id, m.seq, f.path, f.operation`,
+  recommendations: `
+    SELECT key, kind, category, title, detail, suggestion, prompt, url,
+           link_label, icon, tone, score, status, status_source, note
+    FROM recommendation
+    ORDER BY key`,
 };
 
 // CLI read commands snapshotted as goldens (grows in later phases).
@@ -237,6 +293,7 @@ async function main(): Promise<void> {
 
   const syncOutput = rust(["sync"], { allowExit3: true });
   console.log(syncOutput.trim());
+  rustRegenerateRecommendations();
 
   const db = new Database(dbPath);
   for (const [name, sql] of Object.entries(ROW_QUERIES)) {

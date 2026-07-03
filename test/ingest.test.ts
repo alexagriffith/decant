@@ -102,6 +102,11 @@ const ROW_QUERIES = {
     LEFT JOIN message m ON m.id = f.message_id
     JOIN session s ON s.id = f.session_id
     ORDER BY s.tool, s.source_session_id, m.seq, f.path, f.operation`,
+  recommendations: `
+    SELECT key, kind, category, title, detail, suggestion, prompt, url,
+           link_label, icon, tone, score, status, status_source, note
+    FROM recommendation
+    ORDER BY key`,
 } as const;
 
 describe("upsertSession", () => {

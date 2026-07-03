@@ -153,7 +153,6 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     );
     try {
       const report = ingestSync(archive.db, archive.config);
-      regenerateRecommendations(archive.db);
       const jsonReport = {
         scanned: report.scanned,
         ingested: report.ingested,
