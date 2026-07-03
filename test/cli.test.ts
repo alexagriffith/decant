@@ -45,7 +45,7 @@ async function syncedCase(): Promise<{ dbPath: string }> {
 }
 
 describe("runCli", () => {
-  test("sync then list, stats, search, files, tool, and export", async () => {
+  test("sync then list, project, db, stats, search, files, tool, and export", async () => {
     const { dbPath } = await syncedCase();
     const base = ["--db", dbPath, "--json", "--no-sync"];
 
@@ -54,6 +54,29 @@ describe("runCli", () => {
     const sessions = JSON.parse(list.stdout) as { id: number; source_session_id: string }[];
     expect(sessions).toHaveLength(7);
     expect(sessions[0]?.source_session_id).toBe("sess-codex-distill");
+
+    const projects = await runCli([...base, "project", "ls"]);
+    expect(projects.code).toBe(0);
+    expect((JSON.parse(projects.stdout) as { path: string; sessions: number }[])[0]).toMatchObject({
+      path: "/Users/dev/proj",
+      sessions: 7,
+    });
+
+    const dbInfo = await runCli([...base, "db", "info"]);
+    expect(dbInfo.code).toBe(0);
+    expect(JSON.parse(dbInfo.stdout)).toMatchObject({
+      path: dbPath,
+      schema_version: 8,
+      sessions: 7,
+    });
+
+    const migrated = await runCli(["--db", dbPath, "--no-sync", "db", "migrate"]);
+    expect(migrated).toMatchObject({ code: 0, stdout: "" });
+    expect(migrated.stderr).toContain(`schema up to date at ${dbPath}`);
+
+    const vacuumed = await runCli(["--db", dbPath, "--no-sync", "db", "vacuum"]);
+    expect(vacuumed).toMatchObject({ code: 0, stdout: "" });
+    expect(vacuumed.stderr).toContain(`vacuumed ${dbPath}`);
 
     const stats = await runCli([...base, "stats", "--by", "model"]);
     expect(stats.code).toBe(0);

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
 import { type Config, type ConfigOverrides, resolveConfig } from "./config.ts";
@@ -7,7 +7,7 @@ import { openDb } from "./db.ts";
 import type { Operation } from "./enrich.ts";
 import { toMarkdown } from "./export.ts";
 import { sync as ingestSync } from "./ingest.ts";
-import { getSession, listSessions, search } from "./query.ts";
+import { getSession, listProjects, listSessions, search } from "./query.ts";
 import {
   byDimension,
   fileHotspots,
@@ -50,6 +50,15 @@ interface Archive {
 }
 
 type CliAction = () => number | undefined;
+
+interface DbInfo {
+  path: string;
+  size_bytes: number;
+  schema_version: number;
+  sessions: number;
+  messages: number;
+  tool_calls: number;
+}
 
 export async function runCli(argv: string[], options: CliRunOptions = {}): Promise<CliResult> {
   const io: Io = {
@@ -203,6 +212,83 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   addShow(session.command("show"));
   addLs(program.command("ls"));
   addShow(program.command("show"));
+
+  const project = program.command("project").description("inspect projects");
+  project
+    .command("ls")
+    .description("list projects with session counts and cost")
+    .action(() =>
+      run(() => {
+        const archive = readArchive();
+        try {
+          const rows = listProjects(archive.db);
+          output(rows, () =>
+            rows
+              .map(
+                (row) =>
+                  `${row.id}\t${row.path}\t${row.sessions}\t` +
+                  `${row.estimated_cost_usd.toFixed(2)}\t${row.last_seen_at ?? ""}`,
+              )
+              .join("\n")
+              .concat(rows.length > 0 ? "\n" : ""),
+          );
+        } finally {
+          archive.db.close();
+        }
+      }),
+    );
+
+  const dbCommand = program.command("db").description("inspect and maintain the archive");
+  dbCommand
+    .command("info")
+    .description("show DB path, size, schema version, and row counts")
+    .action(() =>
+      run(() => {
+        const archive = openArchive(resolve());
+        try {
+          const row = dbInfo(archive);
+          output(
+            row,
+            () =>
+              `path:       ${row.path}\n` +
+              `size_bytes: ${row.size_bytes}\n` +
+              `schema:     v${row.schema_version}\n` +
+              `sessions:   ${row.sessions}\n` +
+              `messages:   ${row.messages}\n` +
+              `tool_calls: ${row.tool_calls}\n`,
+          );
+        } finally {
+          archive.db.close();
+        }
+      }),
+    );
+  dbCommand
+    .command("migrate")
+    .description("apply schema migrations explicitly")
+    .action(() =>
+      run(() => {
+        const archive = openArchive(resolve());
+        try {
+          io.writeErr(`schema up to date at ${archive.config.dbPath}\n`);
+        } finally {
+          archive.db.close();
+        }
+      }),
+    );
+  dbCommand
+    .command("vacuum")
+    .description("reclaim free space")
+    .action(() =>
+      run(() => {
+        const archive = openArchive(resolve());
+        try {
+          archive.db.exec("VACUUM;");
+          io.writeErr(`vacuumed ${archive.config.dbPath}\n`);
+        } finally {
+          archive.db.close();
+        }
+      }),
+    );
 
   program
     .command("search")
@@ -435,6 +521,28 @@ function parseOperation(value: string): Operation | null {
   return value === "read" || value === "edit" || value === "write" || value === "delete"
     ? value
     : null;
+}
+
+function dbInfo(archive: Archive): DbInfo {
+  const version =
+    (
+      archive.db.query("SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations").get() as {
+        v: number;
+      }
+    ).v ?? 0;
+  const counts = archive.db
+    .query(
+      `SELECT (SELECT COUNT(*) FROM session) AS sessions,
+              (SELECT COUNT(*) FROM message) AS messages,
+              (SELECT COUNT(*) FROM tool_call) AS tool_calls`,
+    )
+    .get() as Pick<DbInfo, "sessions" | "messages" | "tool_calls">;
+  return {
+    path: archive.config.dbPath,
+    size_bytes: statSync(archive.config.dbPath, { throwIfNoEntry: false })?.size ?? 0,
+    schema_version: version,
+    ...counts,
+  };
 }
 
 if (import.meta.main) {
