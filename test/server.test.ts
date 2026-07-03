@@ -73,7 +73,11 @@ async function route(
   path: string,
   init: RequestInit = {},
 ): Promise<{ status: number; body: unknown; contentType: string | null }> {
-  const request = new Request(`http://decant.test${path}`, init);
+  const headers = new Headers(init.headers);
+  if (init.body != null && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+  const request = new Request(`http://127.0.0.1:4577${path}`, { ...init, headers });
   const response = await handleRequest(request, config);
   const contentType = response.headers.get("content-type");
   const body = contentType?.startsWith("application/json")
@@ -122,7 +126,7 @@ describe("server routes", () => {
 
   test("events route streams hello and published updates", async () => {
     const config = freshConfig();
-    const response = await handleRequest(new Request("http://decant.test/api/events"), config);
+    const response = await handleRequest(new Request("http://127.0.0.1:4577/api/events"), config);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
 
@@ -139,6 +143,44 @@ describe("server routes", () => {
     const frame = new TextDecoder().decode(update.value);
     expect(frame).toContain("event: archive_updated");
     expect(frame).toContain('"ingested":2');
+  });
+
+  test("rejects non-loopback API hosts", async () => {
+    const config = freshConfig();
+
+    const response = await handleRequest(new Request("http://evil.example/api/config"), config);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: "forbidden host" });
+  });
+
+  test("rejects cross-origin and non-json mutating requests", async () => {
+    const config = freshConfig();
+
+    const crossSite = await handleRequest(
+      new Request("http://127.0.0.1:4577/api/launch/agent", {
+        method: "POST",
+        headers: {
+          "content-type": "text/plain",
+          origin: "https://evil.example",
+          "sec-fetch-site": "cross-site",
+        },
+        body: JSON.stringify({ agent: "claude", prompt: "run this" }),
+      }),
+      config,
+    );
+    expect(crossSite.status).toBe(403);
+    expect(await crossSite.json()).toEqual({ error: "cross-origin writes are forbidden" });
+
+    const textPlain = await handleRequest(
+      new Request("http://127.0.0.1:4577/api/search", {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: JSON.stringify({ query: "auth" }),
+      }),
+      config,
+    );
+    expect(textPlain.status).toBe(415);
+    expect(await textPlain.json()).toEqual({ error: "content-type must be application/json" });
   });
 
   test("settings routes read options and persist sanitized choices", async () => {

@@ -61,6 +61,10 @@ export function publishServerEvent<T extends ServerEvent>(event: T): void {
 
 export async function handleRequest(request: Request, config: Config): Promise<Response> {
   const url = new URL(request.url);
+  const securityFailure = validateLocalRequest(request, url);
+  if (securityFailure != null) {
+    return securityFailure;
+  }
   try {
     if (request.method === "GET" && url.pathname === "/") {
       return html(indexHtml());
@@ -82,10 +86,18 @@ export async function handleRequest(request: Request, config: Config): Promise<R
       return json(settingsResponse());
     }
     if (request.method === "POST" && url.pathname === "/api/settings") {
+      const contentTypeFailure = requireJsonRequest(request);
+      if (contentTypeFailure != null) {
+        return contentTypeFailure;
+      }
       const body = await readJson<Record<string, unknown>>(request);
       return json({ ...settingsResponse(saveSettings(body)), saved: true });
     }
     if (request.method === "POST" && url.pathname === "/api/launch/agent") {
+      const contentTypeFailure = requireJsonRequest(request);
+      if (contentTypeFailure != null) {
+        return contentTypeFailure;
+      }
       const body = await readJson<{ agent?: string; prompt?: string; key?: string }>(request);
       if (body.agent == null || body.prompt == null || body.prompt.trim() === "") {
         return json({ ok: false, error: "agent and prompt are required" }, 400);
@@ -99,6 +111,10 @@ export async function handleRequest(request: Request, config: Config): Promise<R
       );
     }
     if (request.method === "POST" && url.pathname === "/api/launch/ide") {
+      const contentTypeFailure = requireJsonRequest(request);
+      if (contentTypeFailure != null) {
+        return contentTypeFailure;
+      }
       const body = await readJson<{ dir?: string }>(request);
       if (body.dir == null || body.dir.trim() === "") {
         return json({ ok: false, error: "dir is required" }, 400);
@@ -136,6 +152,10 @@ export async function handleRequest(request: Request, config: Config): Promise<R
       });
     }
     if (request.method === "POST" && url.pathname === "/api/search") {
+      const contentTypeFailure = requireJsonRequest(request);
+      if (contentTypeFailure != null) {
+        return contentTypeFailure;
+      }
       const body = await readJson<{ query?: string; limit?: number }>(request);
       if (body.query == null || body.query.trim() === "") {
         return json({ error: "query is required" }, 400);
@@ -209,6 +229,10 @@ export async function handleRequest(request: Request, config: Config): Promise<R
       });
     }
     if (request.method === "POST" && url.pathname === "/api/recommendations/mark") {
+      const contentTypeFailure = requireJsonRequest(request);
+      if (contentTypeFailure != null) {
+        return contentTypeFailure;
+      }
       const body = await readJson<{ key?: string; source?: string; note?: string }>(request);
       if (body.key == null || body.key.trim() === "") {
         return json({ error: "key is required" }, 400);
@@ -338,6 +362,59 @@ function json(value: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+}
+
+function validateLocalRequest(request: Request, url: URL): Response | null {
+  if (!isProtectedPath(url.pathname)) {
+    return null;
+  }
+  if (!isLoopbackHost(url.hostname)) {
+    return json({ error: "forbidden host" }, 403);
+  }
+  if (isMutatingMethod(request.method) && !isAllowedWriteRequest(request)) {
+    return json({ error: "cross-origin writes are forbidden" }, 403);
+  }
+  return null;
+}
+
+function isProtectedPath(pathname: string): boolean {
+  return pathname === "/api/events" || pathname.startsWith("/api/");
+}
+
+function isMutatingMethod(method: string): boolean {
+  return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+}
+
+function isAllowedWriteRequest(request: Request): boolean {
+  const origin = request.headers.get("origin");
+  if (origin != null && !isLoopbackOrigin(origin)) {
+    return false;
+  }
+  const site = request.headers.get("sec-fetch-site")?.toLowerCase();
+  return site == null || site === "same-origin" || site === "same-site" || site === "none";
+}
+
+function isLoopbackOrigin(origin: string): boolean {
+  if (origin === "null") {
+    return false;
+  }
+  try {
+    return isLoopbackHost(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "[::1]";
+}
+
+function requireJsonRequest(request: Request): Response | null {
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  return contentType === "application/json"
+    ? null
+    : json({ error: "content-type must be application/json" }, 415);
 }
 
 function html(value: string): Response {
