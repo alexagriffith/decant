@@ -1,0 +1,208 @@
+import type { Database } from "bun:sqlite";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Config } from "../src/config.ts";
+import { openDb } from "../src/db.ts";
+import { upsertSession } from "../src/ingest.ts";
+import { regenerate } from "../src/recommendations.ts";
+import { handleRequest } from "../src/server.ts";
+import { parseClaudeSession } from "../src/sources/claude.ts";
+import { parseCodexSession } from "../src/sources/codex.ts";
+
+const workDir = mkdtempSync(join(tmpdir(), "decant-server-test-"));
+afterAll(() => rmSync(workDir, { recursive: true, force: true }));
+
+let dbCounter = 0;
+function freshConfig(): Config {
+  dbCounter += 1;
+  const root = join(workDir, `case-${dbCounter}`);
+  const claudeDir = join(root, "claude");
+  const codexDir = join(root, "codex");
+  mkdirSync(claudeDir, { recursive: true });
+  mkdirSync(join(codexDir, "sessions"), { recursive: true });
+  mkdirSync(join(codexDir, "archived_sessions"), { recursive: true });
+  return {
+    dbPath: join(root, "archive.db"),
+    claudeDir,
+    codexDir,
+  };
+}
+
+function fixture(tool: "claude" | "codex", name: string): string {
+  return readFileSync(join(import.meta.dir, "..", "fixtures", tool, name), "utf8");
+}
+
+function seed(config: Config): void {
+  const db = openDb(config.dbPath);
+  seedDb(db);
+  db.close();
+}
+
+function seedDb(db: Database): void {
+  upsertSession(
+    db,
+    parseClaudeSession("sess-claude-sample", fixture("claude", "sample.jsonl")),
+    "/x/claude-sample.jsonl",
+    1,
+    2,
+    "sample",
+  );
+  upsertSession(
+    db,
+    parseClaudeSession("sess-claude-enriched", fixture("claude", "enriched.jsonl")),
+    "/x/claude-enriched.jsonl",
+    1,
+    2,
+    "claude",
+  );
+  upsertSession(
+    db,
+    parseCodexSession("sess-codex-enriched", fixture("codex", "enriched.jsonl"), new Map()),
+    "/x/codex-enriched.jsonl",
+    1,
+    2,
+    "codex",
+  );
+  regenerate(db);
+}
+
+async function route(
+  config: Config,
+  path: string,
+  init: RequestInit = {},
+): Promise<{ status: number; body: unknown; contentType: string | null }> {
+  const request = new Request(`http://decant.test${path}`, init);
+  const response = await handleRequest(request, config);
+  const contentType = response.headers.get("content-type");
+  const body = contentType?.startsWith("application/json")
+    ? await response.json()
+    : await response.text();
+  return { status: response.status, body, contentType };
+}
+
+describe("server routes", () => {
+  test("health and shell routes respond without opening the archive", async () => {
+    const config = freshConfig();
+
+    const health = await route(config, "/api/health");
+    expect(health).toMatchObject({
+      status: 200,
+      body: { ok: true },
+      contentType: "application/json; charset=utf-8",
+    });
+
+    const root = await route(config, "/");
+    expect(root.status).toBe(200);
+    expect(root.contentType).toBe("text/html; charset=utf-8");
+    expect(root.body).toContain("<h1>decant</h1>");
+  });
+
+  test("lists, gets, and searches sessions", async () => {
+    const config = freshConfig();
+    seed(config);
+
+    const sessions = await route(config, "/api/sessions?limit=2");
+    expect(sessions.status).toBe(200);
+    expect(sessions.body).toBeArrayOfSize(2);
+    expect(sessions.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ tool: "claude_code" })]),
+    );
+    const id = (sessions.body as { id: number }[])[0]?.id ?? 0;
+
+    const detail = await route(config, `/api/sessions/${id}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body).toMatchObject({
+      summary: { id },
+      messages: expect.any(Array),
+    });
+
+    const search = await route(config, "/api/search", {
+      method: "POST",
+      body: JSON.stringify({ query: "auth", limit: 5 }),
+    });
+    expect(search.status).toBe(200);
+    expect(search.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ tool: "claude_code" })]),
+    );
+  });
+
+  test("returns stats, files, tools, and recommendations", async () => {
+    const config = freshConfig();
+    seed(config);
+
+    const totals = await route(config, "/api/stats/summary");
+    expect(totals.status).toBe(200);
+    expect(totals.body).toMatchObject({ sessions: 3, tool_calls: expect.any(Number) });
+
+    const byTool = await route(config, "/api/stats/by-dimension?dim=tool");
+    expect(byTool.status).toBe(200);
+    expect(byTool.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "claude_code" }),
+        expect.objectContaining({ key: "codex" }),
+      ]),
+    );
+
+    const files = await route(config, "/api/files?group=ext&op=edit");
+    expect(files.status).toBe(200);
+    expect(files.body).toEqual(expect.arrayContaining([expect.objectContaining({ key: "rs" })]));
+
+    const tools = await route(config, "/api/tools/usage?limit=3");
+    expect(tools.status).toBe(200);
+    expect(tools.body).toBeArray();
+
+    const recommendations = await route(config, "/api/recommendations?status=all");
+    expect(recommendations.status).toBe(200);
+    expect(recommendations.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: "catalog:agents-md" })]),
+    );
+  });
+
+  test("mark recommendation updates status", async () => {
+    const config = freshConfig();
+    seed(config);
+
+    const marked = await route(config, "/api/recommendations/mark", {
+      method: "POST",
+      body: JSON.stringify({ key: "catalog:agents-md", source: "test", note: "done" }),
+    });
+    expect(marked.status).toBe(200);
+    expect(marked.body).toMatchObject({
+      ok: true,
+      key: "catalog:agents-md",
+      status: "implemented",
+    });
+
+    const implemented = await route(config, "/api/recommendations?status=implemented");
+    expect(implemented.body).toEqual([
+      expect.objectContaining({ key: "catalog:agents-md", note: "done" }),
+    ]);
+  });
+
+  test("validates bad route input", async () => {
+    const config = freshConfig();
+    seed(config);
+
+    expect((await route(config, "/api/sessions/999999")).status).toBe(404);
+    expect((await route(config, "/api/search", { method: "POST", body: "{}" })).status).toBe(400);
+    expect((await route(config, "/api/stats/by-dimension?dim=nope")).status).toBe(400);
+    expect((await route(config, "/api/files?group=path&op=rename")).status).toBe(400);
+    expect((await route(config, "/api/recommendations?status=maybe")).status).toBe(400);
+    expect((await route(config, "/missing")).status).toBe(404);
+  });
+
+  test("sync route ingests configured source directories", async () => {
+    const config = freshConfig();
+
+    const result = await route(config, "/api/sync", { method: "POST" });
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      scanned: 0,
+      ingested: 0,
+      failed: 0,
+      cancelled: false,
+    });
+  });
+});
