@@ -103,8 +103,9 @@ function stripVolatileIds(value: unknown): unknown {
     return value.map(stripVolatileIds);
   }
   if (value && typeof value === "object") {
+    const volatileKeys = new Set(["id", "session_id", "block_id"]);
     const entries = Object.entries(value)
-      .filter(([key]) => key !== "id")
+      .filter(([key]) => !volatileKeys.has(key))
       .map(([key, child]) => [key, stripVolatileIds(child)] as const);
     return Object.fromEntries(entries);
   }
@@ -208,9 +209,14 @@ const ROW_QUERIES: Record<string, string> = {
 
 // CLI read commands snapshotted as goldens (grows in later phases).
 const CLI_COMMANDS: Record<string, string[]> = {
+  "files-ext": ["files", "--group", "ext", "--json"],
   ls: ["ls", "--json"],
+  "mcp-stats": ["mcp", "stats", "--limit", "10", "--json"],
+  "project-ls": ["project", "ls", "--json"],
+  "search-auth": ["search", "auth", "--limit", "5", "--json"],
   stats: ["stats", "--json"],
   "stats-by-model": ["stats", "--by", "model", "--json"],
+  "tool-stats": ["tool", "stats", "--limit", "10", "--json"],
 };
 
 async function main(): Promise<void> {

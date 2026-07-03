@@ -1,0 +1,27 @@
+[
+  {
+    "session_title": "Refactor the auth module",
+    "tool": "claude_code",
+    "snippet": "Refactor the [auth] module"
+  },
+  {
+    "session_title": "Refactor the auth module",
+    "tool": "claude_code",
+    "snippet": "explore the [auth] flows"
+  },
+  {
+    "session_title": "Fix the failing auth test",
+    "tool": "claude_code",
+    "snippet": "Fix the failing [auth] test"
+  },
+  {
+    "session_title": "Refactor the auth module",
+    "tool": "claude_code",
+    "snippet": "Agent"
+  },
+  {
+    "session_title": "Refactor the auth module",
+    "tool": "claude_code",
+    "snippet": "Edit"
+  }
+]

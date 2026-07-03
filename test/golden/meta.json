@@ -1,7 +1,7 @@
 {
   "generator": "scripts/gen-goldens.ts",
   "source_of_truth": "rust implementation",
-  "rust_rev": "a94046463876b9cc22afc1de30a64f85b5791b3b",
+  "rust_rev": "a94046463876b9cc22afc1de30a64f85b5791b3b-dirty",
   "fixtures": [
     "fixtures/claude/distill.jsonl",
     "fixtures/claude/enriched.jsonl",
@@ -19,8 +19,33 @@
     "tool_calls"
   ],
   "cli_commands": {
+    "files-ext": [
+      "files",
+      "--group",
+      "ext",
+      "--json"
+    ],
     "ls": [
       "ls",
+      "--json"
+    ],
+    "mcp-stats": [
+      "mcp",
+      "stats",
+      "--limit",
+      "10",
+      "--json"
+    ],
+    "project-ls": [
+      "project",
+      "ls",
+      "--json"
+    ],
+    "search-auth": [
+      "search",
+      "auth",
+      "--limit",
+      "5",
       "--json"
     ],
     "stats": [
@@ -31,6 +56,13 @@
       "stats",
       "--by",
       "model",
+      "--json"
+    ],
+    "tool-stats": [
+      "tool",
+      "stats",
+      "--limit",
+      "10",
       "--json"
     ]
   }
