@@ -24,7 +24,7 @@ try {
     clean: args.clean,
   });
   process.stdout.write(
-    `staged ${targets.length} npm package${targets.length === 1 ? "" : "s"} in ${outDir}\n`,
+    `staged launcher plus ${targets.length} platform package${targets.length === 1 ? "" : "s"} in ${outDir}\n`,
   );
 } catch (error) {
   process.stderr.write(

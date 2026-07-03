@@ -1,6 +1,6 @@
 # decant
 
-[![CI](https://github.com/onlydole/decant/actions/workflows/ci.yml/badge.svg)](https://github.com/onlydole/decant/actions/workflows/ci.yml)
+[![CI](https://github.com/dosu-ai/decant/actions/workflows/ci.yml/badge.svg)](https://github.com/dosu-ai/decant/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Extract Claude Code and Codex CLI sessions into a normalized,
@@ -43,7 +43,7 @@ docker run --rm \
   -v decant-data:/var/lib/decant \
   -v "$HOME/.claude/projects:/sources/claude:ro" \
   -v "$HOME/.codex:/sources/codex:ro" \
-  ghcr.io/onlydole/decant:latest
+  ghcr.io/dosu-ai/decant:latest
 ```
 
 Use source:

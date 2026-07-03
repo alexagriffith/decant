@@ -14,7 +14,7 @@ on-ramp.
 ## Get set up
 
 ```bash
-git clone https://github.com/onlydole/decant
+git clone https://github.com/dosu-ai/decant
 cd decant
 bun install --frozen-lockfile
 pre-commit install

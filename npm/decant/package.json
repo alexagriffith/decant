@@ -5,11 +5,11 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/onlydole/decant.git"
+    "url": "git+https://github.com/dosu-ai/decant.git"
   },
-  "homepage": "https://github.com/onlydole/decant#readme",
+  "homepage": "https://github.com/dosu-ai/decant#readme",
   "bugs": {
-    "url": "https://github.com/onlydole/decant/issues"
+    "url": "https://github.com/dosu-ai/decant/issues"
   },
   "type": "commonjs",
   "bin": {

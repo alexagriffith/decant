@@ -4,7 +4,7 @@
   "private": true,
   "description": "Extract Claude Code and Codex CLI sessions into a normalized, full-text-searchable local SQLite archive.",
   "license": "Apache-2.0",
-  "repository": "https://github.com/onlydole/decant",
+  "repository": "https://github.com/dosu-ai/decant",
   "type": "module",
   "bin": {
     "decant": "./src/cli.ts"

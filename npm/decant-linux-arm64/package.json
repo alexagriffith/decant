@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/onlydole/decant.git"
+    "url": "git+https://github.com/dosu-ai/decant.git"
   },
   "os": [
     "linux"

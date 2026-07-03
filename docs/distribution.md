@@ -27,9 +27,13 @@ Build native artifacts for a local smoke test:
 
 ```sh
 bun run scripts/build-binaries.ts --target native --out-dir /tmp/decant-bin
-DECANT_BINARY_PATH=/tmp/decant-bin/darwin-arm64/decant node npm/decant/bin/decant.cjs --help
+TARGET=darwin-arm64
+DECANT_BINARY_PATH="/tmp/decant-bin/$TARGET/decant" node npm/decant/bin/decant.cjs --help
 bun run scripts/build-npm.ts --target native --binary-dir /tmp/decant-bin --out-dir /tmp/decant-npm --no-build --clean
 ```
+
+Set `TARGET` to the emitted target key for your platform; `darwin-arm64` is the
+native target on Apple Silicon Macs.
 
 Build all release artifacts:
 
@@ -49,7 +53,7 @@ mounts is unreliable, so the default command disables native filesystem watches
 and relies on the periodic sweep.
 
 ```sh
-docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/onlydole/decant:local .
+docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/dosu-ai/decant:local .
 ```
 
 Local run:
@@ -60,7 +64,7 @@ docker run --rm \
   -v decant-data:/var/lib/decant \
   -v "$HOME/.claude/projects:/sources/claude:ro" \
   -v "$HOME/.codex:/sources/codex:ro" \
-  ghcr.io/onlydole/decant:local
+  ghcr.io/dosu-ai/decant:local
 ```
 
 The container binds `0.0.0.0` inside the network namespace so Docker port
