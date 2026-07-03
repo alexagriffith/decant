@@ -20,6 +20,12 @@ import { toMarkdown } from "./export.ts";
 import { sync as ingestSync } from "./ingest.ts";
 import { getSession, listProjects, listSessions, search } from "./query.ts";
 import {
+  list as listRecommendations,
+  markImplemented,
+  parseStatusFilter,
+  regenerate as regenerateRecommendations,
+} from "./recommendations.ts";
+import {
   byDimension,
   fileHotspots,
   mcpUsage,
@@ -147,6 +153,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     );
     try {
       const report = ingestSync(archive.db, archive.config);
+      regenerateRecommendations(archive.db);
       const jsonReport = {
         scanned: report.scanned,
         ingested: report.ingested,
@@ -475,6 +482,76 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             archive.db.close();
           }
         }),
+    );
+
+  const recommendations = program
+    .command("recommendations")
+    .description("inspect and update recommendations");
+  recommendations
+    .command("ls")
+    .description("list persisted recommendations")
+    .option("--status <status>", "open | implemented | all", "open")
+    .action((commandOptions: { status?: string }) =>
+      run(() => {
+        const status = parseStatusFilter(commandOptions.status ?? "open");
+        if (status == null) {
+          io.writeErr(
+            `error: unknown --status ${JSON.stringify(commandOptions.status)} ` +
+              "(expected: open | implemented | all)\n",
+          );
+          return 2;
+        }
+        const archive = readArchive();
+        try {
+          regenerateRecommendations(archive.db);
+          const rows = listRecommendations(archive.db, status);
+          output(
+            rows,
+            () =>
+              rows.map((row) => `${row.key}\t${row.status}\t${row.title}`).join("\n") +
+              (rows.length > 0 ? "\n" : ""),
+          );
+        } finally {
+          archive.db.close();
+        }
+      }),
+    );
+  recommendations
+    .command("mark")
+    .description("mark a recommendation implemented")
+    .argument("<key>", "recommendation key")
+    .option("--source <source>", "who marked it implemented", "agent")
+    .option("--note <note>", "optional note")
+    .action((key: string, commandOptions: { source?: string; note?: string }) =>
+      run(() => {
+        const archive = openArchive(resolve());
+        try {
+          const ok = markImplemented(
+            archive.db,
+            key,
+            commandOptions.source ?? "agent",
+            commandOptions.note,
+          );
+          if (isJson(globals())) {
+            io.writeOut(
+              `${JSON.stringify(
+                ok
+                  ? { ok: true, key, status: "implemented" }
+                  : { ok: false, key, error: "recommendation not found" },
+                null,
+                2,
+              )}\n`,
+            );
+          } else if (!globals().quiet) {
+            io[ok ? "writeOut" : "writeErr"](
+              ok ? `Marked ${key} as implemented.\n` : `recommendation not found: ${key}\n`,
+            );
+          }
+          return ok ? 0 : 1;
+        } finally {
+          archive.db.close();
+        }
+      }),
     );
 
   program

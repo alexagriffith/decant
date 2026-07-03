@@ -132,6 +132,34 @@ describe("runCli", () => {
     const skillJson = JSON.parse(skill.stdout) as { project: string; artifact: string };
     expect(skillJson.project).toBe("/Users/dev/proj");
     expect(skillJson.artifact).toContain("# /Users/dev/proj workflow");
+
+    const recommendations = await runCli([...base, "recommendations", "ls", "--status", "all"]);
+    expect(recommendations.code).toBe(0);
+    const recs = JSON.parse(recommendations.stdout) as { key: string; status: string }[];
+    expect(recs.some((rec) => rec.key === "catalog:agents-md")).toBe(true);
+
+    const marked = await runCli([
+      ...base,
+      "recommendations",
+      "mark",
+      "catalog:agents-md",
+      "--source",
+      "agent",
+      "--note",
+      "done",
+    ]);
+    expect(marked.code).toBe(0);
+    expect(JSON.parse(marked.stdout)).toMatchObject({
+      ok: true,
+      key: "catalog:agents-md",
+      status: "implemented",
+    });
+
+    const implemented = await runCli([...base, "recommendations", "ls", "--status", "implemented"]);
+    expect(implemented.code).toBe(0);
+    expect((JSON.parse(implemented.stdout) as { key: string }[]).map((rec) => rec.key)).toContain(
+      "catalog:agents-md",
+    );
   });
 
   test("invalid options return code 2 with an error", async () => {
@@ -151,6 +179,18 @@ describe("runCli", () => {
     ]);
     expect(distill.code).toBe(2);
     expect(distill.stderr).toContain("unknown --as");
+
+    const recommendations = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "recommendations",
+      "ls",
+      "--status",
+      "maybe",
+    ]);
+    expect(recommendations.code).toBe(2);
+    expect(recommendations.stderr).toContain("unknown --status");
   });
 
   test("completion emits shell scripts and rejects unknown shells", async () => {
