@@ -1,0 +1,129 @@
+{
+  "artifact": "## /Users/dev/proj — distilled workflow\n\n_decant 0.1.0, from 7 session(s). Review before committing._\n\n### Commands\n\n```bash\ncargo build --workspace\ncargo test --workspace\n```\n\n### Where things live\n\n- `src/main.rs` — read in 2 session(s)\n- `auth_test.py` — read in 1 session(s), rarely edited\n",
+  "hot_context": [
+    {
+      "edits": 2,
+      "reads": 1,
+      "rel_path": "src/main.rs",
+      "sessions": 2
+    },
+    {
+      "edits": 0,
+      "reads": 1,
+      "rel_path": "auth_test.py",
+      "sessions": 1
+    }
+  ],
+  "ops": [
+    {
+      "is_error": false,
+      "kind": "command",
+      "normalized": "cargo build --workspace",
+      "ordinal": 0,
+      "payload": null,
+      "phase": "build",
+      "raw": "cargo build --workspace",
+      "redacted": false,
+      "sessions_seen": 2,
+      "success_rate": 1
+    },
+    {
+      "is_error": false,
+      "kind": "command",
+      "normalized": "gh auth login --with-token=<REDACTED>",
+      "ordinal": 0,
+      "payload": null,
+      "phase": "other",
+      "raw": "gh auth login --with-token=<REDACTED>",
+      "redacted": true,
+      "sessions_seen": 1,
+      "success_rate": 1
+    },
+    {
+      "is_error": false,
+      "kind": "command",
+      "normalized": "cargo test --workspace",
+      "ordinal": 1,
+      "payload": null,
+      "phase": "test",
+      "raw": "cargo test --workspace",
+      "redacted": false,
+      "sessions_seen": 2,
+      "success_rate": 1
+    },
+    {
+      "is_error": false,
+      "kind": "command",
+      "normalized": "rm -rf target",
+      "ordinal": 1,
+      "payload": null,
+      "phase": "other",
+      "raw": "rm -rf target",
+      "redacted": false,
+      "sessions_seen": 1,
+      "success_rate": 1
+    },
+    {
+      "is_error": true,
+      "kind": "command",
+      "normalized": "cargo build --bad-flag",
+      "ordinal": 2,
+      "payload": null,
+      "phase": "build",
+      "raw": "cargo build --bad-flag",
+      "redacted": false,
+      "sessions_seen": 1,
+      "success_rate": 0
+    },
+    {
+      "is_error": false,
+      "kind": "command",
+      "normalized": "cat docs/new.md",
+      "ordinal": 0,
+      "payload": null,
+      "phase": "other",
+      "raw": "cat docs/new.md",
+      "redacted": false,
+      "sessions_seen": 1,
+      "success_rate": 1
+    },
+    {
+      "is_error": false,
+      "kind": "command",
+      "normalized": "cargo build --workspace",
+      "ordinal": 0,
+      "payload": null,
+      "phase": "build",
+      "raw": "cargo build --workspace",
+      "redacted": false,
+      "sessions_seen": 2,
+      "success_rate": 1
+    },
+    {
+      "is_error": false,
+      "kind": "command",
+      "normalized": "cargo test --workspace",
+      "ordinal": 0,
+      "payload": null,
+      "phase": "test",
+      "raw": "cargo test --workspace",
+      "redacted": false,
+      "sessions_seen": 2,
+      "success_rate": 1
+    },
+    {
+      "is_error": false,
+      "kind": "command",
+      "normalized": "rg TODO",
+      "ordinal": 0,
+      "payload": null,
+      "phase": "other",
+      "raw": "rg TODO",
+      "redacted": false,
+      "sessions_seen": 1,
+      "success_rate": 1
+    }
+  ],
+  "project": "/Users/dev/proj",
+  "session_count": 7
+}

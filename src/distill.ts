@@ -472,7 +472,7 @@ export function renderSkill(
     case "skill":
       return `---
 name: ${slug}-workflow
-description: Distilled workflow for ${project} - proven commands and the files agents re-read most. Use when working in ${project}.
+description: Distilled workflow for ${project} — proven commands and the files agents re-read most. Use when working in ${project}.
 ---
 
 # ${project} workflow
@@ -481,7 +481,7 @@ _Distilled by decant ${distillation.generated_with} from ${distillation.session_
 
 ## When to use
 
-Working in the ${project} project - building, testing, or getting oriented.
+Working in the ${project} project — building, testing, or getting oriented.
 
 ## Key files
 
@@ -490,7 +490,7 @@ ${files}
 
 ${commands}`;
     case "agents":
-      return `## ${project} - distilled workflow
+      return `## ${project} — distilled workflow
 
 _decant ${distillation.generated_with}, from ${distillation.session_count} session(s). Review before committing._
 
@@ -624,7 +624,7 @@ function headerLines(distillation: Distillation, options: ScriptOpts): string[] 
   const mode =
     options.exemplar || distillation.session_count <= 1
       ? "faithful single-session order"
-      : "ranked by frequency x success";
+      : "ranked by frequency × success";
   return [
     `Distilled by decant ${distillation.generated_with} from ${distillation.scope_label}`,
     `${distillation.session_count} session(s) (${day(distillation.date_from)}..${day(
@@ -862,7 +862,7 @@ function keyFilesBlock(hot: HotFile[]): string {
   return hot
     .map(
       (file) =>
-        `- \`${file.rel_path}\` - read in ${file.sessions} session(s)${
+        `- \`${file.rel_path}\` — read in ${file.sessions} session(s)${
           file.edits === 0 ? ", rarely edited" : ""
         }\n`,
     )

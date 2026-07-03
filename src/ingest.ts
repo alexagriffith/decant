@@ -446,9 +446,7 @@ function collect(
 }
 
 function walk(root: string): string[] {
-  const entries = readdirSync(root, { withFileTypes: true }).sort((left, right) =>
-    left.name.localeCompare(right.name),
-  );
+  const entries = readdirSync(root, { withFileTypes: true });
   const out: string[] = [];
   for (const entry of entries) {
     const path = join(root, entry.name);

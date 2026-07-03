@@ -209,6 +209,17 @@ const ROW_QUERIES: Record<string, string> = {
 
 // CLI read commands snapshotted as goldens (grows in later phases).
 const CLI_COMMANDS: Record<string, string[]> = {
+  "distill-script": ["distill", "script", "--json"],
+  "distill-script-just": ["distill", "script", "--as", "just", "--json"],
+  "distill-skill-agents": [
+    "distill",
+    "skill",
+    "--kind",
+    "agents",
+    "--project",
+    "/Users/dev/proj",
+    "--json",
+  ],
   "files-ext": ["files", "--group", "ext", "--json"],
   ls: ["ls", "--json"],
   "mcp-stats": ["mcp", "stats", "--limit", "10", "--json"],
