@@ -26,7 +26,17 @@ transcripts never leave your machine.
 
 ## Quick Start
 
-Install from a published npm release without installing Bun:
+Use source during the pre-release TypeScript migration:
+
+```bash
+bun install --frozen-lockfile
+bun src/cli.ts sync
+bun src/cli.ts ls
+bun src/cli.ts serve
+```
+
+After the first Release workflow publishes packages, install from npm without
+installing Bun:
 
 ```bash
 npx @dosu/decant sync
@@ -35,7 +45,7 @@ npx @dosu/decant search "auth bug"
 npx @dosu/decant serve
 ```
 
-Run the published Docker image:
+After the first Release workflow publishes an image, run the GHCR image:
 
 ```bash
 docker run --rm \
@@ -47,16 +57,9 @@ docker run --rm \
 ```
 
 Keep the `127.0.0.1:` host prefix on the Docker port publish. Publishing as
-`-p 4577:4577` exposes the archive port on every host interface.
-
-Use source:
-
-```bash
-bun install --frozen-lockfile
-bun src/cli.ts sync
-bun src/cli.ts ls
-bun src/cli.ts serve
-```
+`-p 4577:4577` exposes the archive port on every host interface. The container
+binds `0.0.0.0` only inside its own network namespace so Docker's host loopback
+publish can reach it.
 
 The UI runs at `http://127.0.0.1:4577`.
 
@@ -115,8 +118,8 @@ tag.
 
 Route reference for the local UI lives in [docs/api/routes.md](docs/api/routes.md).
 Distribution notes live in [docs/distribution.md](docs/distribution.md).
-Release automation publishes npm packages and the GHCR image from the
-`Release` workflow.
+Release automation is configured to publish npm packages and the GHCR image from
+the `Release` workflow once a version is dispatched.
 
 ## Development
 

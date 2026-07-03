@@ -9,6 +9,9 @@ The npm package is a Node-compatible launcher. `npx` starts under Node, but
 Decant uses `bun:sqlite`, so the launcher selects a platform package containing
 a Bun-compiled standalone binary.
 
+The package is a release target, not a currently published install path until
+the first Release workflow run succeeds.
+
 ```sh
 npx @dosu/decant --help
 npx @dosu/decant sync
@@ -41,8 +44,9 @@ Build all release artifacts:
 bun run scripts/build-npm.ts --target all --clean --version 0.1.0
 ```
 
-The release workflow publishes all platform packages first, then the launcher,
-so `optionalDependencies` always point at packages that already exist.
+Release builds stamp the same version into package metadata and the compiled
+binary. The release workflow publishes all platform packages first, then the
+launcher, so `optionalDependencies` always point at packages that already exist.
 
 The launcher prints a clear reinstall message if optional dependencies were
 disabled and the matching platform package is missing. Windows packages are
@@ -69,6 +73,9 @@ docker run --rm \
   -v "$HOME/.codex:/sources/codex:ro" \
   ghcr.io/dosu-ai/decant:local
 ```
+
+Use a locally built tag such as `ghcr.io/dosu-ai/decant:local` until the first
+Release workflow publishes `ghcr.io/dosu-ai/decant:latest`.
 
 The container binds `0.0.0.0` inside the network namespace so Docker port
 publishing can reach it. Publish to `127.0.0.1` on the host, as shown above.

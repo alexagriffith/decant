@@ -46,16 +46,28 @@ describe("query reads", () => {
     db.close();
   });
 
-  test("listSessions filters by tool and uses the default limit", () => {
+  test("listSessions filters by tool, offset, and uses the default limit", () => {
     const db = seeded();
+    upsertSession(
+      db,
+      parseClaudeSession(
+        "sess-claude-2",
+        readFileSync(join(import.meta.dir, "..", "fixtures", "claude", "enriched.jsonl"), "utf8"),
+      ),
+      "/y.jsonl",
+      1,
+      2,
+      "h2",
+    );
     const claude = listSessions(db, { tool: "claude_code", limit: 10 });
-    expect(claude).toHaveLength(1);
+    expect(claude).toHaveLength(2);
 
     const codex = listSessions(db, { tool: "codex", limit: 10 });
     expect(codex).toEqual([]);
 
     const defaulted = listSessions(db, { limit: 0 } satisfies ListFilter);
-    expect(defaulted).toHaveLength(1);
+    expect(defaulted).toHaveLength(2);
+    expect(listSessions(db, { limit: 1, offset: 1 })).toHaveLength(1);
     db.close();
   });
 

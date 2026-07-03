@@ -19,6 +19,7 @@ export interface SessionSummary {
 export interface ListFilter {
   tool?: string | null;
   limit?: number;
+  offset?: number;
 }
 
 interface SessionSummaryRow extends Omit<SessionSummary, "is_archived"> {
@@ -27,6 +28,7 @@ interface SessionSummaryRow extends Omit<SessionSummary, "is_archived"> {
 
 export function listSessions(db: Database, filter: ListFilter = {}): SessionSummary[] {
   const limit = normalizeLimit(filter.limit, 50);
+  const offset = normalizeOffset(filter.offset);
   const base = `
     SELECT s.id, s.tool, s.source_session_id, s.title, p.path AS project_path,
            s.model, s.started_at, s.ended_at, s.message_count,
@@ -36,9 +38,11 @@ export function listSessions(db: Database, filter: ListFilter = {}): SessionSumm
   const rows =
     filter.tool != null
       ? (db
-          .query(`${base} WHERE s.tool = ?1 ORDER BY s.started_at DESC LIMIT ?2`)
-          .all(filter.tool, limit) as SessionSummaryRow[])
-      : (db.query(`${base} ORDER BY s.started_at DESC LIMIT ?1`).all(limit) as SessionSummaryRow[]);
+          .query(`${base} WHERE s.tool = ?1 ORDER BY s.started_at DESC LIMIT ?2 OFFSET ?3`)
+          .all(filter.tool, limit, offset) as SessionSummaryRow[])
+      : (db
+          .query(`${base} ORDER BY s.started_at DESC LIMIT ?1 OFFSET ?2`)
+          .all(limit, offset) as SessionSummaryRow[]);
   return rows.map(mapSessionSummary);
 }
 
@@ -186,4 +190,8 @@ function mapSessionSummary(row: SessionSummaryRow): SessionSummary {
 
 function normalizeLimit(value: number | null | undefined, fallback: number): number {
   return value != null && value > 0 ? value : fallback;
+}
+
+function normalizeOffset(value: number | null | undefined): number {
+  return value != null && value > 0 ? value : 0;
 }

@@ -16,7 +16,7 @@ try {
   const allTargets = readTargets();
   const targets = selectTargets(args.target, allTargets);
   for (const target of targets) {
-    const outPath = buildTarget(target, { outDir: args.outDir });
+    const outPath = buildTarget(target, { outDir: args.outDir, version: args.version });
     process.stdout.write(`built ${target.key}: ${outPath}\n`);
   }
 } catch (error) {

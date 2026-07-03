@@ -251,13 +251,16 @@ export function startWatch(options: WatchOptions): WatchHandle {
   if (enableWatch) {
     for (const dir of dirs) {
       try {
-        watchers.push(
-          watch(dir, { recursive: true }, (eventType) => {
-            if (eventType === "rename" || eventType === "change") {
-              schedule("watch", debounceMs);
-            }
-          }),
-        );
+        const watcher = watch(dir, { recursive: true }, (eventType) => {
+          if (eventType === "rename" || eventType === "change") {
+            schedule("watch", debounceMs);
+          }
+        });
+        watcher.on("error", (error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          emit({ type: "error", reason: "watch", error: message, status: status.snapshot() });
+        });
+        watchers.push(watcher);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         emit({ type: "error", reason: "watch", error: message, status: status.snapshot() });

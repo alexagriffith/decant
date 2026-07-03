@@ -140,8 +140,8 @@ export function sync(
 
   if (report.ingested > 0) {
     resolveWorktreeRoots(db);
+    regenerateRecommendations(db);
   }
-  regenerateRecommendations(db);
 
   return report;
 }

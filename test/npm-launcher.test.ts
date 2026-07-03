@@ -21,6 +21,7 @@ const launcher = require("../npm/decant/bin/decant.cjs") as {
       stdio?: string;
     },
   ): number;
+  signalExitCode(signal: string): number;
   supportedTargetList(): string;
   targetForPlatform(platform?: string, arch?: string): { package: string } | null;
 };
@@ -67,5 +68,22 @@ describe("npm launcher", () => {
       },
     });
     expect(status).toBe(0);
+  });
+
+  test("returns conventional exit codes for child process signals", () => {
+    const dir = mkdtempSync(join(tmpdir(), "decant-npm-launcher-signal-"));
+    const binary = join(dir, "decant");
+    writeFileSync(binary, "#!/usr/bin/env sh\nexit 0\n");
+    chmodSync(binary, 0o755);
+
+    expect(launcher.signalExitCode("SIGINT")).toBe(130);
+    expect(launcher.signalExitCode("SIGTERM")).toBe(143);
+    expect(
+      launcher.run([], {
+        env: { [launcher.overrideEnvVar]: binary },
+        stdio: "pipe",
+        spawnSync: () => ({ signal: "SIGINT" }),
+      }),
+    ).toBe(130);
   });
 });

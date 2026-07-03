@@ -22,6 +22,7 @@ export interface DistributionTarget {
 export interface BuildOptions {
   root?: string;
   outDir?: string;
+  version?: string;
 }
 
 export interface StageOptions {
@@ -90,11 +91,14 @@ export function buildTarget(target: DistributionTarget, options: BuildOptions = 
   const root = options.root ?? repoRoot;
   const outPath = binaryOutputPath(target, { root, outDir: options.outDir });
   mkdirSync(dirname(outPath), { recursive: true });
-  const result = spawnSync(
-    "bun",
-    ["build", "--compile", "--target", target.bunTarget, "src/cli.ts", "--outfile", outPath],
-    { cwd: root, stdio: "inherit" },
-  );
+  const result = spawnSync("bun", buildTargetArgs(target, outPath, options.version), {
+    cwd: root,
+    env:
+      options.version == null
+        ? process.env
+        : { ...process.env, DECANT_BUILD_VERSION: options.version },
+    stdio: "inherit",
+  });
   if (result.error != null) {
     throw result.error;
   }
@@ -103,6 +107,19 @@ export function buildTarget(target: DistributionTarget, options: BuildOptions = 
   }
   chmodSync(outPath, 0o755);
   return outPath;
+}
+
+export function buildTargetArgs(
+  target: DistributionTarget,
+  outPath: string,
+  version?: string,
+): string[] {
+  const args = ["build", "--compile", "--target", target.bunTarget];
+  if (version != null) {
+    args.push("--env=DECANT_BUILD_VERSION*");
+  }
+  args.push("src/cli.ts", "--outfile", outPath);
+  return args;
 }
 
 export function stageNpmPackages(options: StageOptions = {}): string {
@@ -167,7 +184,11 @@ function stagePlatformPackage(
     if (options.buildMissing === false) {
       throw new Error(`missing compiled binary for ${target.key}: ${builtBinary}`);
     }
-    buildTarget(target, { root: options.root, outDir: options.binaryDir });
+    buildTarget(target, {
+      root: options.root,
+      outDir: options.binaryDir,
+      version: options.version,
+    });
   }
 
   mkdirSync(join(dest, dirname(target.binary)), { recursive: true });

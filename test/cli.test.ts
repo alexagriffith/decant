@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../src/cli.ts";
+import { openDb } from "../src/db.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -144,6 +145,23 @@ describe("runCli", () => {
     const recs = JSON.parse(recommendations.stdout) as { key: string; status: string }[];
     expect(recs.some((rec) => rec.key === "catalog:agents-md")).toBe(true);
 
+    const db = openDb(dbPath);
+    db.query("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'").run();
+    db.close();
+    const rereadRecommendations = await runCli([
+      ...base,
+      "recommendations",
+      "ls",
+      "--status",
+      "all",
+    ]);
+    expect(rereadRecommendations.code).toBe(0);
+    expect(
+      (JSON.parse(rereadRecommendations.stdout) as { key: string; score: number }[]).find(
+        (rec) => rec.key === "catalog:agents-md",
+      )?.score,
+    ).toBe(12345);
+
     const marked = await runCli([
       ...base,
       "recommendations",
@@ -181,6 +199,10 @@ describe("runCli", () => {
     const result = await runCli(["--db", dbPath, "--no-sync", "stats", "--by", "nope"]);
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("unknown --by value");
+
+    const badFormat = await runCli(["--format", "bogus", "ls"]);
+    expect(badFormat.code).toBe(2);
+    expect(badFormat.stderr).toContain("expected: table | json | md");
 
     const distill = await runCli([
       "--db",
@@ -230,6 +252,8 @@ describe("runCli", () => {
     expect(bash.stdout).toContain("complete -F _decant_complete decant");
     expect(bash.stdout).toContain("watch");
     expect(bash.stdout).toContain("serve");
+    expect(bash.stdout).toContain("distill");
+    expect(bash.stdout).toContain("recommendations");
 
     const unknown = await runCli(["completion", "tcsh"]);
     expect(unknown.code).toBe(2);

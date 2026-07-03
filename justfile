@@ -1,18 +1,22 @@
-# decant developer tasks. `just` lists recipes; `just check` is the full
-# TypeScript definition of done.
+# decant developer tasks. `just` lists recipes; `just check` is the local
+# TypeScript plus native distribution definition of done.
 
 default:
     @just --list --unsorted
 
 # Quality gates
 [group('gates')]
-check: ts-check
+check: ts-check dist-check
 
 [group('gates')]
 ts-check:
     bun test
     bunx tsc --noEmit
     bunx biome check .
+
+[group('gates')]
+dist-check:
+    bun run scripts/dist-check.ts
 
 # TypeScript
 [group('ts')]
@@ -45,6 +49,11 @@ build-npm *ARGS:
 [group('dist')]
 docker-build *ARGS:
     docker build --platform linux/amd64 -t decant:local {{ARGS}} .
+
+# Validate both Linux Docker release platforms without loading an image locally
+[group('dist')]
+docker-buildx *ARGS:
+    docker buildx build --platform linux/amd64,linux/arm64 --output=type=cacheonly {{ARGS}} .
 
 # CLI
 [group('cli')]

@@ -24,7 +24,6 @@ import {
   list as listRecommendations,
   markImplemented,
   parseStatusFilter,
-  regenerate as regenerateRecommendations,
 } from "./recommendations.ts";
 import { publishServerEvent, serve as serveApp } from "./server.ts";
 import {
@@ -60,9 +59,10 @@ export interface CliRunOptions {
 interface GlobalOptions {
   db?: string;
   json?: boolean;
-  format?: string;
+  format?: OutputFormat;
   quiet?: boolean;
   sync?: boolean;
+  color?: boolean;
 }
 
 interface Io {
@@ -79,6 +79,7 @@ interface Archive {
 
 type CliAction = () => number | undefined;
 type CliAsyncAction = () => Promise<number | undefined>;
+type OutputFormat = "table" | "json" | "md";
 
 interface ArtifactOptions {
   out?: string;
@@ -149,7 +150,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     })
     .option("--db <path>", "path to the decant SQLite database")
     .option("--json", "emit machine-readable JSON")
-    .option("--format <format>", "output format")
+    .option("--format <format>", "output format (table | json | md)", parseOutputFormat)
     .option("-q, --quiet", "suppress non-essential output")
     .option("--no-color", "disable ANSI color")
     .option("--no-sync", "skip sync-on-read for read commands");
@@ -634,7 +635,6 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         }
         const archive = readArchive();
         try {
-          regenerateRecommendations(archive.db);
           const rows = listRecommendations(archive.db, status);
           output(
             rows,
@@ -918,6 +918,13 @@ function isJson(options: GlobalOptions): boolean {
   return options.json === true || options.format === "json";
 }
 
+function parseOutputFormat(value: string): OutputFormat {
+  if (value === "table" || value === "json" || value === "md") {
+    return value;
+  }
+  throw new InvalidArgumentError("expected: table | json | md");
+}
+
 function shouldSync(
   options: GlobalOptions,
   env: Record<string, string | undefined> | undefined,
@@ -1028,6 +1035,12 @@ const completionWords = [
   "show",
   "project",
   "db",
+  "distill",
+  "script",
+  "replay",
+  "skill",
+  "recommendations",
+  "mark",
   "search",
   "stats",
   "files",
@@ -1035,6 +1048,12 @@ const completionWords = [
   "mcp",
   "export",
   "completion",
+  "--db",
+  "--json",
+  "--format",
+  "--quiet",
+  "--no-color",
+  "--no-sync",
 ];
 
 function renderCompletion(shell: string): string | null {

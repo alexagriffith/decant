@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  buildTargetArgs,
   packageDirName,
   parseDistributionArgs,
   readTargets,
@@ -59,6 +60,32 @@ describe("distribution helpers", () => {
       version: undefined,
     });
     expect(parseDistributionArgs(["--version", "1.2.3"]).version).toBe("1.2.3");
+  });
+
+  test("passes release version through Bun env inlining for compiled binaries", () => {
+    const target = selectTargets("linux-x64")[0];
+    if (target == null) {
+      throw new Error("missing linux-x64 target");
+    }
+    expect(buildTargetArgs(target, "/tmp/decant")).toEqual([
+      "build",
+      "--compile",
+      "--target",
+      "bun-linux-x64",
+      "src/cli.ts",
+      "--outfile",
+      "/tmp/decant",
+    ]);
+    expect(buildTargetArgs(target, "/tmp/decant", "1.2.3")).toEqual([
+      "build",
+      "--compile",
+      "--target",
+      "bun-linux-x64",
+      "--env=DECANT_BUILD_VERSION*",
+      "src/cli.ts",
+      "--outfile",
+      "/tmp/decant",
+    ]);
   });
 
   test("stamps staged npm packages to one release version", async () => {

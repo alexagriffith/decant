@@ -10,7 +10,6 @@ import {
   list as listRecommendations,
   markImplemented,
   parseStatusFilter,
-  regenerate as regenerateRecommendations,
 } from "./recommendations.ts";
 import {
   agentOptions,
@@ -43,6 +42,9 @@ export interface ServeOptions {
 
 type Db = ReturnType<typeof openDb>;
 type ServerEvent = { type: string };
+interface RequestContext {
+  db?: Db;
+}
 
 const syncStatus = {
   last_sync_at: null as string | null,
@@ -51,15 +53,23 @@ const syncStatus = {
   last_error: null as string | null,
   ingested_count: null as number | null,
 };
-const eventClients = new Set<(event: ServerEvent) => void>();
+const eventClients = new Set<EventClient>();
 
 export function publishServerEvent<T extends ServerEvent>(event: T): void {
-  for (const send of eventClients) {
-    send(event);
+  for (const client of [...eventClients]) {
+    try {
+      client.send(event);
+    } catch {
+      client.close();
+    }
   }
 }
 
-export async function handleRequest(request: Request, config: Config): Promise<Response> {
+export async function handleRequest(
+  request: Request,
+  config: Config,
+  context: RequestContext = {},
+): Promise<Response> {
   const url = new URL(request.url);
   const securityFailure = validateLocalRequest(request, url);
   if (securityFailure != null) {
@@ -135,18 +145,19 @@ export async function handleRequest(request: Request, config: Config): Promise<R
       return syncNow(config);
     }
     if (request.method === "GET" && url.pathname === "/api/sessions") {
-      return withDb(config, (db) =>
+      return withDb(config, context, (db) =>
         json(
           listSessions(db, {
             tool: url.searchParams.get("tool"),
             limit: integerParam(url, "limit", 50),
+            offset: integerParam(url, "offset", 0, true),
           }),
         ),
       );
     }
     const sessionMatch = url.pathname.match(/^\/api\/sessions\/(\d+)$/);
     if (request.method === "GET" && sessionMatch != null) {
-      return withDb(config, (db) => {
+      return withDb(config, context, (db) => {
         const detail = getSession(db, Number(sessionMatch[1]));
         return detail == null ? json({ error: "session not found" }, 404) : json(detail);
       });
@@ -160,26 +171,35 @@ export async function handleRequest(request: Request, config: Config): Promise<R
       if (body.query == null || body.query.trim() === "") {
         return json({ error: "query is required" }, 400);
       }
-      return withDb(config, (db) => json(search(db, body.query as string, body.limit ?? 30)));
+      return withDb(config, context, (db) => {
+        try {
+          return json(search(db, body.query as string, body.limit ?? 30));
+        } catch (error) {
+          if (isSearchSyntaxError(error)) {
+            return json({ error: "invalid search query" }, 400);
+          }
+          throw error;
+        }
+      });
     }
     if (request.method === "GET" && url.pathname === "/api/stats/summary") {
-      return withDb(config, (db) => json(totals(db)));
+      return withDb(config, context, (db) => json(totals(db)));
     }
     if (request.method === "GET" && url.pathname === "/api/stats/by-dimension") {
       const dimension = parseDimension(url.searchParams.get("dim") ?? "");
       if (dimension == null) {
         return json({ error: "unknown dimension" }, 400);
       }
-      return withDb(config, (db) => json(byDimension(db, dimension)));
+      return withDb(config, context, (db) => json(byDimension(db, dimension)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/activity") {
-      return withDb(config, (db) => json(activityStats(db)));
+      return withDb(config, context, (db) => json(activityStats(db)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/model-sparklines") {
-      return withDb(config, (db) => json(modelSparklines(db)));
+      return withDb(config, context, (db) => json(modelSparklines(db)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/now") {
-      return withDb(config, (db) =>
+      return withDb(config, context, (db) =>
         json({
           today: todayTotals(db),
           active_sessions: [],
@@ -192,7 +212,7 @@ export async function handleRequest(request: Request, config: Config): Promise<R
       request.method === "GET" &&
       (url.pathname === "/api/date-bounds" || url.pathname === "/api/metadata/date-bounds")
     ) {
-      return withDb(config, (db) => json(dateBounds(db)));
+      return withDb(config, context, (db) => json(dateBounds(db)));
     }
     if (request.method === "GET" && url.pathname === "/api/files") {
       const group = parseFileGroup(url.searchParams.get("group") ?? "path");
@@ -200,12 +220,12 @@ export async function handleRequest(request: Request, config: Config): Promise<R
       if (group == null || op === false) {
         return json({ error: "invalid files query" }, 400);
       }
-      return withDb(config, (db) =>
+      return withDb(config, context, (db) =>
         json(fileHotspots(db, group, op, integerParam(url, "limit", 25))),
       );
     }
     if (request.method === "GET" && url.pathname === "/api/tools/usage") {
-      return withDb(config, (db) =>
+      return withDb(config, context, (db) =>
         json(
           toolUsage(
             db,
@@ -216,17 +236,14 @@ export async function handleRequest(request: Request, config: Config): Promise<R
       );
     }
     if (request.method === "GET" && url.pathname === "/api/tools/mcp-usage") {
-      return withDb(config, (db) => json(mcpUsage(db, integerParam(url, "limit", 50))));
+      return withDb(config, context, (db) => json(mcpUsage(db, integerParam(url, "limit", 50))));
     }
     if (request.method === "GET" && url.pathname === "/api/recommendations") {
       const status = parseStatusFilter(url.searchParams.get("status") ?? "open");
       if (status == null) {
         return json({ error: "unknown status" }, 400);
       }
-      return withDb(config, (db) => {
-        regenerateRecommendations(db);
-        return json(listRecommendations(db, status));
-      });
+      return withDb(config, context, (db) => json(listRecommendations(db, status)));
     }
     if (request.method === "POST" && url.pathname === "/api/recommendations/mark") {
       const contentTypeFailure = requireJsonRequest(request);
@@ -237,7 +254,7 @@ export async function handleRequest(request: Request, config: Config): Promise<R
       if (body.key == null || body.key.trim() === "") {
         return json({ error: "key is required" }, 400);
       }
-      return withDb(config, (db) => {
+      return withDb(config, context, (db) => {
         const ok = markImplemented(db, body.key as string, body.source ?? "agent", body.note);
         return ok
           ? json({ ok: true, key: body.key, status: "implemented" })
@@ -270,7 +287,7 @@ function syncNow(config: Config): Response {
   syncStatus.in_progress = true;
   syncStatus.last_error = null;
   try {
-    return withDb(config, (db) => {
+    return withDb(config, {}, (db) => {
       const report = ingestSync(db, config);
       syncStatus.in_progress = false;
       syncStatus.last_sync_at = new Date().toISOString();
@@ -296,22 +313,45 @@ function syncNow(config: Config): Response {
   }
 }
 
-function eventStream(): Response {
+interface EventClient {
+  send(event: ServerEvent): void;
+  close(): void;
+}
+
+function eventStream(heartbeatMs = 15_000): Response {
   const encoder = new TextEncoder();
-  let client: ((event: ServerEvent) => void) | null = null;
+  let client: EventClient | null = null;
+  let heartbeat: Timer | null = null;
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      const send = (event: ServerEvent): void => {
+      const send = (event: ServerEvent): void =>
         controller.enqueue(encoder.encode(formatSse(event)));
+      const close = (): void => {
+        if (heartbeat != null) {
+          clearInterval(heartbeat);
+          heartbeat = null;
+        }
+        if (client != null) {
+          eventClients.delete(client);
+          client = null;
+        }
       };
-      client = send;
-      eventClients.add(send);
+      client = { send, close };
+      eventClients.add(client);
       send({ type: "hello", timestamp: new Date().toISOString() } as ServerEvent);
+      heartbeat = setInterval(() => {
+        if (client == null) {
+          return;
+        }
+        try {
+          send({ type: "ping", timestamp: new Date().toISOString() } as ServerEvent);
+        } catch {
+          close();
+        }
+      }, heartbeatMs);
     },
     cancel() {
-      if (client != null) {
-        eventClients.delete(client);
-      }
+      client?.close();
     },
   });
   return new Response(stream, {
@@ -330,7 +370,9 @@ function formatSse(event: ServerEvent): string {
 export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   const hostname = options.hostname ?? "127.0.0.1";
   const port = options.port ?? 4577;
-  return Bun.serve({
+  mkdirSync(dirname(options.config.dbPath), { recursive: true });
+  const db = openDb(options.config.dbPath);
+  const server = Bun.serve({
     hostname,
     port,
     routes: {
@@ -343,11 +385,27 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       "/files": uiBundle,
       "/settings": uiBundle,
     },
-    fetch: (request) => handleRequest(request, options.config),
+    fetch: (request) => handleRequest(request, options.config, { db }),
   });
+  const stop = server.stop.bind(server);
+  let closed = false;
+  server.stop = async (closeActiveConnections?: boolean): Promise<void> => {
+    try {
+      await stop(closeActiveConnections);
+    } finally {
+      if (!closed) {
+        closed = true;
+        db.close();
+      }
+    }
+  };
+  return server;
 }
 
-function withDb(config: Config, callback: (db: Db) => Response): Response {
+function withDb(config: Config, context: RequestContext, callback: (db: Db) => Response): Response {
+  if (context.db != null) {
+    return callback(context.db);
+  }
   mkdirSync(dirname(config.dbPath), { recursive: true });
   const db = openDb(config.dbPath);
   try {
@@ -355,6 +413,17 @@ function withDb(config: Config, callback: (db: Db) => Response): Response {
   } finally {
     db.close();
   }
+}
+
+function isSearchSyntaxError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("fts5") ||
+    lower.includes("malformed") ||
+    lower.includes("unterminated") ||
+    lower.includes("syntax")
+  );
 }
 
 function json(value: unknown, status = 200): Response {
@@ -431,13 +500,13 @@ async function readJson<T>(request: Request): Promise<T> {
   }
 }
 
-function integerParam(url: URL, name: string, fallback: number): number {
+function integerParam(url: URL, name: string, fallback: number, allowZero = false): number {
   const raw = url.searchParams.get(name);
   if (raw == null) {
     return fallback;
   }
   const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return Number.isFinite(parsed) && (parsed > 0 || (allowZero && parsed === 0)) ? parsed : fallback;
 }
 
 function parseOperation(value: string | null): Operation | null | false {

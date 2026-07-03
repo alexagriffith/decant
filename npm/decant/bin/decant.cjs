@@ -3,6 +3,7 @@
 
 const { spawnSync } = require("node:child_process");
 const { existsSync } = require("node:fs");
+const { constants: osConstants } = require("node:os");
 const { dirname, join } = require("node:path");
 const targetsMetadata = require("../targets.json");
 
@@ -70,9 +71,14 @@ function run(argv = process.argv.slice(2), options = {}) {
     throw result.error;
   }
   if (result.signal != null) {
-    return 1;
+    return signalExitCode(result.signal);
   }
   return result.status ?? 1;
+}
+
+function signalExitCode(signal) {
+  const signalNumber = osConstants.signals?.[signal];
+  return typeof signalNumber === "number" ? 128 + signalNumber : 1;
 }
 
 function main() {
@@ -89,6 +95,7 @@ module.exports = {
   platformKey,
   resolveBinary,
   run,
+  signalExitCode,
   supportedTargets,
   supportedTargetList,
   targetForPlatform,

@@ -163,6 +163,7 @@ const navItems = [
   ["/files", "Files"],
   ["/settings", "Settings"],
 ] as const;
+const SESSION_PAGE_SIZE = 50;
 
 function App() {
   const [path, setPath] = useState(() => window.location.pathname);
@@ -170,6 +171,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [sessionPage, setSessionPage] = useState(0);
 
   useEffect(() => {
     const onPop = () => setPath(window.location.pathname);
@@ -182,7 +184,9 @@ function App() {
     setLoading(reloadKey === 0);
     Promise.all([
       getJson<Summary>("/api/stats/summary"),
-      getJson<SessionSummary[]>("/api/sessions?limit=50"),
+      getJson<SessionSummary[]>(
+        `/api/sessions?limit=${SESSION_PAGE_SIZE}&offset=${sessionPage * SESSION_PAGE_SIZE}`,
+      ),
       getJson<DimensionRow[]>("/api/stats/by-dimension?dim=tool"),
       getJson<ToolRow[]>("/api/tools/usage?limit=10"),
       getJson<McpRow[]>("/api/tools/mcp-usage?limit=10"),
@@ -245,7 +249,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [reloadKey, sessionPage]);
 
   useEffect(() => {
     const events = new EventSource("/api/events");
@@ -306,26 +310,46 @@ function App() {
         {loading ? (
           <div className="notice">Loading archive data...</div>
         ) : (
-          renderView(active, path, data, () => setReloadKey((key) => key + 1))
+          renderView(active, path, data, {
+            refresh: () => setReloadKey((key) => key + 1),
+            sessionPage,
+            setSessionPage,
+          })
         )}
       </main>
     </div>
   );
 }
 
-function renderView(active: string, path: string, data: DashboardData, refresh: () => void) {
+function renderView(
+  active: string,
+  path: string,
+  data: DashboardData,
+  actions: {
+    refresh: () => void;
+    sessionPage: number;
+    setSessionPage: (page: number) => void;
+  },
+) {
   if (path.startsWith("/sessions/")) {
     return <SessionDetailView id={Number(path.split("/").at(-1))} />;
   }
   switch (active) {
     case "Sessions":
-      return <SessionsView data={data} />;
+      return (
+        <SessionsView
+          data={data}
+          page={actions.sessionPage}
+          pageSize={SESSION_PAGE_SIZE}
+          onPageChange={actions.setSessionPage}
+        />
+      );
     case "Search":
       return <SearchView />;
     case "Analytics":
       return <AnalyticsView data={data} />;
     case "Insights":
-      return <InsightsView rows={data.recommendations} onMarked={refresh} />;
+      return <InsightsView rows={data.recommendations} onMarked={actions.refresh} />;
     case "Tools":
       return <ToolsView data={data} />;
     case "Files":
@@ -333,18 +357,42 @@ function renderView(active: string, path: string, data: DashboardData, refresh: 
     case "Settings":
       return <SettingsView config={data.config} settingsInfo={data.settings} />;
     default:
-      return <SessionsView data={data} />;
+      return (
+        <SessionsView
+          data={data}
+          page={actions.sessionPage}
+          pageSize={SESSION_PAGE_SIZE}
+          onPageChange={actions.setSessionPage}
+        />
+      );
   }
 }
 
-function SessionsView({ data }: { data: DashboardData }) {
+function SessionsView({
+  data,
+  page,
+  pageSize,
+  onPageChange,
+}: {
+  data: DashboardData;
+  page: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}) {
+  const total = data.summary?.sessions ?? data.sessions.length;
+  const start = total === 0 ? 0 : page * pageSize + 1;
+  const end = Math.min(total, page * pageSize + data.sessions.length);
+  const hasPrevious = page > 0;
+  const hasNext = end < total;
   return (
     <>
       <MetricGrid summary={data.summary} />
       <section className="section">
         <div className="section-heading">
           <h2>Recent Sessions</h2>
-          <span>{data.sessions.length} loaded</span>
+          <span>
+            {start}-{end} of {total}
+          </span>
         </div>
         <table>
           <thead>
@@ -357,6 +405,11 @@ function SessionsView({ data }: { data: DashboardData }) {
             </tr>
           </thead>
           <tbody>
+            {data.sessions.length === 0 ? (
+              <tr>
+                <td colSpan={5}>No sessions ingested yet.</td>
+              </tr>
+            ) : null}
             {data.sessions.map((session) => (
               <tr key={session.id}>
                 <td>
@@ -372,6 +425,15 @@ function SessionsView({ data }: { data: DashboardData }) {
             ))}
           </tbody>
         </table>
+        <div className="pager">
+          <button disabled={!hasPrevious} type="button" onClick={() => onPageChange(page - 1)}>
+            Previous
+          </button>
+          <span>Page {page + 1}</span>
+          <button disabled={!hasNext} type="button" onClick={() => onPageChange(page + 1)}>
+            Next
+          </button>
+        </div>
       </section>
     </>
   );
@@ -399,19 +461,34 @@ function MetricGrid({ summary }: { summary: Summary | null }) {
 function SearchView() {
   const [query, setQuery] = useState("auth");
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const runSearch = () => {
+    const trimmed = query.trim();
+    if (trimmed === "") {
+      setHits([]);
+      setError(null);
+      return;
+    }
+    setSearching(true);
+    setError(null);
     void getJson<SearchHit[]>("/api/search", {
       method: "POST",
-      body: JSON.stringify({ query, limit: 20 }),
-    }).then(setHits);
+      body: JSON.stringify({ query: trimmed, limit: 20 }),
+    })
+      .then(setHits)
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setSearching(false));
   };
 
   useEffect(() => {
     void getJson<SearchHit[]>("/api/search", {
       method: "POST",
       body: JSON.stringify({ query: "auth", limit: 20 }),
-    }).then(setHits);
+    })
+      .then(setHits)
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, []);
 
   return (
@@ -422,17 +499,36 @@ function SearchView() {
           Search
         </button>
       </div>
+      {error != null ? <div className="notice danger inline-notice">{error}</div> : null}
       <div className="result-list">
+        {searching ? <p className="empty">Searching...</p> : null}
+        {!searching && hits.length === 0 ? <p className="empty">No matching blocks.</p> : null}
         {hits.map((hit) => (
           <article className="result" key={`${hit.session_id}-${hit.snippet}`}>
             <a href={`/sessions/${hit.session_id}`}>
               {hit.session_title ?? `Session ${hit.session_id}`}
             </a>
-            <p>{hit.snippet}</p>
+            <p>
+              <HighlightedSnippet snippet={hit.snippet} />
+            </p>
           </article>
         ))}
       </div>
     </section>
+  );
+}
+
+function HighlightedSnippet({ snippet }: { snippet: string }) {
+  return (
+    <>
+      {snippetParts(snippet).map((part) =>
+        part.match ? (
+          <mark key={part.key}>{part.text}</mark>
+        ) : (
+          <span key={part.key}>{part.text}</span>
+        ),
+      )}
+    </>
   );
 }
 
@@ -875,6 +971,11 @@ function TableRows({ headers, rows }: { headers: string[]; rows: (string | numbe
         </tr>
       </thead>
       <tbody>
+        {rows.length === 0 ? (
+          <tr>
+            <td colSpan={headers.length}>No rows.</td>
+          </tr>
+        ) : null}
         {rows.map((row) => (
           <tr key={row.map((cell) => String(cell)).join("|")}>
             {row.map((cell, cellIndex) => (
@@ -926,6 +1027,36 @@ function prettyJson(value: string | null): string {
   } catch {
     return value;
   }
+}
+
+function snippetParts(snippet: string): { key: string; text: string; match: boolean }[] {
+  const parts: { key: string; text: string; match: boolean }[] = [];
+  let remaining = snippet;
+  let offset = 0;
+  while (remaining !== "") {
+    const start = remaining.indexOf("[");
+    if (start < 0) {
+      parts.push({ key: `text-${offset}`, text: remaining, match: false });
+      break;
+    }
+    if (start > 0) {
+      parts.push({ key: `text-${offset}`, text: remaining.slice(0, start), match: false });
+    }
+    const close = remaining.indexOf("]", start + 1);
+    if (close < 0) {
+      parts.push({ key: `text-${offset + start}`, text: remaining.slice(start), match: false });
+      break;
+    }
+    parts.push({
+      key: `match-${offset + start}`,
+      text: remaining.slice(start + 1, close),
+      match: true,
+    });
+    const consumed = close + 1;
+    offset += consumed;
+    remaining = remaining.slice(consumed);
+  }
+  return parts;
 }
 
 function basename(path: string | null | undefined): string {

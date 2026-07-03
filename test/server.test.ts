@@ -240,6 +240,13 @@ describe("server routes", () => {
     expect(search.body).toEqual(
       expect.arrayContaining([expect.objectContaining({ tool: "claude_code" })]),
     );
+
+    const malformed = await route(config, "/api/search", {
+      method: "POST",
+      body: JSON.stringify({ query: '"' }),
+    });
+    expect(malformed.status).toBe(400);
+    expect(malformed.body).toEqual({ error: "invalid search query" });
   });
 
   test("returns stats, files, tools, and recommendations", async () => {
@@ -271,6 +278,14 @@ describe("server routes", () => {
     expect(recommendations.status).toBe(200);
     expect(recommendations.body).toEqual(
       expect.arrayContaining([expect.objectContaining({ key: "catalog:agents-md" })]),
+    );
+
+    const db = openDb(config.dbPath);
+    db.query("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'").run();
+    db.close();
+    const reread = await route(config, "/api/recommendations?status=all");
+    expect(reread.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: "catalog:agents-md", score: 12345 })]),
     );
   });
 

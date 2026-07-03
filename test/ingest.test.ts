@@ -296,9 +296,17 @@ describe("sync", () => {
       (db.query("SELECT COUNT(*) AS n FROM model_pricing").get() as { n: number }).n,
     ).toBeGreaterThan(0);
 
+    db.query("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'").run();
     const second = sync(db, config);
     expect(second).toMatchObject({ scanned: 1, ingested: 0, skipped: 1, issues: 0, failed: 0 });
     expect((db.query("SELECT COUNT(*) AS n FROM session").get() as { n: number }).n).toBe(1);
+    expect(
+      (
+        db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get() as {
+          score: number;
+        }
+      ).score,
+    ).toBe(12345);
 
     write(
       join(config.claudeDir, "proj", "sess.jsonl"),
@@ -307,6 +315,13 @@ describe("sync", () => {
     const third = sync(db, config);
     expect(third).toMatchObject({ scanned: 1, ingested: 1, skipped: 0, issues: 1, failed: 0 });
     expect((db.query("SELECT COUNT(*) AS n FROM ingest_issue").get() as { n: number }).n).toBe(1);
+    expect(
+      (
+        db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get() as {
+          score: number;
+        }
+      ).score,
+    ).toBe(0);
     db.close();
   });
 
