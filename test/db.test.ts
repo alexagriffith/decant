@@ -15,7 +15,7 @@ function freshPath(): string {
   return join(workDir, `archive-${dbCounter}.db`);
 }
 
-// Inventory of the Rust-generated baseline (schema version 8). Shadow tables
+// Inventory of the frozen v8 baseline. Shadow tables
 // of block_fts are excluded; they are implementation details of FTS5.
 const BASELINE_TABLES = [
   "block",
@@ -54,7 +54,7 @@ describe("openDb", () => {
     expect(Number(match?.[1])).toBe(LATEST_SCHEMA_VERSION);
   });
 
-  test("creates a fresh archive with Rust-parity connection pragmas", () => {
+  test("creates a fresh archive with stable connection pragmas", () => {
     const db = openDb(freshPath());
     expect((db.query("PRAGMA busy_timeout").get() as { timeout: number }).timeout).toBe(5000);
     expect((db.query("PRAGMA synchronous").get() as { synchronous: number }).synchronous).toBe(1);
@@ -75,7 +75,7 @@ describe("openDb", () => {
     db.close();
   });
 
-  test("records schema_migrations 1..LATEST_SCHEMA_VERSION like the Rust engine", () => {
+  test("records schema_migrations 1..LATEST_SCHEMA_VERSION", () => {
     const db = openDb(freshPath());
     const versions = (
       db.query("SELECT version FROM schema_migrations ORDER BY version").all() as {
@@ -107,7 +107,7 @@ describe("openDb", () => {
       INSERT INTO session (id, tool, source_session_id) VALUES (1, 'claude', 'abc');
       INSERT INTO message (id, session_id, seq, raw) VALUES (10, 1, 0, '{}');
       INSERT INTO block (id, message_id, session_id, ordinal, type, text)
-        VALUES (100, 10, 1, 0, 'text', 'porting the rust daemon to typescript');
+        VALUES (100, 10, 1, 0, 'text', 'porting decant to typescript');
     `);
 
     const match = (q: string) =>
@@ -119,9 +119,7 @@ describe("openDb", () => {
         )
         .all(q) as { id: number; rank: number; hl: string }[];
 
-    expect(match("typescript")).toMatchObject([
-      { id: 100, hl: "porting the rust daemon to [typescript]" },
-    ]);
+    expect(match("typescript")).toMatchObject([{ id: 100, hl: "porting decant to [typescript]" }]);
 
     db.exec("UPDATE block SET text = 'nothing to see here' WHERE id = 100");
     expect(match("typescript")).toHaveLength(0);

@@ -6,81 +6,14 @@ on:
   pull_request:
     branches: [main]
 
-# Cancel superseded runs on the same ref.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# The test-reporter steps publish to the Actions job summary
-# (use-actions-summary), which needs no elevated token scopes.
 permissions:
   contents: read
 
 jobs:
-  rust:
-    name: Rust (fmt, clippy, test)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy, llvm-tools-preview
-
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Format
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Test (nextest, JUnit report + coverage)
-        run: cargo llvm-cov nextest --workspace --profile ci --lcov --output-path lcov.info
-
-      - name: Doctests
-        run: cargo test --workspace --doc
-
-      - name: Upload Rust coverage to Codecov
-        uses: codecov/codecov-action@v7
-        if: ${{ !cancelled() }}
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          slug: onlydole/decant
-          files: lcov.info
-          flags: rust
-          fail_ci_if_error: false
-
-      - name: Publish Rust test report
-        uses: dorny/test-reporter@v3
-        # Runs on success or failure (but not cancellation) so results are
-        # surfaced even when tests fail.
-        if: ${{ !cancelled() }}
-        with:
-          name: Rust tests
-          path: target/nextest/ci/junit.xml
-          reporter: java-junit
-          # Write the report to the Actions run summary (no checks: write).
-          use-actions-summary: true
-          fail-on-error: false
-
-      - name: Upload Rust JUnit report
-        uses: actions/upload-artifact@v7
-        if: ${{ !cancelled() }}
-        with:
-          name: rust-junit
-          path: target/nextest/ci/junit.xml
-          if-no-files-found: warn
-
   typescript:
     name: TypeScript (biome, tsc, test)
     runs-on: ubuntu-latest
@@ -105,72 +38,21 @@ jobs:
       - name: Test
         run: bun test
 
-  web:
-    name: Web (Elixir/Phoenix)
+      - name: Build native binary
+        run: bun run scripts/build-binaries.ts --target native --out-dir /tmp/decant-bin
+
+      - name: Stage native npm packages
+        run: bun run scripts/build-npm.ts --target native --binary-dir /tmp/decant-bin --out-dir /tmp/decant-npm --no-build --clean
+
+  docker:
+    name: Docker (linux/amd64)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: web
-    env:
-      MIX_ENV: test
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Erlang/Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          otp-version: "27"
-          elixir-version: "1.18"
+      - name: Build image
+        run: docker build --platform linux/amd64 -t decant:ci .
 
-      - name: Cache deps and build
-        uses: actions/cache@v6
-        with:
-          path: |
-            web/deps
-            web/_build
-          key: ${{ runner.os }}-mix-${{ hashFiles('web/mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-
-
-      - name: Install dependencies
-        run: mix deps.get
-
-      - name: Check formatting
-        run: mix format --check-formatted
-
-      - name: Compile (warnings as errors)
-        run: mix compile --warnings-as-errors
-
-      - name: Test (JUnit report + coverage)
-        run: mix coveralls.json
-
-      - name: Upload Elixir coverage to Codecov
-        uses: codecov/codecov-action@v7
-        if: ${{ !cancelled() }}
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          slug: onlydole/decant
-          files: web/cover/excoveralls.json
-          flags: elixir
-          fail_ci_if_error: false
-
-      - name: Publish Elixir test report
-        uses: dorny/test-reporter@v3
-        # Runs on success or failure (but not cancellation) so results are
-        # surfaced even when tests fail.
-        if: ${{ !cancelled() }}
-        with:
-          name: Elixir tests
-          path: web/report/junit.xml
-          reporter: java-junit
-          # Write the report to the Actions run summary (no checks: write).
-          use-actions-summary: true
-          fail-on-error: false
-
-      - name: Upload Elixir JUnit report
-        uses: actions/upload-artifact@v7
-        if: ${{ !cancelled() }}
-        with:
-          name: elixir-junit
-          path: web/report/junit.xml
-          if-no-files-found: warn
+      - name: Smoke CLI
+        run: docker run --rm decant:ci --help

@@ -2,11 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-// The golden files are generated from the Rust implementation by
-// scripts/gen-goldens.ts and are the parity oracle for the TypeScript port.
-// These tests pin the harness itself: the goldens exist, parse, cover every
-// fixture, and are internally consistent. Phase 1 adds the real parity
-// assertion (TS ingest over fixtures/ must reproduce rows/*.json exactly).
+// These frozen golden files came from the pre-TypeScript implementation and now
+// pin the synthetic fixture contract: the goldens exist, parse, cover every
+// fixture, and are internally consistent.
 const goldenDir = join(import.meta.dir, "golden");
 const keySeparator = "\0";
 
@@ -29,10 +27,10 @@ type SessionKey = { tool: string; source_session_id: string };
 
 describe("golden harness", () => {
   test("covers every fixture transcript exactly once", async () => {
-    const meta = await loadGolden<{ fixtures: string[]; rust_rev: string }>("meta.json");
+    const meta = await loadGolden<{ fixtures: string[]; baseline_rev: string }>("meta.json");
     const sessions = await loadGolden<SessionKey[]>("rows/sessions.json");
     expect(sessions).toHaveLength(meta.fixtures.length);
-    expect(meta.rust_rev).toMatch(/^[0-9a-f]{40}(-dirty)?$/);
+    expect(meta.baseline_rev).toMatch(/^[0-9a-f]{40}(-dirty)?$/);
     const tools = new Set(sessions.map((s) => s.tool));
     expect(tools).toEqual(new Set(["claude_code", "codex"]));
   });

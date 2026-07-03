@@ -22,7 +22,7 @@ export function classifyTool(name: string): ClassifiedTool {
 }
 
 /** First `max` characters of a string, with an ellipsis if truncated.
- * Counts Unicode scalars like Rust `chars()`, never splitting surrogate pairs. */
+ * Counts Unicode scalars, never splitting surrogate pairs. */
 export function preview(s: string, max: number): string {
   const chars = [...s];
   if (chars.length <= max) {

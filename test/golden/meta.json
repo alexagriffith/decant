@@ -1,7 +1,7 @@
 {
-  "generator": "scripts/gen-goldens.ts",
-  "source_of_truth": "rust implementation",
-  "rust_rev": "bea97bcb49884cb7a7de9dc6cf441925c597c749-dirty",
+  "generator": "frozen pre-typescript golden snapshot",
+  "source_of_truth": "pre-typescript implementation",
+  "baseline_rev": "bea97bcb49884cb7a7de9dc6cf441925c597c749-dirty",
   "fixtures": [
     "fixtures/claude/distill.jsonl",
     "fixtures/claude/enriched.jsonl",

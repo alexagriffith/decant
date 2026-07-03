@@ -1,14 +1,5 @@
-# Pre-commit hooks for decant. See https://pre-commit.com.
-#
-#   pipx install pre-commit   # or: brew install pre-commit
-#   pre-commit install        # install the git hook
-#   pre-commit run --all-files
-#
-# The same checks run in CI (.github/workflows/ci.yml).
+# Pre-commit hooks for decant. CI remains the source of truth.
 minimum_pre_commit_version: "3.5.0"
-
-# The committed test fixture is a binary SQLite DB; never rewrite it.
-exclude: '^web/test/fixtures/'
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -18,35 +9,21 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-toml
+      - id: check-json
       - id: check-merge-conflict
       - id: mixed-line-ending
         args: ["--fix=lf"]
-      # Guardrails: keep secrets and large blobs out of history.
       - id: detect-private-key
       - id: check-added-large-files
         args: ["--maxkb=512"]
 
   - repo: local
     hooks:
-      - id: cargo-fmt
-        name: cargo fmt
-        entry: cargo fmt --all -- --check
-        language: system
-        types: [rust]
-        pass_filenames: false
-
-      - id: cargo-clippy
-        name: cargo clippy
-        entry: cargo clippy --all-targets -- -D warnings
-        language: system
-        types: [rust]
-        pass_filenames: false
-
       - id: biome-check
         name: biome check
         entry: bunx biome check .
         language: system
-        files: '^(src|test|scripts)/.*\.(ts|tsx|json|sql)$|^(package\.json|tsconfig\.json|biome\.json|bun\.lock)$'
+        files: '^(src|test|scripts|npm)/.*\.(ts|tsx|cjs|json|sql|html|css|md)$|^(package\.json|tsconfig\.json|biome\.json|bun\.lock|README\.md|AGENTS\.md|CONTRIBUTING\.md|SECURITY\.md)$'
         pass_filenames: false
 
       - id: ts-typecheck
@@ -56,9 +33,9 @@ repos:
         files: '^(src|test|scripts)/.*\.ts$|^(package\.json|tsconfig\.json)$'
         pass_filenames: false
 
-      - id: mix-format
-        name: mix format (web)
-        entry: scripts/precommit-elixir.sh
-        language: script
-        files: '^web/.*\.(ex|exs|heex)$'
+      - id: ts-test
+        name: TypeScript tests
+        entry: bun test
+        language: system
+        files: '^(src|test|fixtures)/.*|^(package\.json|bun\.lock)$'
         pass_filenames: false

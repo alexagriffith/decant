@@ -284,7 +284,7 @@ describe("sync", () => {
     db.close();
   });
 
-  test("fixture sync matches Rust natural-key golden rows", async () => {
+  test("fixture sync matches frozen natural-key golden rows", async () => {
     const dir = freshCase();
     const config = stageFixtures(dir);
     const db = openFreshDb(dir);

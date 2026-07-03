@@ -1,6 +1,6 @@
 -- decant:schema_version=8
--- Effective decant schema (migrations 1..8 applied), generated from
--- the Rust implementation by scripts/gen-schema.ts. Do not edit by hand.
+-- Effective decant schema (migrations 1..8 applied), frozen at the
+-- pre-typescript cutover. Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL

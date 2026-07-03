@@ -3,9 +3,8 @@ import schemaSql from "./schema.sql" with { type: "text" };
 
 /// Highest schema version this build understands. src/schema.sql is the
 /// effective DDL with migrations 1..LATEST_SCHEMA_VERSION already applied
-/// (regenerate with scripts/gen-schema.ts), so a fresh archive is created in
-/// one step and stamped with the full migration history — indistinguishable
-/// from an archive the Rust engine migrated.
+/// and is now the frozen baseline, so a fresh archive is created in one step
+/// and stamped with the full migration history.
 export const LATEST_SCHEMA_VERSION = 8;
 
 /**

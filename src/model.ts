@@ -27,7 +27,7 @@ export const REASONING_SOURCES = ["reported", "inferred", "none"] as const;
 export type ReasoningSource = (typeof REASONING_SOURCES)[number];
 
 /** Any JSON value. `undefined` never appears inside; use `Json | undefined`
- * where Rust used `Option<Value>` and absent ≠ JSON null. */
+ * where absent and JSON null carry different meanings. */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
 export interface TokenUsage {

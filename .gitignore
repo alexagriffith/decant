@@ -1,11 +1,9 @@
-/target
-**/*.rs.bk
 *.db
 *.db-shm
 *.db-wal
 
-# Erlang/BEAM crash dumps (transient; never commit)
-erl_crash.dump
+# Local build artifacts
+/target/
 
 # Local agent/workflow orchestration scripts (machine-specific paths)
 .workflows/
@@ -13,9 +11,6 @@ erl_crash.dump
 # Browser-automation artifacts
 .playwright-mcp/
 
-# Coverage report from cargo-llvm-cov (generated in CI, never committed).
-/lcov.info
-
-# TypeScript app (single-app migration)
+# TypeScript app
 node_modules/
 /dist/

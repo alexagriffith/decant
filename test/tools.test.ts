@@ -38,7 +38,7 @@ describe("preview", () => {
     expect(preview("ab", 3)).toBe("ab");
   });
 
-  test("counts Unicode scalars, not UTF-16 code units (Rust chars() parity)", () => {
+  test("counts Unicode scalars, not UTF-16 code units", () => {
     // "🎉🎉🎉" is 6 UTF-16 code units but 3 scalars — must NOT truncate at max 3,
     // and truncation at 2 must not split a surrogate pair.
     expect(preview("🎉🎉🎉", 3)).toBe("🎉🎉🎉");

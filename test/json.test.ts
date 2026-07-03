@@ -4,7 +4,7 @@ import { canonicalJson } from "../src/json.ts";
 
 // canonicalJson must reproduce serde_json's default serialization byte-for-byte
 // (BTreeMap ⇒ recursively sorted keys, compact separators): every JSON TEXT
-// column the Rust engine wrote (`raw`, `raw_meta`, `tool_input`, stringified
+// column the pre-TypeScript engine wrote (`raw`, `raw_meta`, `tool_input`, stringified
 // other-blocks) was produced that way, and golden parity diffs those bytes.
 describe("canonicalJson", () => {
   test("sorts object keys recursively, arrays keep order", () => {

@@ -77,7 +77,7 @@ function argsForTs(dbPath: string, command: string[]): string[] {
 }
 
 describe("CLI golden parity", () => {
-  test("TypeScript read commands match Rust-generated JSON snapshots", async () => {
+  test("read commands match frozen JSON snapshots", async () => {
     const caseDir = join(workDir, "case");
     const { claudeDir, codexDir } = stageFixtures(caseDir);
     const dbPath = join(caseDir, "archive.db");
