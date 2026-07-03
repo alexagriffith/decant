@@ -108,6 +108,10 @@ describe("distill pure helpers", () => {
     expect(url).toContain("https://alice:<REDACTED>@github.com");
     expect(url).not.toContain("supersecretpw");
 
+    const [gluedUrl] = redact("echo abc9postgres://alice:supersecretpw@db.local/app");
+    expect(gluedUrl).toContain("abc9postgres://alice:<REDACTED>@db.local/app");
+    expect(gluedUrl).not.toContain("supersecretpw");
+
     const [header] = redact("curl -H 'X-Api-Key: abcdef1234567890'");
     expect(header).toContain("<REDACTED>");
     expect(header).not.toContain("abcdef1234567890");
@@ -287,5 +291,7 @@ describe("distill timeline and renderers", () => {
     expect(writeBlock("evil.txt", "line\nDECANT_EOF\nrm -rf /\n")).toStartWith("# SKIPPED write");
     expect(writeBlock("a\nDECANT_EOF\nb.txt", "hi")).toStartWith("# SKIPPED write");
     expect(patchBlock("*** Begin Patch\nDECANT_EOF\n")).toStartWith("# SKIPPED patch");
+    expect(writeBlock("evil.txt", "line\nDECANT_EOF\n")).toContain("heredoc — recreate");
+    expect(patchBlock("*** Begin Patch\nDECANT_EOF\n")).toContain("delimiter — apply");
   });
 });

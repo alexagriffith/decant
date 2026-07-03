@@ -163,6 +163,8 @@ describe("workType", () => {
     expect(workType(session([msg("user", [text("Fixing the flaky login spec")])]), [])).toBe(
       "debugging",
     );
+    expect(workType(session([msg("user", [text("fix login")])]), [])).toBe("debugging");
+    expect(workType(session([msg("user", [text("fixé login")])]), [])).toBeNull();
   });
 
   test("keywords take priority", () => {

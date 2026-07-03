@@ -65,7 +65,7 @@ const redactors: [RegExp, string][] = (() => {
     ],
     [new RegExp(String.raw`(authorization:\s*bearer\s+)${val}`, "gi"), "$1<REDACTED>"],
     [new RegExp(String.raw`((?:x-api-key|x-auth-token|api-key):\s*)${val}`, "gi"), "$1<REDACTED>"],
-    [/\b([a-z][a-z0-9+.-]*:\/\/[^/:@\s]+:)[^/@\s]+@/gi, "$1<REDACTED>@"],
+    [/([a-z][a-z0-9+.-]*:\/\/[^/:@\s]+:)[^/@\s]+@/gi, "$1<REDACTED>@"],
     [
       new RegExp(String.raw`\b([A-Z0-9_]*(?:SECRET|TOKEN|KEY|PASSWORD)[A-Z0-9_]*=)${val}`, "g"),
       "$1<REDACTED>",
@@ -425,7 +425,7 @@ export function renderReplay(
         out += writeBlock(op.raw, op.payload ?? "");
         break;
       case "file_edit":
-        out += `# EDIT ${op.raw}: ${op.payload ?? ""} (apply manually - v1 does not auto-apply edits)\n`;
+        out += `# EDIT ${op.raw}: ${op.payload ?? ""} (apply manually — v1 does not auto-apply edits)\n`;
         break;
       case "file_delete":
         out += `# DELETE ${op.raw} (review)\n# rm ${shellQuote(op.raw)}\n`;
@@ -668,7 +668,7 @@ function emitSh(distillation: Distillation, options: ScriptOpts, lines: Selected
 
 function shLine(line: SelectedLine, sessionCount: number): string {
   if (line.destructive != null) {
-    return `# REVIEW: destructive (${line.destructive}), seen in ${line.sessionsSeen} session(s) - left commented\n# ${line.cmd}\n`;
+    return `# REVIEW: destructive (${line.destructive}), seen in ${line.sessionsSeen} session(s) — left commented\n# ${line.cmd}\n`;
   }
   const prefix =
     sessionCount > 1
@@ -827,7 +827,7 @@ export function shellQuote(value: string): string {
 export function writeBlock(path: string, content: string): string {
   const trimmed = content.replace(/\n+$/, "");
   if (trimmed.includes(REPLAY_EOF) || path.includes("\n") || path.includes(REPLAY_EOF)) {
-    return `# SKIPPED write to ${JSON.stringify(path)}: content or path unsafe for a heredoc - recreate it manually.\n`;
+    return `# SKIPPED write to ${JSON.stringify(path)}: content or path unsafe for a heredoc — recreate it manually.\n`;
   }
   const quoted = shellQuote(path);
   return `mkdir -p "$(dirname ${quoted})"\ncat > ${quoted} <<'${REPLAY_EOF}'\n${trimmed}\n${REPLAY_EOF}\n`;
@@ -836,7 +836,7 @@ export function writeBlock(path: string, content: string): string {
 export function patchBlock(patch: string): string {
   const trimmed = patch.replace(/\n+$/, "");
   return trimmed.includes(REPLAY_EOF)
-    ? "# SKIPPED patch: contains the heredoc delimiter - apply it manually.\n"
+    ? "# SKIPPED patch: contains the heredoc delimiter — apply it manually.\n"
     : `git apply <<'${REPLAY_EOF}'\n${trimmed}\n${REPLAY_EOF}\n`;
 }
 

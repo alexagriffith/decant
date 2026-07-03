@@ -24,10 +24,15 @@ function listGoldenFiles(dir = goldenDir, prefix = ""): string[] {
 }
 
 type SessionKey = { tool: string; source_session_id: string };
+type GoldenMeta = {
+  fixtures: string[];
+  baseline_rev: string;
+  row_dumps: string[];
+};
 
 describe("golden harness", () => {
   test("covers every fixture transcript exactly once", async () => {
-    const meta = await loadGolden<{ fixtures: string[]; baseline_rev: string }>("meta.json");
+    const meta = await loadGolden<GoldenMeta>("meta.json");
     const sessions = await loadGolden<SessionKey[]>("rows/sessions.json");
     expect(sessions).toHaveLength(meta.fixtures.length);
     expect(meta.baseline_rev).toMatch(/^[0-9a-f]{40}(-dirty)?$/);
@@ -36,13 +41,18 @@ describe("golden harness", () => {
   });
 
   test("row dumps are internally consistent on natural keys", async () => {
+    const meta = await loadGolden<GoldenMeta>("meta.json");
     const sessions = await loadGolden<SessionKey[]>("rows/sessions.json");
     const keys = new Set(sessions.map((s) => `${s.tool}${keySeparator}${s.source_session_id}`));
     expect(keys.size).toBe(sessions.length);
 
-    for (const dump of ["messages", "blocks", "tool_calls", "file_refs"]) {
-      const rows = await loadGolden<SessionKey[]>(`rows/${dump}.json`);
+    const sessionKeyedDumps = new Set(["messages", "blocks", "tool_calls", "file_refs"]);
+    for (const dump of meta.row_dumps) {
+      const rows = await loadGolden<Record<string, unknown>[]>(`rows/${dump}.json`);
       expect(rows.length).toBeGreaterThan(0);
+      if (!sessionKeyedDumps.has(dump)) {
+        continue;
+      }
       for (const row of rows) {
         expect(keys).toContain(`${row.tool}${keySeparator}${row.source_session_id}`);
       }

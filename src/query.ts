@@ -69,6 +69,7 @@ export function search(db: Database, query: string, limitValue = 30): SearchHit[
 }
 
 export interface BlockView {
+  ordinal: number;
   block_type: string;
   text: string | null;
   tool_name: string | null;
@@ -93,6 +94,7 @@ interface MessageBlockRow {
   role: string | null;
   timestamp: string | null;
   model: string | null;
+  block_ordinal: number | null;
   block_type: string | null;
   text: string | null;
   tool_name: string | null;
@@ -118,7 +120,8 @@ export function getSession(db: Database, id: number): SessionDetail | null {
   const rows = db
     .query(
       `SELECT m.id AS message_id, m.role, m.timestamp, m.model,
-              b.type AS block_type, b.text, b.tool_name, b.tool_input, b.tool_result
+              b.ordinal AS block_ordinal, b.type AS block_type, b.text,
+              b.tool_name, b.tool_input, b.tool_result
        FROM message m
        LEFT JOIN block b ON b.message_id = m.id
        WHERE m.session_id = ?1
@@ -140,6 +143,7 @@ export function getSession(db: Database, id: number): SessionDetail | null {
     }
     if (row.block_type != null) {
       messages.at(-1)?.blocks.push({
+        ordinal: row.block_ordinal ?? 0,
         block_type: row.block_type,
         text: row.text,
         tool_name: row.tool_name,

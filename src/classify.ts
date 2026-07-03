@@ -84,7 +84,7 @@ function firstUserPrompt(session: NormalizedSession): string | null {
 
 function keywordWorkType(prompt: string): WorkType | null {
   const head = [...prompt].slice(0, 400).join("");
-  const words = new Set(head.split(/[^a-zA-Z0-9]+/).filter((word) => word !== ""));
+  const words = new Set(head.split(/[^\p{L}\p{N}]+/u).filter((word) => word !== ""));
   const has = (keys: readonly string[]): boolean =>
     keys.some((key) => (key.includes(" ") ? head.includes(key) : words.has(key)));
 

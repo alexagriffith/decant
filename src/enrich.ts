@@ -28,6 +28,7 @@ export interface Facets {
 const ACTIVE_GAP_CAP_SECONDS = 300;
 const INTERRUPTION_MARKER = "[Request interrupted by user";
 const COMMAND_MARKER = "<command-name>";
+const encoder = new TextEncoder();
 
 export function fileRefs(session: NormalizedSession): FileRef[] {
   const refs: FileRef[] = [];
@@ -176,7 +177,7 @@ export function facets(session: NormalizedSession): Facets {
         }
       } else if (block.blockType === "thinking") {
         got.thinkingBlockCount += 1;
-        got.thinkingChars += block.text?.length ?? 0;
+        got.thinkingChars += byteLength(block.text ?? "");
       } else if (block.blockType === "tool_use") {
         if (block.toolName === "Agent" || block.toolName === "Task") {
           got.agentSpawnCount += 1;
@@ -205,6 +206,10 @@ export function facets(session: NormalizedSession): Facets {
   }
 
   return got;
+}
+
+function byteLength(value: string): number {
+  return encoder.encode(value).length;
 }
 
 export function epochSecs(timestamp: string): number | null {

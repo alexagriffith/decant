@@ -195,6 +195,60 @@ describe("upsertSession", () => {
     });
     db.close();
   });
+
+  test("writes a session without creating a project when no project path is present", () => {
+    const dir = freshCase();
+    const db = openFreshDb(dir);
+    const parsed = parseClaudeSession("sample", fixture("claude", "sample.jsonl"));
+    parsed.session.projectPath = null;
+    parsed.session.cwd = null;
+
+    const sessionId = upsertSession(db, parsed, "/x/sample.jsonl", 1, 2, "a");
+    const row = db.query("SELECT project_id, cwd FROM session WHERE id = ?1").get(sessionId) as {
+      project_id: number | null;
+      cwd: string | null;
+    };
+
+    expect(row).toEqual({ project_id: null, cwd: null });
+    expect((db.query("SELECT COUNT(*) AS n FROM project").get() as { n: number }).n).toBe(0);
+    db.close();
+  });
+
+  test("rolls back a failed replacement without losing the prior session", () => {
+    const dir = freshCase();
+    const db = openFreshDb(dir);
+    const parsed = parseClaudeSession("sample", fixture("claude", "sample.jsonl"));
+
+    upsertSession(db, parsed, "/x/sample.jsonl", 1, 2, "a");
+    db.exec(`
+      CREATE TRIGGER fail_block_insert
+      BEFORE INSERT ON block
+      BEGIN
+        SELECT RAISE(ABORT, 'block insert blocked');
+      END;
+    `);
+
+    expect(() => upsertSession(db, parsed, "/x/sample-again.jsonl", 3, 4, "b")).toThrow(
+      "block insert blocked",
+    );
+
+    const counts = db
+      .query(
+        `SELECT
+           (SELECT COUNT(*) FROM session) AS sessions,
+           (SELECT COUNT(*) FROM message) AS messages,
+           (SELECT COUNT(*) FROM block) AS blocks,
+           (SELECT source_path FROM session) AS source_path`,
+      )
+      .get() as { sessions: number; messages: number; blocks: number; source_path: string };
+    expect(counts).toEqual({
+      sessions: 1,
+      messages: 4,
+      blocks: 6,
+      source_path: "/x/sample.jsonl",
+    });
+    db.close();
+  });
 });
 
 describe("sync", () => {
@@ -253,6 +307,54 @@ describe("sync", () => {
     const third = sync(db, config);
     expect(third).toMatchObject({ scanned: 1, ingested: 1, skipped: 0, issues: 1, failed: 0 });
     expect((db.query("SELECT COUNT(*) AS n FROM ingest_issue").get() as { n: number }).n).toBe(1);
+    db.close();
+  });
+
+  test("can cancel between files without ingesting the remaining sources", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    write(join(config.claudeDir, "a.jsonl"), fixture("claude", "sample.jsonl"));
+    write(join(config.claudeDir, "b.jsonl"), fixture("claude", "enriched.jsonl"));
+    const db = openFreshDb(dir);
+
+    let checks = 0;
+    const cancel = {
+      get aborted(): boolean {
+        checks += 1;
+        return checks > 1;
+      },
+    };
+    const report = sync(db, config, cancel);
+
+    expect(report).toMatchObject({ scanned: 2, ingested: 1, skipped: 0, cancelled: true });
+    expect((db.query("SELECT COUNT(*) AS n FROM session").get() as { n: number }).n).toBe(1);
+    db.close();
+  });
+
+  test("replaces duplicate natural session ids from different files and keeps source rows", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    write(join(config.claudeDir, "first", "sample.jsonl"), fixture("claude", "sample.jsonl"));
+    write(join(config.claudeDir, "second", "sample.jsonl"), fixture("claude", "sample.jsonl"));
+    const db = openFreshDb(dir);
+
+    const report = sync(db, config);
+    expect(report).toMatchObject({ scanned: 2, ingested: 2, skipped: 0, failed: 0 });
+    const counts = db
+      .query(
+        `SELECT
+           (SELECT COUNT(*) FROM session) AS sessions,
+           (SELECT COUNT(*) FROM ingest_source) AS sources,
+           (SELECT COUNT(*) FROM ingest_source WHERE session_id IS NULL) AS unlinked_sources`,
+      )
+      .get() as { sessions: number; sources: number; unlinked_sources: number };
+    expect(counts).toEqual({ sessions: 1, sources: 2, unlinked_sources: 1 });
     db.close();
   });
 

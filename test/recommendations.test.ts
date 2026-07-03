@@ -132,6 +132,63 @@ describe("recommendations", () => {
     db.close();
   });
 
+  test("signals are capped at twelve and ranked by score", () => {
+    const db = base();
+    db.query("UPDATE session SET estimated_cost_usd = 0").run();
+    for (let index = 0; index < 13; index += 1) {
+      seedTool(db, `fetch-${index.toString().padStart(2, "0")}`, "builtin", null, 50, index + 6);
+    }
+
+    const rows = signals(db);
+    expect(rows).toHaveLength(12);
+    expect(keys(rows)).toContain("signal:error:fetch-12");
+    expect(keys(rows)).not.toContain("signal:error:fetch-00");
+    expect(rows.map((row) => row.score)).toEqual(
+      [...rows].map((row) => row.score).sort((a, b) => b - a),
+    );
+    db.close();
+  });
+
+  test("promotion cards cover every signal and catalog family", () => {
+    const db = freshDb();
+    const insert = db.prepare(
+      `INSERT INTO recommendation(key, kind, title, detail, suggestion, score, status, first_seen_at, updated_at)
+       VALUES (?1, ?2, ?1, 'evidence', 'action', 1, 'open', datetime('now'), datetime('now'))`,
+    );
+    const cases: [string, "signal" | "catalog", string, string][] = [
+      ["signal:error:fetch", "signal", "Procedural", "Skill or regression test"],
+      ["signal:heavy-server:github", "signal", "Procedural", "Skill"],
+      ["signal:heavy-tool:Bash", "signal", "Procedural", "Skill"],
+      ["signal:cost-concentration", "signal", "Hot", "AGENTS.md model-routing rule"],
+      ["signal:hot-context:AGENTS.md", "signal", "Hot", "AGENTS.md or Skill"],
+      ["signal:churn:src/main.ts", "signal", "Cold", "Runbook or regression test"],
+      ["signal:search-heavy", "signal", "Hot", "AGENTS.md code map"],
+      ["signal:abandoned-rate", "signal", "Governance", "Planning checklist or Skill"],
+      ["catalog:agents-md", "catalog", "Hot", "AGENTS.md"],
+      ["catalog:claude-md", "catalog", "Hot", "Project memory"],
+      ["catalog:skills", "catalog", "Procedural", "SKILL.md"],
+      ["catalog:slash-commands", "catalog", "Procedural", "Slash command"],
+      ["catalog:subagents", "catalog", "Governance", "Subagent workflow"],
+      ["catalog:mcp", "catalog", "Cold", "MCP integration"],
+      ["catalog:hooks", "catalog", "Governance", "Hook or preflight gate"],
+      ["signal:unknown", "signal", "Cold", "Runbook"],
+    ];
+    for (const [key, kind] of cases) {
+      insert.run(key, kind);
+    }
+
+    const byKey = new Map(list(db, "all").map((row) => [row.key, row]));
+    for (const [key, , memoryLayer, promotionTarget] of cases) {
+      expect(byKey.get(key), key).toMatchObject({
+        memory_layer: memoryLayer,
+        promotion_target: promotionTarget,
+        evidence: "evidence",
+        action: "action",
+      });
+    }
+    db.close();
+  });
+
   test("file, search, and abandoned-rate signals use recent activity thresholds", () => {
     const db = base();
     seedFileSessions(db, 100, 9, "AGENTS.md", "read");

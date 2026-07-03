@@ -32,6 +32,31 @@ type SearchHit = {
   snippet: string;
 };
 
+type Activity = {
+  by_hour: number[];
+  by_weekday: number[];
+  timezone: string;
+  peak_hour: number | null;
+  peak_weekday: number | null;
+};
+
+type ModelSparklines = {
+  models: Record<string, number[]>;
+  days: string[];
+};
+
+type DateBounds = {
+  min: string | null;
+  max: string | null;
+};
+
+type NowView = {
+  today: Summary;
+  active_sessions: unknown[];
+  last_sync_at: string | null;
+  sync_in_progress: boolean;
+};
+
 type DimensionRow = {
   key: string;
   sessions: number;
@@ -66,11 +91,11 @@ type FileRow = {
 type Recommendation = {
   key: string;
   status: string;
-  category: string;
+  category: string | null;
   title: string;
-  detail: string;
-  suggestion: string;
-  tone: string;
+  detail: string | null;
+  suggestion: string | null;
+  tone: string | null;
   action: string | null;
 };
 
@@ -107,6 +132,10 @@ type DashboardData = {
   recommendations: Recommendation[];
   config: ConfigView | null;
   settings: SettingsInfo | null;
+  activity: Activity | null;
+  modelSparklines: ModelSparklines | null;
+  now: NowView | null;
+  dateBounds: DateBounds | null;
 };
 
 const emptyData: DashboardData = {
@@ -119,6 +148,10 @@ const emptyData: DashboardData = {
   recommendations: [],
   config: null,
   settings: null,
+  activity: null,
+  modelSparklines: null,
+  now: null,
+  dateBounds: null,
 };
 
 const navItems = [
@@ -149,7 +182,7 @@ function App() {
     setLoading(reloadKey === 0);
     Promise.all([
       getJson<Summary>("/api/stats/summary"),
-      getJson<SessionSummary[]>("/api/sessions?limit=12"),
+      getJson<SessionSummary[]>("/api/sessions?limit=50"),
       getJson<DimensionRow[]>("/api/stats/by-dimension?dim=tool"),
       getJson<ToolRow[]>("/api/tools/usage?limit=10"),
       getJson<McpRow[]>("/api/tools/mcp-usage?limit=10"),
@@ -157,12 +190,13 @@ function App() {
       getJson<Recommendation[]>("/api/recommendations?status=open"),
       getJson<ConfigView>("/api/config"),
       getJson<SettingsInfo>("/api/settings"),
+      getJson<Activity>("/api/analytics/activity"),
+      getJson<ModelSparklines>("/api/analytics/model-sparklines"),
+      getJson<NowView>("/api/analytics/now"),
+      getJson<DateBounds>("/api/date-bounds"),
     ])
-      .then(([summary, sessions, byTool, tools, mcp, files, recommendations, config, settings]) => {
-        if (cancelled) {
-          return;
-        }
-        setData({
+      .then(
+        ([
           summary,
           sessions,
           byTool,
@@ -172,9 +206,32 @@ function App() {
           recommendations,
           config,
           settings,
-        });
-        setError(null);
-      })
+          activity,
+          modelSparklines,
+          now,
+          dateBounds,
+        ]) => {
+          if (cancelled) {
+            return;
+          }
+          setData({
+            summary,
+            sessions,
+            byTool,
+            tools,
+            mcp,
+            files,
+            recommendations,
+            config,
+            settings,
+            activity,
+            modelSparklines,
+            now,
+            dateBounds,
+          });
+          setError(null);
+        },
+      )
       .catch((err: unknown) => {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
@@ -237,7 +294,9 @@ function App() {
           <button
             type="button"
             onClick={() => {
-              void fetch("/api/sync", { method: "POST" }).then(() => window.location.reload());
+              void fetch("/api/sync", { method: "POST" }).then(() =>
+                setReloadKey((key) => key + 1),
+              );
             }}
           >
             Sync
@@ -247,14 +306,14 @@ function App() {
         {loading ? (
           <div className="notice">Loading archive data...</div>
         ) : (
-          renderView(active, path, data)
+          renderView(active, path, data, () => setReloadKey((key) => key + 1))
         )}
       </main>
     </div>
   );
 }
 
-function renderView(active: string, path: string, data: DashboardData) {
+function renderView(active: string, path: string, data: DashboardData, refresh: () => void) {
   if (path.startsWith("/sessions/")) {
     return <SessionDetailView id={Number(path.split("/").at(-1))} />;
   }
@@ -266,7 +325,7 @@ function renderView(active: string, path: string, data: DashboardData) {
     case "Analytics":
       return <AnalyticsView data={data} />;
     case "Insights":
-      return <InsightsView rows={data.recommendations} />;
+      return <InsightsView rows={data.recommendations} onMarked={refresh} />;
     case "Tools":
       return <ToolsView data={data} />;
     case "Files":
@@ -379,40 +438,190 @@ function SearchView() {
 
 function AnalyticsView({ data }: { data: DashboardData }) {
   const maxSessions = Math.max(1, ...data.byTool.map((row) => row.sessions));
+  const maxCost = Math.max(1, ...data.byTool.map((row) => row.estimated_cost_usd));
   return (
     <>
       <MetricGrid summary={data.summary} />
-      <section className="section">
-        <div className="section-heading">
-          <h2>Sessions By Tool</h2>
-          <span>{data.byTool.length} groups</span>
-        </div>
-        <div className="bar-list">
-          {data.byTool.map((row) => (
-            <div className="bar-row" key={row.key}>
-              <span>{row.key}</span>
-              <div>
-                <i style={{ width: `${(row.sessions / maxSessions) * 100}%` }} />
+      <div className="split">
+        <section className="section">
+          <div className="section-heading">
+            <h2>Sessions By Tool</h2>
+            <span>{data.byTool.length} groups</span>
+          </div>
+          <div className="bar-list">
+            {data.byTool.map((row) => (
+              <div className="bar-row" key={row.key}>
+                <span>{row.key}</span>
+                <div>
+                  <i style={{ width: `${(row.sessions / maxSessions) * 100}%` }} />
+                </div>
+                <strong>{row.sessions}</strong>
               </div>
-              <strong>{row.sessions}</strong>
-            </div>
-          ))}
-        </div>
-      </section>
+            ))}
+          </div>
+        </section>
+        <section className="section">
+          <div className="section-heading">
+            <h2>Cost By Tool</h2>
+            <span>{dateRange(data.dateBounds)}</span>
+          </div>
+          <div className="bar-list">
+            {data.byTool.map((row) => (
+              <div className="bar-row" key={row.key}>
+                <span>{row.key}</span>
+                <div>
+                  <i style={{ width: `${(row.estimated_cost_usd / maxCost) * 100}%` }} />
+                </div>
+                <strong>${row.estimated_cost_usd.toFixed(2)}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+      <div className="split">
+        <ActivityPanel activity={data.activity} />
+        <NowPanel now={data.now} />
+      </div>
+      <ModelSparklinePanel sparklines={data.modelSparklines} />
     </>
   );
 }
 
-function InsightsView({ rows }: { rows: Recommendation[] }) {
+function ActivityPanel({ activity }: { activity: Activity | null }) {
+  const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return (
+    <section className="section">
+      <div className="section-heading">
+        <h2>Activity</h2>
+        <span>{activity?.timezone ?? "-"}</span>
+      </div>
+      <div className="chart-stack">
+        <Histogram
+          labels={Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0"))}
+          values={activity?.by_hour ?? []}
+        />
+        <Histogram labels={weekdayLabels} values={activity?.by_weekday ?? []} />
+      </div>
+    </section>
+  );
+}
+
+function NowPanel({ now }: { now: NowView | null }) {
+  return (
+    <section className="section">
+      <div className="section-heading">
+        <h2>Today</h2>
+        <span>{now?.sync_in_progress === true ? "syncing" : "idle"}</span>
+      </div>
+      <div className="today-grid">
+        <MetricMini label="Sessions" value={now?.today.sessions ?? 0} />
+        <MetricMini label="Messages" value={now?.today.messages ?? 0} />
+        <MetricMini label="Tool Calls" value={now?.today.tool_calls ?? 0} />
+        <MetricMini label="Cost" value={`$${(now?.today.estimated_cost_usd ?? 0).toFixed(2)}`} />
+      </div>
+      <p className="settings-note">Last sync: {now?.last_sync_at ?? "-"}</p>
+    </section>
+  );
+}
+
+function ModelSparklinePanel({ sparklines }: { sparklines: ModelSparklines | null }) {
+  const rows = Object.entries(sparklines?.models ?? {});
+  return (
+    <section className="section">
+      <div className="section-heading">
+        <h2>Model Activity</h2>
+        <span>{sparklines?.days.length ?? 0} days</span>
+      </div>
+      <div className="sparkline-list">
+        {rows.length === 0 ? (
+          <p className="empty">No dated model activity yet.</p>
+        ) : (
+          rows.map(([model, values]) => (
+            <div className="sparkline-row" key={model}>
+              <span>{model}</span>
+              <Sparkline values={values} />
+              <strong>{values.reduce((sum, value) => sum + value, 0)}</strong>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function Histogram({ labels, values }: { labels: string[]; values: number[] }) {
+  const max = Math.max(1, ...values);
+  return (
+    <div className="histogram">
+      {labels.map((label, index) => {
+        const value = values[index] ?? 0;
+        return (
+          <span key={label} title={`${label}: ${value}`}>
+            <i style={{ height: `${Math.max(3, (value / max) * 100)}%` }} />
+            <b>{label}</b>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function Sparkline({ values }: { values: number[] }) {
+  const max = Math.max(1, ...values);
+  const width = 160;
+  const height = 36;
+  const points = values
+    .map((value, index) => {
+      const x = values.length <= 1 ? 0 : (index / (values.length - 1)) * width;
+      const y = height - (value / max) * (height - 4) - 2;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg aria-hidden="true" className="sparkline" viewBox={`0 0 ${width} ${height}`}>
+      <polyline points={points} />
+    </svg>
+  );
+}
+
+function MetricMini({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="metric-mini">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function InsightsView({ rows, onMarked }: { rows: Recommendation[]; onMarked: () => void }) {
+  const [pending, setPending] = useState<string | null>(null);
+  const markImplemented = (key: string) => {
+    setPending(key);
+    void getJson<{ ok: boolean }>("/api/recommendations/mark", {
+      method: "POST",
+      body: JSON.stringify({ key, source: "ui" }),
+    })
+      .then(onMarked)
+      .finally(() => setPending(null));
+  };
+
   return (
     <section className="insight-grid">
+      {rows.length === 0 ? <p className="empty">No open recommendations.</p> : null}
       {rows.map((row) => (
-        <article className={`insight tone-${row.tone}`} key={row.key}>
-          <span>{row.category}</span>
+        <article className={`insight tone-${row.tone ?? "neutral"}`} key={row.key}>
+          <span>{row.category ?? row.status}</span>
           <h2>{row.title}</h2>
-          <p>{row.detail}</p>
-          <p>{row.suggestion}</p>
+          {row.detail != null ? <p>{row.detail}</p> : null}
+          {row.suggestion != null ? <p>{row.suggestion}</p> : null}
           {row.action != null ? <strong>{row.action}</strong> : null}
+          <button
+            disabled={pending === row.key}
+            type="button"
+            onClick={() => markImplemented(row.key)}
+          >
+            {pending === row.key ? "Saving" : "Mark Implemented"}
+          </button>
         </article>
       ))}
     </section>
@@ -575,7 +784,15 @@ function SessionDetailView({ id }: { id: number }) {
     messages: {
       role: string;
       timestamp: string | null;
-      blocks: { block_type: string; text: string | null }[];
+      model: string | null;
+      blocks: {
+        ordinal: number;
+        block_type: string;
+        text: string | null;
+        tool_name: string | null;
+        tool_input: string | null;
+        tool_result: string | null;
+      }[];
     }[];
   } | null>(null);
 
@@ -600,16 +817,51 @@ function SessionDetailView({ id }: { id: number }) {
           className="message"
           key={`${message.role}-${message.timestamp ?? "none"}-${message.blocks.length}`}
         >
-          <strong>{message.role}</strong>
+          <header>
+            <strong>{message.role}</strong>
+            <span>{message.model ?? message.timestamp ?? ""}</span>
+          </header>
           {message.blocks.map((block) => (
-            <p key={`${block.block_type}-${block.text ?? "empty"}`}>
-              {block.text ?? block.block_type}
-            </p>
+            <TranscriptBlock block={block} key={`${block.ordinal}-${block.block_type}`} />
           ))}
         </article>
       ))}
     </section>
   );
+}
+
+function TranscriptBlock({
+  block,
+}: {
+  block: {
+    ordinal: number;
+    block_type: string;
+    text: string | null;
+    tool_name: string | null;
+    tool_input: string | null;
+    tool_result: string | null;
+  };
+}) {
+  if (block.block_type === "tool_use") {
+    return (
+      <div className="tool-block">
+        <span>{block.tool_name ?? "tool_use"}</span>
+        <pre>{prettyJson(block.tool_input)}</pre>
+      </div>
+    );
+  }
+  if (block.block_type === "tool_result") {
+    return (
+      <div className="tool-block result-block">
+        <span>result</span>
+        <pre>{block.tool_result ?? ""}</pre>
+      </div>
+    );
+  }
+  if (block.block_type === "thinking") {
+    return <p className="thinking">{block.text ?? ""}</p>;
+  }
+  return <p>{block.text ?? block.block_type}</p>;
 }
 
 function TableRows({ headers, rows }: { headers: string[]; rows: (string | number)[][] }) {
@@ -656,6 +908,24 @@ function activeRoute(path: string): string {
 
 function titleFor(active: string): string {
   return active === "Sessions" ? "Session Archive" : active;
+}
+
+function dateRange(bounds: DateBounds | null): string {
+  if (bounds?.min == null || bounds.max == null) {
+    return "all time";
+  }
+  return bounds.min === bounds.max ? bounds.min : `${bounds.min}..${bounds.max}`;
+}
+
+function prettyJson(value: string | null): string {
+  if (value == null || value === "") {
+    return "";
+  }
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
 }
 
 function basename(path: string | null | undefined): string {

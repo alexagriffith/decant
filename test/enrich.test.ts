@@ -134,6 +134,20 @@ describe("facets", () => {
     expect(got.activeSeconds).toBe(490);
   });
 
+  test("thinking chars count UTF-8 bytes", () => {
+    const session = oneBlockSession("claude_code", {
+      ordinal: 0,
+      blockType: "thinking",
+      text: "a中",
+      toolName: null,
+      toolUseId: null,
+      toolInput: undefined,
+      toolResult: null,
+      isError: null,
+    });
+    expect(facets(session).thinkingChars).toBe(4);
+  });
+
   test("Codex facets thinking and active duration", async () => {
     const got = facets(await codexSession());
     expect(got.turnCount).toBe(1);
