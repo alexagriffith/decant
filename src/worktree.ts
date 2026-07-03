@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { compareCodePoints } from "./order.ts";
 
 export type RootSource = "self" | "git" | "intree" | "namematch" | "synthetic";
 
@@ -144,7 +145,7 @@ function compareKnownRoots(left: KnownRoot, right: KnownRoot): number {
     left.basename.length - right.basename.length ||
     left.sessions - right.sessions ||
     compareNullableString(left.lastSeen, right.lastSeen) ||
-    left.path.localeCompare(right.path)
+    compareCodePoints(left.path, right.path)
   );
 }
 
@@ -158,7 +159,7 @@ function compareNullableString(left: string | null, right: string | null): numbe
   if (right == null) {
     return 1;
   }
-  return left.localeCompare(right);
+  return compareCodePoints(left, right);
 }
 
 function stripCodename(tool: string, leaf: string): string {

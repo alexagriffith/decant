@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { compareCodePoints } from "./order.ts";
 
 export const DECANT_VERSION = "0.1.0";
 
@@ -614,7 +615,7 @@ function selectLines(distillation: Distillation, options: ScriptOpts): SelectedL
       phaseSortOrder(left.phase) - phaseSortOrder(right.phase) ||
       right.sessionsSeen - left.sessionsSeen ||
       right.successRate - left.successRate ||
-      left.cmd.localeCompare(right.cmd),
+      compareCodePoints(left.cmd, right.cmd),
   );
   return lines;
 }

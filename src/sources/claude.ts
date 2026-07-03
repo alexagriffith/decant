@@ -9,6 +9,7 @@ import {
   type Role,
   type TokenUsage,
 } from "../model.ts";
+import { compareCodePoints } from "../order.ts";
 import { preview } from "../tools.ts";
 
 const KNOWN_META = new Set([
@@ -213,7 +214,7 @@ function compareModelCandidate(
   if (frequency !== 0) {
     return frequency;
   }
-  return otherModel.localeCompare(model);
+  return compareCodePoints(otherModel, model);
 }
 
 function simpleMessage(value: Json, role: Role, seq: number): NormalizedMessage {

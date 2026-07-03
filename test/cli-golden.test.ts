@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../src/cli.ts";
+import { compareCodePoints } from "../src/order.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-golden-test-"));
 const goldenDir = join(import.meta.dir, "golden");
@@ -56,9 +57,9 @@ function normalizeCliGolden(name: string, value: unknown): unknown {
     const a = left as Record<string, unknown>;
     const b = right as Record<string, unknown>;
     return (
-      String(b.started_at ?? "").localeCompare(String(a.started_at ?? "")) ||
-      String(a.tool ?? "").localeCompare(String(b.tool ?? "")) ||
-      String(a.source_session_id ?? "").localeCompare(String(b.source_session_id ?? ""))
+      compareCodePoints(String(b.started_at ?? ""), String(a.started_at ?? "")) ||
+      compareCodePoints(String(a.tool ?? ""), String(b.tool ?? "")) ||
+      compareCodePoints(String(a.source_session_id ?? ""), String(b.source_session_id ?? ""))
     );
   });
 }

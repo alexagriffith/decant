@@ -8,6 +8,7 @@ import { defaultPricing, estimateCost } from "./cost.ts";
 import { facets, fileRefs } from "./enrich.ts";
 import { canonicalJson } from "./json.ts";
 import type { Json, NormalizedBlock, ParsedSession, Tool } from "./model.ts";
+import { compareCodePoints } from "./order.ts";
 import { regenerate as regenerateRecommendations } from "./recommendations.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { parseCodexSession } from "./sources/codex.ts";
@@ -448,7 +449,9 @@ function collect(
 }
 
 function walk(root: string): string[] {
-  const entries = readdirSync(root, { withFileTypes: true });
+  const entries = readdirSync(root, { withFileTypes: true }).sort((left, right) =>
+    compareCodePoints(left.name, right.name),
+  );
   const out: string[] = [];
   for (const entry of entries) {
     const path = join(root, entry.name);

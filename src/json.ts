@@ -13,6 +13,7 @@
 // 2^53 lose their original form at JSON.parse time, before this function runs.
 // Neither occurs in session logs; the golden round-trip test pins reality.
 import type { Json } from "./model.ts";
+import { compareCodePoints } from "./order.ts";
 
 /** Serialize a JSON value exactly as serde_json's `Value::to_string()` would. */
 export function canonicalJson(value: Json): string {
@@ -26,19 +27,4 @@ export function canonicalJson(value: Json): string {
     .sort(compareCodePoints)
     .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key] as Json)}`);
   return `{${parts.join(",")}}`;
-}
-
-function compareCodePoints(a: string, b: string): number {
-  const ai = a[Symbol.iterator]();
-  const bi = b[Symbol.iterator]();
-  for (;;) {
-    const av = ai.next();
-    const bv = bi.next();
-    if (av.done && bv.done) return 0;
-    if (av.done) return -1;
-    if (bv.done) return 1;
-    const ac = av.value.codePointAt(0) as number;
-    const bc = bv.value.codePointAt(0) as number;
-    if (ac !== bc) return ac - bc;
-  }
 }
