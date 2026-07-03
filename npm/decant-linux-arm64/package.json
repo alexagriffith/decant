@@ -1,0 +1,22 @@
+{
+  "name": "@dosu/decant-linux-arm64",
+  "version": "0.0.0",
+  "description": "Decant compiled binary for Linux arm64.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/onlydole/decant.git"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/decant"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

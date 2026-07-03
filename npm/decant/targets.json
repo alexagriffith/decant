@@ -1,0 +1,36 @@
+{
+  "targets": [
+    {
+      "key": "darwin-arm64",
+      "platform": "darwin",
+      "arch": "arm64",
+      "package": "@dosu/decant-darwin-arm64",
+      "binary": "bin/decant",
+      "bunTarget": "bun-darwin-arm64"
+    },
+    {
+      "key": "darwin-x64",
+      "platform": "darwin",
+      "arch": "x64",
+      "package": "@dosu/decant-darwin-x64",
+      "binary": "bin/decant",
+      "bunTarget": "bun-darwin-x64"
+    },
+    {
+      "key": "linux-arm64",
+      "platform": "linux",
+      "arch": "arm64",
+      "package": "@dosu/decant-linux-arm64",
+      "binary": "bin/decant",
+      "bunTarget": "bun-linux-arm64"
+    },
+    {
+      "key": "linux-x64",
+      "platform": "linux",
+      "arch": "x64",
+      "package": "@dosu/decant-linux-x64",
+      "binary": "bin/decant",
+      "bunTarget": "bun-linux-x64"
+    }
+  ]
+}
