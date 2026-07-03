@@ -80,6 +80,23 @@ type ConfigView = {
   codexDir: string;
 };
 
+type UserSettings = {
+  agent: string;
+  terminal: string;
+  ide: string;
+};
+
+type SettingsInfo = {
+  settings: UserSettings;
+  path: string;
+  can_launch: boolean;
+  options: {
+    agents: [string, string][];
+    terminals: [string, string][];
+    ides: [string, string][];
+  };
+};
+
 type DashboardData = {
   summary: Summary | null;
   sessions: SessionSummary[];
@@ -89,6 +106,7 @@ type DashboardData = {
   files: FileRow[];
   recommendations: Recommendation[];
   config: ConfigView | null;
+  settings: SettingsInfo | null;
 };
 
 const emptyData: DashboardData = {
@@ -100,6 +118,7 @@ const emptyData: DashboardData = {
   files: [],
   recommendations: [],
   config: null,
+  settings: null,
 };
 
 const navItems = [
@@ -137,12 +156,23 @@ function App() {
       getJson<FileRow[]>("/api/files?group=path&limit=10"),
       getJson<Recommendation[]>("/api/recommendations?status=open"),
       getJson<ConfigView>("/api/config"),
+      getJson<SettingsInfo>("/api/settings"),
     ])
-      .then(([summary, sessions, byTool, tools, mcp, files, recommendations, config]) => {
+      .then(([summary, sessions, byTool, tools, mcp, files, recommendations, config, settings]) => {
         if (cancelled) {
           return;
         }
-        setData({ summary, sessions, byTool, tools, mcp, files, recommendations, config });
+        setData({
+          summary,
+          sessions,
+          byTool,
+          tools,
+          mcp,
+          files,
+          recommendations,
+          config,
+          settings,
+        });
         setError(null);
       })
       .catch((err: unknown) => {
@@ -242,7 +272,7 @@ function renderView(active: string, path: string, data: DashboardData) {
     case "Files":
       return <FilesView rows={data.files} />;
     case "Settings":
-      return <SettingsView config={data.config} />;
+      return <SettingsView config={data.config} settingsInfo={data.settings} />;
     default:
       return <SessionsView data={data} />;
   }
@@ -445,19 +475,97 @@ function FilesView({ rows }: { rows: FileRow[] }) {
   );
 }
 
-function SettingsView({ config }: { config: ConfigView | null }) {
+function SettingsView({
+  config,
+  settingsInfo,
+}: {
+  config: ConfigView | null;
+  settingsInfo: SettingsInfo | null;
+}) {
+  const [settings, setSettings] = useState<UserSettings | null>(settingsInfo?.settings ?? null);
+
+  useEffect(() => {
+    setSettings(settingsInfo?.settings ?? null);
+  }, [settingsInfo]);
+
+  const save = (patch: Partial<UserSettings>) => {
+    const next = { ...(settings ?? settingsInfo?.settings), ...patch } as UserSettings;
+    setSettings(next);
+    void getJson<SettingsInfo>("/api/settings", {
+      method: "POST",
+      body: JSON.stringify(next),
+    }).then((response) => setSettings(response.settings));
+  };
+
   return (
-    <section className="section settings">
-      <h2>Local Paths</h2>
-      <dl>
-        <dt>Archive</dt>
-        <dd>{config?.dbPath ?? "-"}</dd>
-        <dt>Claude</dt>
-        <dd>{config?.claudeDir ?? "-"}</dd>
-        <dt>Codex</dt>
-        <dd>{config?.codexDir ?? "-"}</dd>
-      </dl>
-    </section>
+    <div className="split">
+      <section className="section settings">
+        <h2>Launch Preferences</h2>
+        <div className="setting-list">
+          <SettingSelect
+            label="Agent"
+            options={settingsInfo?.options.agents ?? []}
+            value={settings?.agent ?? "claude"}
+            onChange={(agent) => save({ agent })}
+          />
+          <SettingSelect
+            label="Terminal"
+            options={settingsInfo?.options.terminals ?? []}
+            value={settings?.terminal ?? "terminal"}
+            onChange={(terminal) => save({ terminal })}
+          />
+          <SettingSelect
+            label="Editor"
+            options={settingsInfo?.options.ides ?? []}
+            value={settings?.ide ?? "vscode"}
+            onChange={(ide) => save({ ide })}
+          />
+        </div>
+        <p className="settings-note">
+          {settingsInfo?.can_launch === true
+            ? "Native launcher is available on this Mac."
+            : "Native launcher is unavailable on this platform."}
+        </p>
+      </section>
+      <section className="section settings">
+        <h2>Local Paths</h2>
+        <dl>
+          <dt>Settings</dt>
+          <dd>{settingsInfo?.path ?? "-"}</dd>
+          <dt>Archive</dt>
+          <dd>{config?.dbPath ?? "-"}</dd>
+          <dt>Claude</dt>
+          <dd>{config?.claudeDir ?? "-"}</dd>
+          <dt>Codex</dt>
+          <dd>{config?.codexDir ?? "-"}</dd>
+        </dl>
+      </section>
+    </div>
+  );
+}
+
+function SettingSelect({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: [string, string][];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="setting-select">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        {options.map(([key, name]) => (
+          <option key={key} value={key}>
+            {name}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

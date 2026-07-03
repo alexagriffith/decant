@@ -4,6 +4,7 @@ import type { Config } from "./config.ts";
 import { openDb } from "./db.ts";
 import type { Operation } from "./enrich.ts";
 import { sync as ingestSync } from "./ingest.ts";
+import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
 import { getSession, listSessions, search } from "./query.ts";
 import {
   list as listRecommendations,
@@ -11,6 +12,14 @@ import {
   parseStatusFilter,
   regenerate as regenerateRecommendations,
 } from "./recommendations.ts";
+import {
+  agentOptions,
+  getSettings,
+  ideOptions,
+  saveSettings,
+  settingsPath,
+  terminalOptions,
+} from "./settings.ts";
 import {
   activity as activityStats,
   byDimension,
@@ -68,6 +77,34 @@ export async function handleRequest(request: Request, config: Config): Promise<R
         claudeDir: config.claudeDir,
         codexDir: config.codexDir,
       });
+    }
+    if (request.method === "GET" && url.pathname === "/api/settings") {
+      return json(settingsResponse());
+    }
+    if (request.method === "POST" && url.pathname === "/api/settings") {
+      const body = await readJson<Record<string, unknown>>(request);
+      return json({ ...settingsResponse(saveSettings(body)), saved: true });
+    }
+    if (request.method === "POST" && url.pathname === "/api/launch/agent") {
+      const body = await readJson<{ agent?: string; prompt?: string; key?: string }>(request);
+      if (body.agent == null || body.prompt == null || body.prompt.trim() === "") {
+        return json({ ok: false, error: "agent and prompt are required" }, 400);
+      }
+      const result = launchAgent(body.agent, body.prompt, body.key ?? null, getSettings());
+      return json(
+        result.ok
+          ? result
+          : { ...result, command: result.command ?? launchCommand(body.agent, body.prompt) },
+        result.ok ? 200 : 400,
+      );
+    }
+    if (request.method === "POST" && url.pathname === "/api/launch/ide") {
+      const body = await readJson<{ dir?: string }>(request);
+      if (body.dir == null || body.dir.trim() === "") {
+        return json({ ok: false, error: "dir is required" }, 400);
+      }
+      const result = openIde(body.dir, getSettings());
+      return json(result, result.ok ? 200 : 400);
     }
     if (
       request.method === "GET" &&
@@ -190,6 +227,19 @@ export async function handleRequest(request: Request, config: Config): Promise<R
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : String(error) }, 500);
   }
+}
+
+function settingsResponse(settings = getSettings()): Record<string, unknown> {
+  return {
+    settings,
+    path: settingsPath(),
+    can_launch: canLaunch(),
+    options: {
+      agents: agentOptions,
+      terminals: terminalOptions,
+      ides: ideOptions,
+    },
+  };
 }
 
 function syncNow(config: Config): Response {

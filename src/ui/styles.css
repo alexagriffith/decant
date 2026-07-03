@@ -24,7 +24,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -135,6 +136,15 @@ input {
   padding: 0 10px;
 }
 
+select {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 36px;
+  min-width: 180px;
+  padding: 0 10px;
+}
+
 .notice {
   background: #fff9e8;
   border: 1px solid #ecd38f;
@@ -240,6 +250,30 @@ tr:last-child td {
 .settings,
 .transcript {
   padding: 14px 16px;
+}
+
+.setting-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.setting-select {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.setting-select span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.settings-note {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 16px 0 0;
 }
 
 .bar-row {

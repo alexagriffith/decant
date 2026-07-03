@@ -141,6 +141,36 @@ describe("server routes", () => {
     expect(frame).toContain('"ingested":2');
   });
 
+  test("settings routes read options and persist sanitized choices", async () => {
+    const config = freshConfig();
+    const prior = process.env.DECANT_CONFIG_DIR;
+    process.env.DECANT_CONFIG_DIR = join(workDir, "server-settings");
+    try {
+      const settings = await route(config, "/api/settings");
+      expect(settings.status).toBe(200);
+      expect(settings.body).toMatchObject({
+        settings: expect.objectContaining({ agent: "claude" }),
+        options: expect.objectContaining({ agents: expect.any(Array) }),
+      });
+
+      const saved = await route(config, "/api/settings", {
+        method: "POST",
+        body: JSON.stringify({ agent: "codex", terminal: "wezterm", ide: "zed", extra: "no" }),
+      });
+      expect(saved.status).toBe(200);
+      expect(saved.body).toMatchObject({
+        saved: true,
+        settings: { agent: "codex", terminal: "wezterm", ide: "zed" },
+      });
+    } finally {
+      if (prior == null) {
+        delete process.env.DECANT_CONFIG_DIR;
+      } else {
+        process.env.DECANT_CONFIG_DIR = prior;
+      }
+    }
+  });
+
   test("lists, gets, and searches sessions", async () => {
     const config = freshConfig();
     seed(config);
