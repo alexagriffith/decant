@@ -54,6 +54,12 @@ describe("runCli", () => {
     const sessions = JSON.parse(list.stdout) as { id: number; source_session_id: string }[];
     expect(sessions).toHaveLength(7);
     expect(sessions[0]?.source_session_id).toBe("sess-codex-distill");
+    const distillSession = sessions.find((session) =>
+      session.source_session_id.includes("distill"),
+    );
+    if (distillSession == null) {
+      throw new Error("expected a distill fixture session");
+    }
 
     const projects = await runCli([...base, "project", "ls"]);
     expect(projects.code).toBe(0);
@@ -102,6 +108,30 @@ describe("runCli", () => {
     const exported = await runCli(["--db", dbPath, "--no-sync", "export", String(sessions[0]?.id)]);
     expect(exported.code).toBe(0);
     expect(exported.stdout).toStartWith("# Build and patch");
+
+    const script = await runCli([...base, "distill", "script", "--as", "just"]);
+    expect(script.code).toBe(0);
+    const scriptJson = JSON.parse(script.stdout) as { scope: string; artifact: string };
+    expect(scriptJson.scope).toBe("all sessions");
+    expect(scriptJson.artifact).toContain("cargo build --workspace");
+
+    const replay = await runCli([
+      ...base,
+      "distill",
+      "replay",
+      String(distillSession.id),
+      "--include-errors",
+    ]);
+    expect(replay.code).toBe(0);
+    const replayJson = JSON.parse(replay.stdout) as { session_id: number; artifact: string };
+    expect(replayJson.session_id).toBe(distillSession.id);
+    expect(replayJson.artifact).toContain("#!/usr/bin/env bash");
+
+    const skill = await runCli([...base, "distill", "skill", "--project", "/Users/dev/proj"]);
+    expect(skill.code).toBe(0);
+    const skillJson = JSON.parse(skill.stdout) as { project: string; artifact: string };
+    expect(skillJson.project).toBe("/Users/dev/proj");
+    expect(skillJson.artifact).toContain("# /Users/dev/proj workflow");
   });
 
   test("invalid options return code 2 with an error", async () => {
@@ -109,6 +139,18 @@ describe("runCli", () => {
     const result = await runCli(["--db", dbPath, "--no-sync", "stats", "--by", "nope"]);
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("unknown --by value");
+
+    const distill = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "distill",
+      "script",
+      "--as",
+      "nope",
+    ]);
+    expect(distill.code).toBe(2);
+    expect(distill.stderr).toContain("unknown --as");
   });
 
   test("completion emits shell scripts and rejects unknown shells", async () => {

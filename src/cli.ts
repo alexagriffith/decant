@@ -1,9 +1,20 @@
 #!/usr/bin/env bun
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
 import { type Config, type ConfigOverrides, resolveConfig } from "./config.ts";
 import { openDb } from "./db.ts";
+import {
+  defaultScriptOpts,
+  hotContext,
+  parseScriptFormat,
+  parseSkillKind,
+  renderReplay,
+  renderScript,
+  renderSkill,
+  replayOps,
+  timeline,
+} from "./distill.ts";
 import type { Operation } from "./enrich.ts";
 import { toMarkdown } from "./export.ts";
 import { sync as ingestSync } from "./ingest.ts";
@@ -50,6 +61,11 @@ interface Archive {
 }
 
 type CliAction = () => number | undefined;
+
+interface ArtifactOptions {
+  out?: string;
+  force?: boolean;
+}
 
 interface DbInfo {
   path: string;
@@ -288,6 +304,177 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           archive.db.close();
         }
       }),
+    );
+
+  const distill = program
+    .command("distill")
+    .description("generate runnable artifacts from history");
+  distill
+    .command("script")
+    .description("workflow script from command history")
+    .option("--project <project>", "limit to a project name or path")
+    .option("--work-type <type>", "limit to a work type")
+    .option("--from-session <id>", "distill one session faithfully", parseInteger)
+    .option("--as <format>", "sh | just | make", "sh")
+    .option("--min-frequency <n>", "frequency floor from 0.0 to 1.0", parseNumber)
+    .option("-o, --out <path>", "write to a file instead of stdout")
+    .option("--force", "overwrite the output file")
+    .action(
+      (
+        commandOptions: {
+          project?: string;
+          workType?: string;
+          fromSession?: number;
+          as?: string;
+          minFrequency?: number;
+        } & ArtifactOptions,
+      ) =>
+        run(() => {
+          const format = parseScriptFormat(commandOptions.as ?? "sh");
+          if (format == null) {
+            io.writeErr(
+              `error: unknown --as ${JSON.stringify(commandOptions.as)} ` +
+                "(expected: sh | just | make)\n",
+            );
+            return 2;
+          }
+          const minFrequency = commandOptions.minFrequency ?? 0.25;
+          if (!Number.isFinite(minFrequency) || minFrequency < 0 || minFrequency > 1) {
+            io.writeErr("error: --min-frequency must be a number between 0.0 and 1.0\n");
+            return 2;
+          }
+          const archive = readArchive();
+          try {
+            const d = timeline(archive.db, {
+              project: commandOptions.project,
+              workType: commandOptions.workType,
+              fromSession: commandOptions.fromSession,
+            });
+            if (d.ops.length === 0) {
+              io.writeErr(`no commands found for ${d.scope_label} - try a different scope\n`);
+              return 1;
+            }
+            const artifact = renderScript(d, {
+              ...defaultScriptOpts(),
+              format,
+              minFrequency,
+              exemplar: commandOptions.fromSession != null,
+            });
+            if (isJson(globals())) {
+              io.writeOut(
+                `${JSON.stringify(
+                  {
+                    scope: d.scope_label,
+                    session_count: d.session_count,
+                    date_from: d.date_from,
+                    date_to: d.date_to,
+                    generated_with: d.generated_with,
+                    ops: d.ops,
+                    artifact,
+                  },
+                  null,
+                  2,
+                )}\n`,
+              );
+              return 0;
+            }
+            return emitArtifact(io, globals(), artifact, commandOptions);
+          } finally {
+            archive.db.close();
+          }
+        }),
+    );
+  distill
+    .command("replay")
+    .description("reproduce one session's commands and file writes as a script")
+    .argument("<id>", "session id", parseInteger)
+    .option("--include-errors", "keep errored commands commented")
+    .option("-o, --out <path>", "write to a file instead of stdout")
+    .option("--force", "overwrite the output file")
+    .action((id: number, commandOptions: { includeErrors?: boolean } & ArtifactOptions) =>
+      run(() => {
+        const archive = readArchive();
+        try {
+          const artifact = renderReplay(archive.db, id, commandOptions.includeErrors === true);
+          if (artifact == null) {
+            io.writeErr(`error: no session with id ${id}\n`);
+            return 1;
+          }
+          if (isJson(globals())) {
+            const ops = replayOps(archive.db, id).filter(
+              (op) =>
+                commandOptions.includeErrors === true || !(op.kind === "command" && op.is_error),
+            );
+            io.writeOut(`${JSON.stringify({ session_id: id, ops, artifact }, null, 2)}\n`);
+            return 0;
+          }
+          return emitArtifact(io, globals(), artifact, commandOptions);
+        } finally {
+          archive.db.close();
+        }
+      }),
+    );
+  distill
+    .command("skill")
+    .description("generate a SKILL.md, AGENTS.md section, or slash command")
+    .option("--project <project>", "limit to a project name or path")
+    .option("--work-type <type>", "limit to a work type")
+    .option("--kind <kind>", "skill | agents | command", "skill")
+    .option("-o, --out <path>", "write to a file instead of stdout")
+    .option("--force", "overwrite the output file")
+    .action(
+      (
+        commandOptions: {
+          project?: string;
+          workType?: string;
+          kind?: string;
+        } & ArtifactOptions,
+      ) =>
+        run(() => {
+          const kind = parseSkillKind(commandOptions.kind ?? "skill");
+          if (kind == null) {
+            io.writeErr(
+              `error: unknown --kind ${JSON.stringify(commandOptions.kind)} ` +
+                "(expected: skill | agents | command)\n",
+            );
+            return 2;
+          }
+          const archive = readArchive();
+          try {
+            const scope = {
+              project: commandOptions.project,
+              workType: commandOptions.workType,
+              fromSession: null,
+            };
+            const d = timeline(archive.db, scope);
+            const hot = hotContext(archive.db, scope, 15);
+            if (d.ops.length === 0 && hot.length === 0) {
+              io.writeErr(`no data found for ${d.scope_label} - try a different scope\n`);
+              return 1;
+            }
+            const project = commandOptions.project ?? "your project";
+            const artifact = renderSkill(d, hot, kind, project);
+            if (isJson(globals())) {
+              io.writeOut(
+                `${JSON.stringify(
+                  {
+                    project,
+                    session_count: d.session_count,
+                    hot_context: hot,
+                    ops: d.ops,
+                    artifact,
+                  },
+                  null,
+                  2,
+                )}\n`,
+              );
+              return 0;
+            }
+            return emitArtifact(io, globals(), artifact, commandOptions);
+          } finally {
+            archive.db.close();
+          }
+        }),
     );
 
   program
@@ -531,6 +718,14 @@ function parseInteger(value: string): number {
   return parsed;
 }
 
+function parseNumber(value: string): number {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    throw new InvalidArgumentError("expected a number");
+  }
+  return parsed;
+}
+
 function optionalInteger(value: string | undefined): number | undefined {
   return value == null ? undefined : parseInteger(value);
 }
@@ -539,6 +734,27 @@ function parseOperation(value: string): Operation | null {
   return value === "read" || value === "edit" || value === "write" || value === "delete"
     ? value
     : null;
+}
+
+function emitArtifact(
+  io: Io,
+  options: GlobalOptions,
+  artifact: string,
+  artifactOptions: ArtifactOptions,
+): number {
+  if (artifactOptions.out != null) {
+    if (existsSync(artifactOptions.out) && artifactOptions.force !== true) {
+      io.writeErr(`error: ${artifactOptions.out} exists (use --force to overwrite)\n`);
+      return 2;
+    }
+    writeFileSync(artifactOptions.out, artifact);
+    if (!options.quiet) {
+      io.writeErr(`wrote ${artifactOptions.out}\n`);
+    }
+  } else {
+    io.writeOut(artifact);
+  }
+  return 0;
 }
 
 function dbInfo(archive: Archive): DbInfo {
