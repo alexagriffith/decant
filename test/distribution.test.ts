@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   packageDirName,
   parseDistributionArgs,
   readTargets,
   selectTargets,
+  stageNpmPackages,
   targetKeys,
 } from "../scripts/distribution.ts";
 
@@ -52,6 +56,37 @@ describe("distribution helpers", () => {
       binaryDir: "/tmp/bin",
       buildMissing: false,
       clean: true,
+      version: undefined,
     });
+    expect(parseDistributionArgs(["--version", "1.2.3"]).version).toBe("1.2.3");
+  });
+
+  test("stamps staged npm packages to one release version", async () => {
+    const root = mkdtempSync(join(tmpdir(), "decant-npm-stage-test-"));
+    try {
+      const target = selectTargets("linux-x64")[0];
+      if (target == null) {
+        throw new Error("missing linux-x64 target");
+      }
+      const binaryDir = join(root, "bin");
+      mkdirSync(join(binaryDir, target.key), { recursive: true });
+      writeFileSync(join(binaryDir, target.key, "decant"), "#!/bin/sh\n");
+
+      const outDir = stageNpmPackages({
+        outDir: join(root, "npm"),
+        binaryDir,
+        targets: [target],
+        buildMissing: false,
+        clean: true,
+        version: "1.2.3",
+      });
+      const launcher = await Bun.file(join(outDir, "decant", "package.json")).json();
+      const platform = await Bun.file(join(outDir, "decant-linux-x64", "package.json")).json();
+      expect(launcher.version).toBe("1.2.3");
+      expect(launcher.optionalDependencies).toEqual({ "@dosu/decant-linux-x64": "1.2.3" });
+      expect(platform.version).toBe("1.2.3");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

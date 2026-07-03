@@ -26,7 +26,7 @@ transcripts never leave your machine.
 
 ## Quick Start
 
-Use npm without installing Bun:
+Install from a published npm release without installing Bun:
 
 ```bash
 npx @dosu/decant sync
@@ -35,7 +35,7 @@ npx @dosu/decant search "auth bug"
 npx @dosu/decant serve
 ```
 
-Use Docker:
+Run the published Docker image:
 
 ```bash
 docker run --rm \
@@ -45,6 +45,9 @@ docker run --rm \
   -v "$HOME/.codex:/sources/codex:ro" \
   ghcr.io/dosu-ai/decant:latest
 ```
+
+Keep the `127.0.0.1:` host prefix on the Docker port publish. Publishing as
+`-p 4577:4577` exposes the archive port on every host interface.
 
 Use source:
 
@@ -112,6 +115,8 @@ tag.
 
 Route reference for the local UI lives in [docs/api/routes.md](docs/api/routes.md).
 Distribution notes live in [docs/distribution.md](docs/distribution.md).
+Release automation publishes npm packages and the GHCR image from the
+`Release` workflow.
 
 ## Development
 

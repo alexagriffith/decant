@@ -38,8 +38,11 @@ native target on Apple Silicon Macs.
 Build all release artifacts:
 
 ```sh
-bun run scripts/build-npm.ts --target all --clean
+bun run scripts/build-npm.ts --target all --clean --version 0.1.0
 ```
+
+The release workflow publishes all platform packages first, then the launcher,
+so `optionalDependencies` always point at packages that already exist.
 
 The launcher prints a clear reinstall message if optional dependencies were
 disabled and the matching platform package is missing. Windows packages are
@@ -68,8 +71,9 @@ docker run --rm \
 ```
 
 The container binds `0.0.0.0` inside the network namespace so Docker port
-publishing can reach it. Publish to `127.0.0.1` on the host, as shown above, to
-keep the UI local-only.
+publishing can reach it. Publish to `127.0.0.1` on the host, as shown above.
+Do not use `-p 4577:4577` unless you intentionally want to expose the archive
+port on every host interface.
 
 ## Source
 

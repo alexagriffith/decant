@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver version to publish, for example 0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  npm:
+    name: Publish npm packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.x
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build and stage packages
+        run: bun run scripts/build-npm.ts --target all --clean --version "${{ inputs.version }}"
+
+      - name: Configure npm auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
+
+      - name: Publish platform packages
+        run: |
+          for package in dist/npm/decant-darwin-arm64 dist/npm/decant-darwin-x64 dist/npm/decant-linux-arm64 dist/npm/decant-linux-x64; do
+            npm publish "$package" --access public
+          done
+
+      - name: Publish launcher
+        run: npm publish dist/npm/decant --access public
+
+  docker:
+    name: Publish Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/dosu-ai/decant:${{ inputs.version }}
+            ghcr.io/dosu-ai/decant:latest

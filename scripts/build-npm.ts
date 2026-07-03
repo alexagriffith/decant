@@ -22,6 +22,7 @@ try {
     targets,
     buildMissing: args.buildMissing,
     clean: args.clean,
+    version: args.version,
   });
   process.stdout.write(
     `staged launcher plus ${targets.length} platform package${targets.length === 1 ? "" : "s"} in ${outDir}\n`,

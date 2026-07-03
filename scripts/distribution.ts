@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 export interface DistributionTarget {
@@ -23,6 +31,7 @@ export interface StageOptions {
   targets?: DistributionTarget[];
   buildMissing?: boolean;
   clean?: boolean;
+  version?: string;
 }
 
 export const repoRoot = resolve(import.meta.dir, "..");
@@ -101,17 +110,29 @@ export function stageNpmPackages(options: StageOptions = {}): string {
   const outDir = resolve(root, options.outDir ?? "dist/npm");
   const binaryDir = options.binaryDir ?? "dist/bin";
   const targets = options.targets ?? readTargets(root);
+  const version = options.version ?? packageVersion(root);
   if (options.clean === true) {
     rmSync(outDir, { recursive: true, force: true });
   }
-  stageLauncherPackage(root, outDir);
+  stageLauncherPackage(root, outDir, targets, version);
   for (const target of targets) {
-    stagePlatformPackage(target, { root, outDir, binaryDir, buildMissing: options.buildMissing });
+    stagePlatformPackage(target, {
+      root,
+      outDir,
+      binaryDir,
+      buildMissing: options.buildMissing,
+      version,
+    });
   }
   return outDir;
 }
 
-function stageLauncherPackage(root: string, outDir: string): void {
+function stageLauncherPackage(
+  root: string,
+  outDir: string,
+  targets: DistributionTarget[],
+  version: string,
+): void {
   const source = join(root, "npm", "decant");
   const dest = join(outDir, "decant");
   mkdirSync(join(dest, "bin"), { recursive: true });
@@ -120,6 +141,13 @@ function stageLauncherPackage(root: string, outDir: string): void {
   }
   copyFileSync(join(source, "bin", "decant.cjs"), join(dest, "bin", "decant.cjs"));
   copyFileSync(join(root, "LICENSE"), join(dest, "LICENSE"));
+  rewritePackageJson(join(dest, "package.json"), (pkg) => {
+    pkg.version = version;
+    pkg.optionalDependencies = Object.fromEntries(
+      targets.map((target) => [target.package, version]),
+    );
+    return pkg;
+  });
 }
 
 function stagePlatformPackage(
@@ -129,6 +157,7 @@ function stagePlatformPackage(
     outDir: string;
     binaryDir: string;
     buildMissing?: boolean;
+    version: string;
   },
 ): void {
   const source = join(options.root, "npm", packageDirName(target));
@@ -143,18 +172,51 @@ function stagePlatformPackage(
 
   mkdirSync(join(dest, dirname(target.binary)), { recursive: true });
   copyFileSync(join(source, "package.json"), join(dest, "package.json"));
+  rewritePackageJson(join(dest, "package.json"), (pkg) => {
+    pkg.version = options.version;
+    return pkg;
+  });
   copyFileSync(builtBinary, join(dest, target.binary));
   chmodSync(join(dest, target.binary), 0o755);
 }
 
+function packageVersion(root: string): string {
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+    version?: string;
+  };
+  return pkg.version ?? "0.0.0";
+}
+
+function rewritePackageJson(
+  path: string,
+  rewrite: (pkg: Record<string, unknown>) => Record<string, unknown>,
+): void {
+  const pkg = rewrite(JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>);
+  writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
+}
+
 export function parseDistributionArgs(
   args: string[],
-  defaults: { target?: string; outDir?: string; binaryDir?: string; buildMissing?: boolean } = {},
-): { target: string; outDir: string; binaryDir: string; buildMissing: boolean; clean: boolean } {
+  defaults: {
+    target?: string;
+    outDir?: string;
+    binaryDir?: string;
+    buildMissing?: boolean;
+    version?: string;
+  } = {},
+): {
+  target: string;
+  outDir: string;
+  binaryDir: string;
+  buildMissing: boolean;
+  clean: boolean;
+  version: string | undefined;
+} {
   let target = defaults.target ?? "all";
   let outDir = defaults.outDir ?? "dist/npm";
   let binaryDir = defaults.binaryDir ?? "dist/bin";
   let buildMissing = defaults.buildMissing ?? true;
+  let version = defaults.version;
   let clean = false;
 
   for (let index = 0; index < args.length; index += 1) {
@@ -181,12 +243,16 @@ export function parseDistributionArgs(
       case "--clean":
         clean = true;
         break;
+      case "--version":
+        index += 1;
+        version = requiredValue(args, index, arg);
+        break;
       default:
         throw new Error(`unknown option ${arg}`);
     }
   }
 
-  return { target, outDir, binaryDir, buildMissing, clean };
+  return { target, outDir, binaryDir, buildMissing, clean, version };
 }
 
 function requiredValue(args: string[], index: number, flag: string): string {

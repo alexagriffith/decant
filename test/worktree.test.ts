@@ -47,20 +47,20 @@ function pathRow(db: Database, path: string): [number, string, string | null, st
 
 describe("worktree pure classifiers", () => {
   test("intree claude worktree recovers root and label", () => {
-    const result = classifyIntree("/Users/onlydole/dosu/dosu/.claude-worktrees/teedole-ops-39");
+    const result = classifyIntree("/Users/dev/acme/app/.claude-worktrees/feature-auth");
     expect(result).toMatchObject({
       isWorktree: true,
-      rootPath: "/Users/onlydole/dosu/dosu",
-      worktreeLabel: "teedole-ops-39",
+      rootPath: "/Users/dev/acme/app",
+      worktreeLabel: "feature-auth",
       worktreeTool: "claude",
       source: "intree",
     });
   });
 
   test("intree plain git worktree uses git tool", () => {
-    const result = classifyIntree("/Users/onlydole/oss/decant/.worktrees/feature-x");
+    const result = classifyIntree("/Users/dev/src/decant/.worktrees/feature-x");
     expect(result).toMatchObject({
-      rootPath: "/Users/onlydole/oss/decant",
+      rootPath: "/Users/dev/src/decant",
       worktreeLabel: "feature-x",
       worktreeTool: "git",
       source: "intree",
@@ -68,75 +68,69 @@ describe("worktree pure classifiers", () => {
   });
 
   test("plain path is not intree", () => {
-    expect(classifyIntree("/Users/onlydole/oss/decant")).toBeNull();
+    expect(classifyIntree("/Users/dev/src/decant")).toBeNull();
   });
 
   test("external container detects warp conductor and t3", () => {
-    expect(externalContainer("/Users/onlydole/.warp-worktrees/dosu-agate-spire")).toEqual({
+    expect(externalContainer("/Users/dev/.warp-worktrees/dosu-feature-api")).toEqual({
       tool: "warp",
-      leaf: "dosu-agate-spire",
+      leaf: "dosu-feature-api",
     });
-    expect(externalContainer("/Users/onlydole/conductor/workspaces/dosu-abuja")).toEqual({
+    expect(externalContainer("/Users/dev/conductor/workspaces/dosu-feature-ui")).toEqual({
       tool: "conductor",
-      leaf: "dosu-abuja",
+      leaf: "dosu-feature-ui",
     });
-    expect(externalContainer("/Users/onlydole/.t3-worktrees/dosu-t3code-2d73eb17")).toEqual({
+    expect(externalContainer("/Users/dev/.t3-worktrees/dosu-t3code-abcdef12")).toEqual({
       tool: "t3",
-      leaf: "dosu-t3code-2d73eb17",
+      leaf: "dosu-t3code-abcdef12",
     });
-    expect(externalContainer("/Users/onlydole/oss/decant")).toBeNull();
+    expect(externalContainer("/Users/dev/src/decant")).toBeNull();
   });
 
   test("external container detects nested warp layout", () => {
-    expect(externalContainer("/Users/onlydole/.warp/worktrees/astrocurious/joshua-ristra")).toEqual(
-      {
-        tool: "warp",
-        leaf: "astrocurious-joshua-ristra",
-      },
-    );
-    expect(externalContainer("/Users/onlydole/.warp/worktrees/astrocurious")).toBeNull();
-    expect(externalContainer("/Users/onlydole/oss/worktrees/decant")).toBeNull();
+    expect(externalContainer("/Users/dev/.warp/worktrees/skymap/feature-report")).toEqual({
+      tool: "warp",
+      leaf: "skymap-feature-report",
+    });
+    expect(externalContainer("/Users/dev/.warp/worktrees/skymap")).toBeNull();
+    expect(externalContainer("/Users/dev/src/worktrees/decant")).toBeNull();
   });
 
   test("nested warp leaf name-matches known root", () => {
     const roots: KnownRoot[] = [
       {
-        path: "/Users/onlydole/oss/astrocurious",
-        basename: "astrocurious",
+        path: "/Users/dev/src/skymap",
+        basename: "skymap",
         sessions: 10,
         lastSeen: "2026-06-01",
       },
     ];
-    const container = externalContainer(
-      "/Users/onlydole/.warp/worktrees/astrocurious/joshua-ristra",
-    );
+    const container = externalContainer("/Users/dev/.warp/worktrees/skymap/feature-report");
     expect(container).not.toBeNull();
     const result = classifyExternal(container?.tool ?? "", container?.leaf ?? "", "/x", roots);
     expect(result).toMatchObject({
       source: "namematch",
-      rootPath: "/Users/onlydole/oss/astrocurious",
-      worktreeLabel: "joshua-ristra",
+      rootPath: "/Users/dev/src/skymap",
+      worktreeLabel: "feature-report",
       worktreeTool: "warp",
     });
   });
 
   test("nested warp leaf resolves synthetically without a known root", () => {
-    const container = externalContainer(
-      "/Users/onlydole/.warp/worktrees/astrocurious/joshua-ristra",
-    );
+    const container = externalContainer("/Users/dev/.warp/worktrees/skymap/feature-report");
     expect(container).not.toBeNull();
     const result = classifyExternal(container?.tool ?? "", container?.leaf ?? "", "/x", []);
     expect(result).toMatchObject({
       source: "synthetic",
-      rootPath: "astrocurious",
-      worktreeLabel: "joshua-ristra",
+      rootPath: "skymap",
+      worktreeLabel: "feature-report",
     });
   });
 
   test("external name-matches known root", () => {
     const roots: KnownRoot[] = [
       {
-        path: "/Users/onlydole/dosu/dosu",
+        path: "/Users/dev/acme/app",
         basename: "dosu",
         sessions: 10,
         lastSeen: "2026-06-01",
@@ -144,53 +138,58 @@ describe("worktree pure classifiers", () => {
     ];
     const result = classifyExternal(
       "warp",
-      "dosu-agate-spire",
-      "/Users/onlydole/.warp-worktrees/dosu-agate-spire",
+      "dosu-feature-api",
+      "/Users/dev/.warp-worktrees/dosu-feature-api",
       roots,
     );
     expect(result).toMatchObject({
       isWorktree: true,
       source: "namematch",
-      rootPath: "/Users/onlydole/dosu/dosu",
-      worktreeLabel: "agate-spire",
+      rootPath: "/Users/dev/acme/app",
+      worktreeLabel: "feature-api",
       worktreeTool: "warp",
     });
   });
 
   test("external name-match longest basename wins", () => {
     const roots: KnownRoot[] = [
-      { path: "/u/dosu", basename: "dosu", sessions: 100, lastSeen: "2026-06-01" },
-      { path: "/u/dosu-agate", basename: "dosu-agate", sessions: 1, lastSeen: "2026-01-01" },
+      { path: "/u/sample", basename: "sample", sessions: 100, lastSeen: "2026-06-01" },
+      {
+        path: "/u/sample-addon",
+        basename: "sample-addon",
+        sessions: 1,
+        lastSeen: "2026-01-01",
+      },
     ];
-    const result = classifyExternal("warp", "dosu-agate-spire", "/x", roots);
-    expect(result.rootPath).toBe("/u/dosu-agate");
-    expect(result.worktreeLabel).toBe("spire");
+    const result = classifyExternal("warp", "sample-addon-feature", "/x", roots);
+    expect(result.rootPath).toBe("/u/sample-addon");
+    expect(result.worktreeLabel).toBe("feature");
   });
 
   test("external name-match tie-breaks on sessions recency then path", () => {
     const sessions: KnownRoot[] = [
-      { path: "/Users/onlydole/dosu", basename: "dosu", sessions: 2, lastSeen: "2026-06-01" },
+      { path: "/Users/dev/acme", basename: "dosu", sessions: 2, lastSeen: "2026-06-01" },
       {
-        path: "/Users/onlydole/dosu/dosu",
+        path: "/Users/dev/acme/app",
         basename: "dosu",
         sessions: 40,
         lastSeen: "2026-05-01",
       },
     ];
-    expect(classifyExternal("warp", "dosu-agate-spire", "/x", sessions).rootPath).toBe(
-      "/Users/onlydole/dosu/dosu",
+    expect(classifyExternal("warp", "dosu-feature-api", "/x", sessions).rootPath).toBe(
+      "/Users/dev/acme/app",
     );
 
     const recency: KnownRoot[] = [
       { path: "/u/a/dosu", basename: "dosu", sessions: 5, lastSeen: "2026-01-01" },
       { path: "/u/b/dosu", basename: "dosu", sessions: 5, lastSeen: "2026-06-01" },
     ];
-    expect(classifyExternal("warp", "dosu-agate-spire", "/x", recency).rootPath).toBe("/u/b/dosu");
+    expect(classifyExternal("warp", "dosu-feature-api", "/x", recency).rootPath).toBe("/u/b/dosu");
 
     const tie = (order: string[]) =>
       classifyExternal(
         "warp",
-        "dosu-agate-spire",
+        "dosu-feature-api",
         "/x",
         order.map((path) => ({
           path,
@@ -203,12 +202,12 @@ describe("worktree pure classifiers", () => {
   });
 
   test("external synthetic strips codename per tool", () => {
-    expect(classifyExternal("warp", "dosu-agate-spire", "/x", []).rootPath).toBe("dosu");
-    expect(classifyExternal("t3", "dosu-t3code-2d73eb17", "/x", []).rootPath).toBe("dosu");
-    expect(classifyExternal("conductor", "dosu-abuja", "/x", []).rootPath).toBe("dosu");
-    const result = classifyExternal("warp", "dosu-agate-spire", "/x", []);
+    expect(classifyExternal("warp", "dosu-feature-api", "/x", []).rootPath).toBe("dosu");
+    expect(classifyExternal("t3", "dosu-t3code-abcdef12", "/x", []).rootPath).toBe("dosu");
+    expect(classifyExternal("conductor", "sample-ui", "/x", []).rootPath).toBe("sample");
+    const result = classifyExternal("warp", "dosu-feature-api", "/x", []);
     expect(result.source).toBe("synthetic");
-    expect(result.worktreeLabel).toBe("agate-spire");
+    expect(result.worktreeLabel).toBe("feature-api");
   });
 
   test("source strings and path edge cases", () => {
@@ -236,17 +235,14 @@ describe("worktree pure classifiers", () => {
 describe("git worktree pointer resolution", () => {
   test("git pointer file resolves authoritative root", () => {
     const root = tempDir("decant-worktree-git-");
-    const wt = join(root, "agate-spire");
+    const wt = join(root, "feature-api");
     mkdirSync(wt, { recursive: true });
-    writeFileSync(
-      wt.concat("/.git"),
-      "gitdir: /Users/onlydole/dosu/dosu/.git/worktrees/agate-spire\n",
-    );
+    writeFileSync(wt.concat("/.git"), "gitdir: /Users/dev/acme/app/.git/worktrees/feature-api\n");
     const result = resolveGitRoot(wt);
     expect(result).toMatchObject({
       isWorktree: true,
-      rootPath: "/Users/onlydole/dosu/dosu",
-      worktreeLabel: "agate-spire",
+      rootPath: "/Users/dev/acme/app",
+      worktreeLabel: "feature-api",
       worktreeTool: "git",
       source: "git",
     });
@@ -265,15 +261,12 @@ describe("git worktree pointer resolution", () => {
 
   test("git pointer in external container infers container tool", () => {
     const root = tempDir("decant-warp-git-");
-    const wt = join(root, ".warp-worktrees", "dosu-agate-spire");
+    const wt = join(root, ".warp-worktrees", "dosu-feature-api");
     mkdirSync(wt, { recursive: true });
-    writeFileSync(
-      join(wt, ".git"),
-      "gitdir: /Users/onlydole/dosu/dosu/.git/worktrees/agate-spire\n",
-    );
+    writeFileSync(join(wt, ".git"), "gitdir: /Users/dev/acme/app/.git/worktrees/feature-api\n");
     expect(resolveGitRoot(wt)).toMatchObject({
       worktreeTool: "warp",
-      rootPath: "/Users/onlydole/dosu/dosu",
+      rootPath: "/Users/dev/acme/app",
     });
   });
 
@@ -311,20 +304,20 @@ describe("resolveWorktreeRoots", () => {
     db.exec(`
       INSERT INTO project(path, name) VALUES ('/home/x/dosu/dosu', 'dosu');
       INSERT INTO project(path, name) VALUES
-        ('/home/x/dosu/dosu/.claude-worktrees/teedole-ops-39', 'teedole-ops-39');
+        ('/home/x/dosu/dosu/.claude-worktrees/feature-auth', 'feature-auth');
       INSERT INTO project(path, name) VALUES
-        ('/home/x/.warp-worktrees/dosu-agate-spire', 'dosu-agate-spire');
+        ('/home/x/.warp-worktrees/dosu-feature-api', 'dosu-feature-api');
     `);
     resolveWorktreeRoots(db);
 
     expect(pathRow(db, "/home/x/dosu/dosu")).toEqual([0, "/home/x/dosu/dosu", null, "self"]);
-    expect(pathRow(db, "/home/x/dosu/dosu/.claude-worktrees/teedole-ops-39")).toEqual([
+    expect(pathRow(db, "/home/x/dosu/dosu/.claude-worktrees/feature-auth")).toEqual([
       1,
       "/home/x/dosu/dosu",
       "claude",
       "intree",
     ]);
-    expect(pathRow(db, "/home/x/.warp-worktrees/dosu-agate-spire")).toEqual([
+    expect(pathRow(db, "/home/x/.warp-worktrees/dosu-feature-api")).toEqual([
       1,
       "/home/x/dosu/dosu",
       "warp",
@@ -339,7 +332,7 @@ describe("resolveWorktreeRoots", () => {
       INSERT INTO project(path, name, is_worktree, root_path, worktree_label, worktree_tool, root_source)
       VALUES ('/gone/wt', 'wt', 1, '/real/dosu', 'wt', 'git', 'git');
       INSERT INTO project(path, name)
-      VALUES ('/home/x/.warp-worktrees/dosu-agate-spire', 'dosu-agate-spire');
+      VALUES ('/home/x/.warp-worktrees/dosu-feature-api', 'dosu-feature-api');
     `);
     resolveWorktreeRoots(db);
     resolveWorktreeRoots(db);
@@ -363,7 +356,7 @@ describe("resolveWorktreeRoots", () => {
 
     const external = db
       .query(
-        "SELECT root_path, root_source FROM project WHERE path = '/home/x/.warp-worktrees/dosu-agate-spire'",
+        "SELECT root_path, root_source FROM project WHERE path = '/home/x/.warp-worktrees/dosu-feature-api'",
       )
       .get() as { root_path: string; root_source: string };
     expect(external).toEqual({ root_path: "/real/dosu", root_source: "namematch" });
@@ -378,23 +371,20 @@ describe("resolveWorktreeRoots", () => {
 
   test("uses on-disk git worktree pointer", () => {
     const root = tempDir("decant-real-git-");
-    const wt = join(root, "agate-spire");
+    const wt = join(root, "feature-api");
     mkdirSync(wt, { recursive: true });
-    writeFileSync(
-      wt.concat("/.git"),
-      "gitdir: /Users/onlydole/dosu/dosu/.git/worktrees/agate-spire\n",
-    );
+    writeFileSync(wt.concat("/.git"), "gitdir: /Users/dev/acme/app/.git/worktrees/feature-api\n");
 
     const db = tempDb();
-    db.query("INSERT INTO project(path, name) VALUES (?1, 'agate-spire')").run(wt);
+    db.query("INSERT INTO project(path, name) VALUES (?1, 'feature-api')").run(wt);
     resolveWorktreeRoots(db);
 
     const result = db
-      .query("SELECT is_worktree, root_path, root_source FROM project WHERE name = 'agate-spire'")
+      .query("SELECT is_worktree, root_path, root_source FROM project WHERE name = 'feature-api'")
       .get() as { is_worktree: number; root_path: string; root_source: string };
     expect(result).toEqual({
       is_worktree: 1,
-      root_path: "/Users/onlydole/dosu/dosu",
+      root_path: "/Users/dev/acme/app",
       root_source: "git",
     });
     db.close();

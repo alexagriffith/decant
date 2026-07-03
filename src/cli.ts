@@ -5,6 +5,7 @@ import { Command, InvalidArgumentError } from "commander";
 import { type Config, type ConfigOverrides, resolveConfig } from "./config.ts";
 import { openDb } from "./db.ts";
 import {
+  DECANT_VERSION,
   defaultScriptOpts,
   hotContext,
   parseScriptFormat,
@@ -51,6 +52,9 @@ export interface CliResult {
 export interface CliRunOptions {
   env?: Record<string, string | undefined>;
   homeDir?: string | null;
+  liveOutput?: boolean;
+  writeStdout?: (value: string) => void;
+  writeStderr?: (value: string) => void;
 }
 
 interface GlobalOptions {
@@ -91,14 +95,23 @@ interface DbInfo {
 }
 
 export async function runCli(argv: string[], options: CliRunOptions = {}): Promise<CliResult> {
+  const streamOutput = options.liveOutput === true;
   const io: Io = {
     stdout: "",
     stderr: "",
     writeOut(value) {
-      this.stdout += value;
+      if (streamOutput) {
+        (options.writeStdout ?? ((chunk) => process.stdout.write(chunk)))(value);
+      } else {
+        this.stdout += value;
+      }
     },
     writeErr(value) {
-      this.stderr += value;
+      if (streamOutput) {
+        (options.writeStderr ?? ((chunk) => process.stderr.write(chunk)))(value);
+      } else {
+        this.stderr += value;
+      }
     },
   };
   let code = 0;
@@ -128,6 +141,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   program
     .name("decant")
     .description("extract, browse, and search Claude Code and Codex sessions")
+    .version(DECANT_VERSION)
     .exitOverride()
     .configureOutput({
       writeOut: (value) => io.writeOut(value),
@@ -151,7 +165,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   const output = (value: unknown, renderHuman: () => string): void => {
     if (isJson(globals())) {
       io.writeOut(`${JSON.stringify(value, null, 2)}\n`);
-    } else if (!globals().quiet) {
+    } else {
       io.writeOut(renderHuman());
     }
   };
@@ -879,13 +893,20 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     await program.parseAsync(argv, { from: "user" });
   } catch (error) {
     if (typeof error === "object" && error !== null && "exitCode" in error) {
-      setCode(Number((error as { exitCode: number }).exitCode));
+      setCode(commanderExitCode(error as { exitCode: number; code?: string }));
     } else {
       io.writeErr(`error: ${error instanceof Error ? error.message : String(error)}\n`);
       setCode(1);
     }
   }
   return { code, stdout: io.stdout, stderr: io.stderr };
+}
+
+function commanderExitCode(error: { exitCode: number; code?: string }): number {
+  if (error.exitCode === 1 && error.code?.startsWith("commander.") === true) {
+    return 2;
+  }
+  return Number(error.exitCode);
 }
 
 function openArchive(config: Config): Archive {
@@ -1049,8 +1070,6 @@ _arguments '1:command:(${words})' '*::arg:->args'
 }
 
 if (import.meta.main) {
-  const result = await runCli(process.argv.slice(2));
-  process.stdout.write(result.stdout);
-  process.stderr.write(result.stderr);
+  const result = await runCli(process.argv.slice(2), { liveOutput: true });
   process.exit(result.code);
 }

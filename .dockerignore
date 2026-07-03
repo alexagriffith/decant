@@ -1,15 +1,8 @@
 .git
 .github
-.elixir_ls
 .pre-commit-cache
-_build
-deps
 dist
 node_modules
-target
-web/_build
-web/deps
-web/assets/node_modules
 *.db
 *.db-shm
 *.db-wal

@@ -61,6 +61,12 @@ describe("runCli", () => {
       throw new Error("expected a distill fixture session");
     }
 
+    const quietList = await runCli(["--db", dbPath, "--no-sync", "--quiet", "ls"]);
+    expect(quietList).toMatchObject({ code: 0, stderr: "" });
+    expect(quietList.stdout.trim().split("\n")).toEqual(
+      sessions.map((session) => String(session.id)),
+    );
+
     const projects = await runCli([...base, "project", "ls"]);
     expect(projects.code).toBe(0);
     expect((JSON.parse(projects.stdout) as { path: string; sessions: number }[])[0]).toMatchObject({
@@ -164,6 +170,14 @@ describe("runCli", () => {
 
   test("invalid options return code 2 with an error", async () => {
     const { dbPath } = await syncedCase();
+    const unknownOption = await runCli(["--definitely-not-real"]);
+    expect(unknownOption.code).toBe(2);
+    expect(unknownOption.stderr).toContain("unknown option");
+
+    const missingArg = await runCli(["show"]);
+    expect(missingArg.code).toBe(2);
+    expect(missingArg.stderr).toContain("missing required argument");
+
     const result = await runCli(["--db", dbPath, "--no-sync", "stats", "--by", "nope"]);
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("unknown --by value");
@@ -191,6 +205,23 @@ describe("runCli", () => {
     ]);
     expect(recommendations.code).toBe(2);
     expect(recommendations.stderr).toContain("unknown --status");
+  });
+
+  test("version and live output mode", async () => {
+    const version = await runCli(["--version"]);
+    expect(version).toMatchObject({ code: 0, stderr: "" });
+    expect(version.stdout).toContain("0.1.0");
+
+    let streamed = "";
+    const live = await runCli(["--version"], {
+      liveOutput: true,
+      writeStdout: (value) => {
+        streamed += value;
+      },
+      writeStderr: () => {},
+    });
+    expect(live).toMatchObject({ code: 0, stdout: "", stderr: "" });
+    expect(streamed).toContain("0.1.0");
   });
 
   test("completion emits shell scripts and rejects unknown shells", async () => {
