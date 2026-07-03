@@ -6,9 +6,9 @@ default:
 
 # ── Quality gates ────────────────────────────────────────────────────
 
-# All gates: Rust + web (the Definition of done)
+# All gates: Rust + TypeScript + web (the Definition of done)
 [group('gates')]
-check: rust-check web-check
+check: rust-check ts-check web-check
 
 # Rust gates: tests, formatting, lints
 [group('gates')]
@@ -16,6 +16,13 @@ rust-check:
     cargo test --workspace
     cargo fmt --all -- --check
     cargo clippy --all-targets -- -D warnings
+
+# TypeScript gates: tests, typecheck, lint + format
+[group('gates')]
+ts-check:
+    bun test
+    bunx tsc --noEmit
+    bunx biome check .
 
 # Web gates: tests, formatting, warnings-as-errors compile
 [group('gates')]
@@ -47,6 +54,28 @@ fmt:
 [group('rust')]
 clippy:
     cargo clippy --all-targets -- -D warnings
+
+# ── TypeScript (single-app migration target) ─────────────────────────
+
+# Run TS tests (e.g. `just ts-test test/db.test.ts`)
+[group('ts')]
+ts-test *ARGS:
+    bun test {{ARGS}}
+
+# Fix TS formatting + lint in place
+[group('ts')]
+ts-fmt:
+    bunx biome check --write .
+
+# Regenerate src/schema.sql from the Rust implementation (source of truth)
+[group('ts')]
+ts-gen-schema:
+    bun run scripts/gen-schema.ts
+
+# Regenerate test/golden/ (the Rust-derived parity oracle)
+[group('ts')]
+ts-gen-goldens:
+    bun run scripts/gen-goldens.ts
 
 # ── Daemon (owns ~/.decant/decant.db; loopback HTTP on :4577) ────────
 

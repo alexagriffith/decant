@@ -15,3 +15,7 @@ erl_crash.dump
 
 # Coverage report from cargo-llvm-cov (generated in CI, never committed).
 /lcov.info
+
+# TypeScript app (single-app migration)
+node_modules/
+/dist/

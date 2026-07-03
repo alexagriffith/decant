@@ -1,0 +1,89 @@
+import { describe, expect, test } from "bun:test";
+import { readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+
+// The golden files are generated from the Rust implementation by
+// scripts/gen-goldens.ts and are the parity oracle for the TypeScript port.
+// These tests pin the harness itself: the goldens exist, parse, cover every
+// fixture, and are internally consistent. Phase 1 adds the real parity
+// assertion (TS ingest over fixtures/ must reproduce rows/*.json exactly).
+const goldenDir = join(import.meta.dir, "golden");
+const keySeparator = "\0";
+
+async function loadGolden<T>(relPath: string): Promise<T> {
+  return (await Bun.file(join(goldenDir, relPath)).json()) as T;
+}
+
+function listGoldenFiles(dir = goldenDir, prefix = ""): string[] {
+  return readdirSync(dir).flatMap((entry) => {
+    const path = join(dir, entry);
+    const relPath = prefix ? join(prefix, entry) : entry;
+    if (statSync(path).isDirectory()) {
+      return listGoldenFiles(path, relPath);
+    }
+    return [relPath];
+  });
+}
+
+type SessionKey = { tool: string; source_session_id: string };
+
+describe("golden harness", () => {
+  test("covers every fixture transcript exactly once", async () => {
+    const meta = await loadGolden<{ fixtures: string[]; rust_rev: string }>("meta.json");
+    const sessions = await loadGolden<SessionKey[]>("rows/sessions.json");
+    expect(sessions).toHaveLength(meta.fixtures.length);
+    expect(meta.rust_rev).toMatch(/^[0-9a-f]{40}(-dirty)?$/);
+    const tools = new Set(sessions.map((s) => s.tool));
+    expect(tools).toEqual(new Set(["claude_code", "codex"]));
+  });
+
+  test("row dumps are internally consistent on natural keys", async () => {
+    const sessions = await loadGolden<SessionKey[]>("rows/sessions.json");
+    const keys = new Set(sessions.map((s) => `${s.tool}${keySeparator}${s.source_session_id}`));
+    expect(keys.size).toBe(sessions.length);
+
+    for (const dump of ["messages", "blocks", "tool_calls", "file_refs"]) {
+      const rows = await loadGolden<SessionKey[]>(`rows/${dump}.json`);
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) {
+        expect(keys).toContain(`${row.tool}${keySeparator}${row.source_session_id}`);
+      }
+    }
+  });
+
+  test("blocks nest under messages that exist", async () => {
+    const messages = await loadGolden<(SessionKey & { seq: number })[]>("rows/messages.json");
+    const messageKeys = new Set(
+      messages.map((m) => `${m.tool}${keySeparator}${m.source_session_id}${keySeparator}${m.seq}`),
+    );
+    const blocks = await loadGolden<(SessionKey & { seq: number })[]>("rows/blocks.json");
+    for (const block of blocks) {
+      expect(messageKeys).toContain(
+        `${block.tool}${keySeparator}${block.source_session_id}${keySeparator}${block.seq}`,
+      );
+    }
+  });
+
+  test("goldens contain no machine-specific absolute paths", async () => {
+    const relPaths = listGoldenFiles();
+    const allText: string[] = [];
+    for (const relPath of relPaths) {
+      const text = await Bun.file(join(goldenDir, relPath)).text();
+      allText.push(text);
+      for (const [name, pattern] of [
+        ["macOS temp path", /\/(?:private\/)?var\/folders\//],
+        ["Linux home path", /\/home\/[^/\s"]+\//],
+        ["non-fixture macOS user path", /\/Users\/(?!dev\/)[^/\s"]+\//],
+      ] as const) {
+        expect(text, `${relPath} leaked ${name}`).not.toMatch(pattern);
+      }
+    }
+    expect(allText.join("\n")).toContain("<TMP>");
+  });
+
+  test("CLI goldens agree with the row dumps", async () => {
+    const sessions = await loadGolden<SessionKey[]>("rows/sessions.json");
+    const ls = await loadGolden<unknown[]>("cli/ls.json");
+    expect(ls).toHaveLength(sessions.length);
+  });
+});

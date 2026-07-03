@@ -42,6 +42,20 @@ repos:
         types: [rust]
         pass_filenames: false
 
+      - id: biome-check
+        name: biome check
+        entry: bunx biome check .
+        language: system
+        files: '^(src|test|scripts)/.*\.(ts|tsx|json|sql)$|^(package\.json|tsconfig\.json|biome\.json|bun\.lock)$'
+        pass_filenames: false
+
+      - id: ts-typecheck
+        name: TypeScript typecheck
+        entry: bunx tsc --noEmit
+        language: system
+        files: '^(src|test|scripts)/.*\.ts$|^(package\.json|tsconfig\.json)$'
+        pass_filenames: false
+
       - id: mix-format
         name: mix format (web)
         entry: scripts/precommit-elixir.sh

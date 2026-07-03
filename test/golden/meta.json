@@ -1,0 +1,37 @@
+{
+  "generator": "scripts/gen-goldens.ts",
+  "source_of_truth": "rust implementation",
+  "rust_rev": "781a4e4800509c186aa902642a272d373e4bee9e-dirty",
+  "fixtures": [
+    "fixtures/claude/distill.jsonl",
+    "fixtures/claude/enriched.jsonl",
+    "fixtures/claude/mcp.jsonl",
+    "fixtures/claude/sample.jsonl",
+    "fixtures/codex/distill.jsonl",
+    "fixtures/codex/enriched.jsonl",
+    "fixtures/codex/sample.jsonl"
+  ],
+  "row_dumps": [
+    "blocks",
+    "file_refs",
+    "messages",
+    "sessions",
+    "tool_calls"
+  ],
+  "cli_commands": {
+    "ls": [
+      "ls",
+      "--json"
+    ],
+    "stats": [
+      "stats",
+      "--json"
+    ],
+    "stats-by-model": [
+      "stats",
+      "--by",
+      "model",
+      "--json"
+    ]
+  }
+}
