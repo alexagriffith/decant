@@ -110,4 +110,14 @@ describe("runCli", () => {
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("unknown --by value");
   });
+
+  test("completion emits shell scripts and rejects unknown shells", async () => {
+    const bash = await runCli(["completion", "bash"]);
+    expect(bash).toMatchObject({ code: 0, stderr: "" });
+    expect(bash.stdout).toContain("complete -F _decant_complete decant");
+
+    const unknown = await runCli(["completion", "tcsh"]);
+    expect(unknown.code).toBe(2);
+    expect(unknown.stderr).toContain("unknown completion shell");
+  });
 });
