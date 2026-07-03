@@ -1,0 +1,277 @@
+import type { Database } from "bun:sqlite";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { openDb } from "../src/db.ts";
+import {
+  catalog,
+  current,
+  list,
+  markImplemented,
+  parseStatusFilter,
+  regenerate,
+  signals,
+} from "../src/recommendations.ts";
+
+const workDir = mkdtempSync(join(tmpdir(), "decant-recommendations-test-"));
+afterAll(() => rmSync(workDir, { recursive: true, force: true }));
+
+let dbCounter = 0;
+function freshDb(): Database {
+  dbCounter += 1;
+  return openDb(join(workDir, `recommendations-${dbCounter}.db`));
+}
+
+function base(): Database {
+  const db = freshDb();
+  db.exec(`
+    INSERT INTO project(id, path) VALUES (1, '/p');
+    INSERT INTO session(id, tool, source_session_id, project_id, model, estimated_cost_usd)
+      VALUES (1, 'claude_code', 's1', 1, 'claude-opus-4-7', 10.0);
+  `);
+  return db;
+}
+
+function seedTool(
+  db: Database,
+  name: string,
+  kind: string,
+  server: string | null,
+  calls: number,
+  errors: number,
+): void {
+  const insert = db.prepare(
+    `INSERT INTO tool_call(session_id, tool_kind, tool_name, mcp_server, is_error)
+     VALUES (1, ?1, ?2, ?3, ?4)`,
+  );
+  for (let index = 0; index < calls; index += 1) {
+    insert.run(kind, name, server, index < errors ? 1 : 0);
+  }
+}
+
+function seedFileSessions(
+  db: Database,
+  firstId: number,
+  count: number,
+  relPath: string,
+  operation: string,
+): void {
+  const insertSession = db.prepare(
+    `INSERT INTO session(id, tool, source_session_id, project_id, started_at)
+     VALUES (?1, 'claude_code', 'fs' || ?1, 1, datetime('now'))`,
+  );
+  const insertRef = db.prepare(
+    `INSERT INTO file_ref(session_id, path, rel_path, ext, operation)
+     VALUES (?1, '/p/' || ?2, ?2, 'rs', ?3)`,
+  );
+  for (let index = 0; index < count; index += 1) {
+    const id = firstId + index;
+    insertSession.run(id);
+    insertRef.run(id, relPath, operation);
+  }
+}
+
+function keys(rows: { key: string }[]): string[] {
+  return rows.map((row) => row.key);
+}
+
+describe("recommendations", () => {
+  test("catalog keys and spotlight entry match the reference", () => {
+    const rows = catalog();
+    expect(keys(rows)).toEqual([
+      "catalog:agents-md",
+      "catalog:claude-md",
+      "catalog:skills",
+      "catalog:slash-commands",
+      "catalog:subagents",
+      "catalog:mcp",
+      "catalog:hooks",
+    ]);
+    expect(rows[0]).toMatchObject({
+      kind: "catalog",
+      title: "AGENTS.md at the repo root",
+      url: "https://agents.md",
+      category: "Foundations",
+      score: 0,
+    });
+    expect(rows[0]?.prompt).toStartWith("Create a high-quality AGENTS.md");
+  });
+
+  test("signals fire for error hotspots, heavy use, and cost concentration", () => {
+    const db = base();
+    seedTool(db, "fetch", "mcp", "svc", 25, 5);
+    seedTool(db, "mcp__svc__a", "mcp", "svc", 60, 0);
+    seedTool(db, "Bash", "builtin", null, 250, 0);
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, project_id, model, estimated_cost_usd)
+      VALUES (2, 'claude_code', 's2', 1, 'claude-haiku', 2.0);
+    `);
+
+    const rows = signals(db);
+    const error = rows.find((row) => row.key === "signal:error:fetch");
+    expect(error).toMatchObject({
+      title: "fetch fails 20% of the time",
+      detail: "5 errors across 25 calls on svc.",
+      tone: "danger",
+      score: 5,
+    });
+    expect(rows.find((row) => row.key === "signal:heavy-server:svc")).toMatchObject({
+      score: 42.5,
+      tone: "accent",
+    });
+    expect(rows.find((row) => row.key === "signal:heavy-tool:Bash")).toMatchObject({
+      score: 62.5,
+      tone: "info",
+    });
+    expect(rows.find((row) => row.key === "signal:cost-concentration")).toMatchObject({
+      title: "83% of spend is on claude-opus-4-7",
+      detail: "$10.00 of $12.00 total.",
+      tone: "warning",
+    });
+    db.close();
+  });
+
+  test("file, search, and abandoned-rate signals use recent activity thresholds", () => {
+    const db = base();
+    seedFileSessions(db, 100, 9, "AGENTS.md", "read");
+    seedFileSessions(db, 200, 7, "src/parser.rs", "edit");
+    for (let index = 0; index < 20; index += 1) {
+      const id = 300 + index;
+      db.query(
+        `INSERT INTO session(id, tool, source_session_id, project_id, started_at, outcome)
+         VALUES (?1, 'claude_code', 'sh' || ?1, 1, datetime('now'), ?2)`,
+      ).run(id, index < 7 ? "abandoned" : "completed");
+      for (let call = 0; call < 9; call += 1) {
+        db.query(
+          `INSERT INTO tool_call(session_id, tool_kind, tool_name, timestamp)
+           VALUES (?1, 'builtin', 'Grep', datetime('now'))`,
+        ).run(id);
+      }
+    }
+
+    const rows = signals(db);
+    expect(keys(rows)).toContain("signal:hot-context:AGENTS.md");
+    expect(keys(rows)).toContain("signal:churn:src/parser.rs");
+    expect(keys(rows)).toContain("signal:search-heavy");
+    expect(keys(rows)).toContain("signal:abandoned-rate");
+    expect(rows.find((row) => row.key === "signal:hot-context:AGENTS.md")?.suggestion).toContain(
+      "decant distill skill",
+    );
+    db.close();
+  });
+
+  test("current is signals followed by catalog", () => {
+    const db = base();
+    seedTool(db, "fetch", "mcp", "svc", 25, 5);
+    const rows = current(db);
+    const firstCatalog = rows.findIndex((row) => row.kind === "catalog");
+    const signalIndex = rows.findIndex((row) => row.key === "signal:error:fetch");
+    expect(signalIndex).toBeGreaterThanOrEqual(0);
+    expect(signalIndex).toBeLessThan(firstCatalog);
+    expect(keys(rows)).toContain("catalog:hooks");
+    db.close();
+  });
+
+  test("regenerate is idempotent and preserves implemented state", () => {
+    const db = base();
+    seedTool(db, "fetch", "mcp", "svc", 25, 5);
+    regenerate(db);
+    expect((db.query("SELECT COUNT(*) AS n FROM recommendation").get() as { n: number }).n).toBe(9);
+    const firstSeen = (
+      db
+        .query("SELECT first_seen_at FROM recommendation WHERE key = 'catalog:agents-md'")
+        .get() as { first_seen_at: string }
+    ).first_seen_at;
+
+    expect(markImplemented(db, "catalog:agents-md", "manual", "did it")).toBe(true);
+    regenerate(db);
+    const row = db
+      .query("SELECT status, status_source, note, first_seen_at FROM recommendation WHERE key = ?1")
+      .get("catalog:agents-md") as {
+      status: string;
+      status_source: string;
+      note: string;
+      first_seen_at: string;
+    };
+    expect(row).toMatchObject({
+      status: "implemented",
+      status_source: "manual",
+      note: "did it",
+      first_seen_at: firstSeen,
+    });
+    db.close();
+  });
+
+  test("regenerate auto-resolves stale open signals but not catalog entries", () => {
+    const db = base();
+    seedTool(db, "fetch", "mcp", "svc", 25, 5);
+    regenerate(db);
+    db.query("DELETE FROM tool_call").run();
+    seedTool(db, "fetch", "mcp", "svc", 100, 2);
+    regenerate(db);
+
+    expect(
+      db
+        .query("SELECT status, status_source FROM recommendation WHERE key = 'signal:error:fetch'")
+        .get(),
+    ).toMatchObject({ status: "implemented", status_source: "activity" });
+    expect(
+      (
+        db
+          .query(
+            "SELECT COUNT(*) AS n FROM recommendation WHERE kind = 'catalog' AND status = 'implemented'",
+          )
+          .get() as { n: number }
+      ).n,
+    ).toBe(0);
+    db.close();
+  });
+
+  test("list filters and adds promotion card fields", () => {
+    const db = base();
+    seedFileSessions(db, 100, 9, "AGENTS.md", "read");
+    regenerate(db);
+    markImplemented(db, "catalog:agents-md", "manual", null);
+
+    const open = list(db, "open");
+    expect(open.every((row) => row.status === "open")).toBe(true);
+    expect(open.some((row) => row.key === "catalog:agents-md")).toBe(false);
+
+    const implemented = list(db, "implemented");
+    expect(implemented.map((row) => row.key)).toEqual(["catalog:agents-md"]);
+
+    const hot = list(db, "all").find((row) => row.key === "signal:hot-context:AGENTS.md");
+    expect(hot).toMatchObject({
+      memory_layer: "Hot",
+      promotion_target: "AGENTS.md or Skill",
+    });
+    expect(hot?.action).toContain("Distill");
+    db.close();
+  });
+
+  test("markImplemented and status parsing handle edge cases", () => {
+    const db = base();
+    regenerate(db);
+    expect(markImplemented(db, "catalog:skills", "agent", null)).toBe(true);
+    const first = (
+      db.query("SELECT implemented_at FROM recommendation WHERE key = 'catalog:skills'").get() as {
+        implemented_at: string;
+      }
+    ).implemented_at;
+    expect(markImplemented(db, "catalog:skills", "manual", null)).toBe(true);
+    expect(
+      (
+        db
+          .query("SELECT implemented_at FROM recommendation WHERE key = 'catalog:skills'")
+          .get() as { implemented_at: string }
+      ).implemented_at,
+    ).toBe(first);
+    expect(markImplemented(db, "catalog:does-not-exist", "manual", null)).toBe(false);
+    expect(parseStatusFilter("open")).toBe("open");
+    expect(parseStatusFilter("implemented")).toBe("implemented");
+    expect(parseStatusFilter("all")).toBe("all");
+    expect(parseStatusFilter("bogus")).toBeNull();
+    db.close();
+  });
+});
