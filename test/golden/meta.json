@@ -1,7 +1,7 @@
 {
   "generator": "scripts/gen-goldens.ts",
   "source_of_truth": "rust implementation",
-  "rust_rev": "781a4e4800509c186aa902642a272d373e4bee9e-dirty",
+  "rust_rev": "a94046463876b9cc22afc1de30a64f85b5791b3b",
   "fixtures": [
     "fixtures/claude/distill.jsonl",
     "fixtures/claude/enriched.jsonl",
