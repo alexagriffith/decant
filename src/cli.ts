@@ -25,6 +25,7 @@ import {
   parseStatusFilter,
   regenerate as regenerateRecommendations,
 } from "./recommendations.ts";
+import { serve as serveApp } from "./server.ts";
 import {
   byDimension,
   fileHotspots,
@@ -34,6 +35,12 @@ import {
   toolUsage,
   totals,
 } from "./stats.ts";
+import {
+  DEFAULT_DEBOUNCE_MS,
+  DEFAULT_SYNC_INTERVAL_MS,
+  startWatch,
+  type WatchEvent,
+} from "./watch.ts";
 
 export interface CliResult {
   code: number;
@@ -67,6 +74,7 @@ interface Archive {
 }
 
 type CliAction = () => number | undefined;
+type CliAsyncAction = () => Promise<number | undefined>;
 
 interface ArtifactOptions {
   out?: string;
@@ -102,6 +110,14 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   const run = (action: CliAction): void => {
     try {
       setCode(action() ?? 0);
+    } catch (error) {
+      io.writeErr(`error: ${error instanceof Error ? error.message : String(error)}\n`);
+      setCode(1);
+    }
+  };
+  const runAsync = async (action: CliAsyncAction): Promise<void> => {
+    try {
+      setCode((await action()) ?? 0);
     } catch (error) {
       io.writeErr(`error: ${error instanceof Error ? error.message : String(error)}\n`);
       setCode(1);
@@ -181,6 +197,107 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .option("--codex-dir <dir>", "override the Codex home directory")
     .action((commandOptions: { claudeDir?: string; codexDir?: string }) =>
       run(() => runSync(commandOptions)),
+    );
+
+  const emitWatchEvent = (event: WatchEvent): void => {
+    if (isJson(globals())) {
+      io.writeOut(`${JSON.stringify(event)}\n`);
+    } else if (!globals().quiet) {
+      io.writeErr(renderWatchEvent(event));
+    }
+  };
+
+  program
+    .command("watch")
+    .description("watch session directories and keep the archive current")
+    .option("--claude-dir <dir>", "override the Claude projects directory")
+    .option("--codex-dir <dir>", "override the Codex home directory")
+    .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
+    .option(
+      "--debounce-ms <ms>",
+      "filesystem event debounce window",
+      parseInteger,
+      DEFAULT_DEBOUNCE_MS,
+    )
+    .option("--no-fs-watch", "disable native filesystem watching and rely on sweeps")
+    .action(
+      (commandOptions: {
+        claudeDir?: string;
+        codexDir?: string;
+        intervalMs?: number;
+        debounceMs?: number;
+        fsWatch?: boolean;
+      }) =>
+        runAsync(async () => {
+          const config = resolve({
+            claudeDir: commandOptions.claudeDir,
+            codexDir: commandOptions.codexDir,
+          });
+          const stop = waitForProcessSignal();
+          const handle = startWatch({
+            config,
+            intervalMs: commandOptions.intervalMs,
+            debounceMs: commandOptions.debounceMs,
+            enableWatch: commandOptions.fsWatch !== false,
+            onEvent: emitWatchEvent,
+          });
+          await stop;
+          await handle.stop();
+        }),
+    );
+
+  program
+    .command("serve")
+    .description("serve the in-process web UI and keep the archive current")
+    .option("--host <host>", "host to bind", "127.0.0.1")
+    .option("--port <n>", "port to bind", parseInteger, 4577)
+    .option("--claude-dir <dir>", "override the Claude projects directory")
+    .option("--codex-dir <dir>", "override the Codex home directory")
+    .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
+    .option(
+      "--debounce-ms <ms>",
+      "filesystem event debounce window",
+      parseInteger,
+      DEFAULT_DEBOUNCE_MS,
+    )
+    .option("--no-fs-watch", "disable native filesystem watching and rely on sweeps")
+    .action(
+      (commandOptions: {
+        host?: string;
+        port?: number;
+        claudeDir?: string;
+        codexDir?: string;
+        intervalMs?: number;
+        debounceMs?: number;
+        fsWatch?: boolean;
+      }) =>
+        runAsync(async () => {
+          const config = resolve({
+            claudeDir: commandOptions.claudeDir,
+            codexDir: commandOptions.codexDir,
+          });
+          const server = serveApp({
+            config,
+            hostname: commandOptions.host ?? "127.0.0.1",
+            port: commandOptions.port ?? 4577,
+          });
+          const handle = startWatch({
+            config,
+            intervalMs: commandOptions.intervalMs,
+            debounceMs: commandOptions.debounceMs,
+            enableWatch: commandOptions.fsWatch !== false,
+            onEvent: emitWatchEvent,
+          });
+          if (!isJson(globals()) && !globals().quiet) {
+            io.writeErr(`serving http://${commandOptions.host ?? "127.0.0.1"}:${server.port}\n`);
+          }
+          try {
+            await waitForProcessSignal();
+          } finally {
+            server.stop();
+            await handle.stop();
+          }
+        }),
     );
 
   const addLs = (command: Command): void => {
@@ -833,6 +950,31 @@ function emitArtifact(
   return 0;
 }
 
+function renderWatchEvent(event: WatchEvent): string {
+  switch (event.type) {
+    case "ready":
+      return `watching ${event.dirs.length} source dirs\n`;
+    case "sync":
+      return `sync (${event.reason}): ${event.report.scanned} scanned, ${event.report.ingested} ingested, ${event.report.skipped} skipped, ${event.report.issues} issues, ${event.report.failed} failed\n`;
+    case "error":
+      return `error (${event.reason}): ${event.error}\n`;
+    case "stopped":
+      return "stopped\n";
+  }
+}
+
+function waitForProcessSignal(): Promise<void> {
+  return new Promise((resolve) => {
+    const done = (): void => {
+      process.off("SIGINT", done);
+      process.off("SIGTERM", done);
+      resolve();
+    };
+    process.once("SIGINT", done);
+    process.once("SIGTERM", done);
+  });
+}
+
 function dbInfo(archive: Archive): DbInfo {
   const version =
     (
@@ -857,6 +999,8 @@ function dbInfo(archive: Archive): DbInfo {
 
 const completionWords = [
   "sync",
+  "watch",
+  "serve",
   "session",
   "ls",
   "show",

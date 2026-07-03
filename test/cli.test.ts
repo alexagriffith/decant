@@ -197,9 +197,25 @@ describe("runCli", () => {
     const bash = await runCli(["completion", "bash"]);
     expect(bash).toMatchObject({ code: 0, stderr: "" });
     expect(bash.stdout).toContain("complete -F _decant_complete decant");
+    expect(bash.stdout).toContain("watch");
+    expect(bash.stdout).toContain("serve");
 
     const unknown = await runCli(["completion", "tcsh"]);
     expect(unknown.code).toBe(2);
     expect(unknown.stderr).toContain("unknown completion shell");
+  });
+
+  test("watch and serve modes are discoverable", async () => {
+    const watch = await runCli(["watch", "--help"]);
+    expect(watch).toMatchObject({ code: 0, stderr: "" });
+    expect(watch.stdout).toContain("keep the archive current");
+    expect(watch.stdout).toContain("--interval-ms");
+    expect(watch.stdout).toContain("--no-fs-watch");
+
+    const serve = await runCli(["serve", "--help"]);
+    expect(serve).toMatchObject({ code: 0, stderr: "" });
+    expect(serve.stdout).toContain("in-process web UI");
+    expect(serve.stdout).toContain("--host");
+    expect(serve.stdout).toContain("--port");
   });
 });
