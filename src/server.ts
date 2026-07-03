@@ -20,6 +20,7 @@ import {
   toolUsage,
   totals,
 } from "./stats.ts";
+import uiBundle from "./ui/index.html";
 
 export interface ServeOptions {
   config: Config;
@@ -37,6 +38,13 @@ export async function handleRequest(request: Request, config: Config): Promise<R
     }
     if (request.method === "GET" && url.pathname === "/api/health") {
       return json({ ok: true });
+    }
+    if (request.method === "GET" && url.pathname === "/api/config") {
+      return json({
+        dbPath: config.dbPath,
+        claudeDir: config.claudeDir,
+        codexDir: config.codexDir,
+      });
     }
     if (request.method === "POST" && url.pathname === "/api/sync") {
       return withDb(config, (db) => json(ingestSync(db, config)));
@@ -121,6 +129,9 @@ export async function handleRequest(request: Request, config: Config): Promise<R
           : json({ ok: false, key: body.key, error: "recommendation not found" }, 404);
       });
     }
+    if (request.method === "GET" && isUiPath(url.pathname)) {
+      return html(indexHtml());
+    }
     return json({ error: "not found" }, 404);
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : String(error) }, 500);
@@ -133,6 +144,16 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   return Bun.serve({
     hostname,
     port,
+    routes: {
+      "/": uiBundle,
+      "/sessions/:id": uiBundle,
+      "/search": uiBundle,
+      "/analytics": uiBundle,
+      "/insights": uiBundle,
+      "/tools": uiBundle,
+      "/files": uiBundle,
+      "/settings": uiBundle,
+    },
     fetch: (request) => handleRequest(request, options.config),
   });
 }
@@ -186,6 +207,19 @@ function parseOperation(value: string | null): Operation | null | false {
     : false;
 }
 
+function isUiPath(pathname: string): boolean {
+  return (
+    pathname === "/" ||
+    pathname === "/search" ||
+    pathname === "/analytics" ||
+    pathname === "/insights" ||
+    pathname === "/tools" ||
+    pathname === "/files" ||
+    pathname === "/settings" ||
+    /^\/sessions\/\d+$/.test(pathname)
+  );
+}
+
 function indexHtml(): string {
   return `<!doctype html>
 <html lang="en">
@@ -195,9 +229,8 @@ function indexHtml(): string {
     <title>decant</title>
   </head>
   <body>
-    <main id="root">
-      <h1>decant</h1>
-    </main>
+    <div id="root"></div>
+    <script type="module" src="/src/ui/main.tsx"></script>
   </body>
 </html>
 `;

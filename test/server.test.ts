@@ -96,7 +96,28 @@ describe("server routes", () => {
     const root = await route(config, "/");
     expect(root.status).toBe(200);
     expect(root.contentType).toBe("text/html; charset=utf-8");
-    expect(root.body).toContain("<h1>decant</h1>");
+    expect(root.body).toContain('<div id="root"></div>');
+    expect(root.body).toContain("/src/ui/main.tsx");
+  });
+
+  test("app routes fall back to the React shell and config is exposed locally", async () => {
+    const config = freshConfig();
+
+    const search = await route(config, "/search");
+    expect(search.status).toBe(200);
+    expect(search.contentType).toBe("text/html; charset=utf-8");
+
+    const detail = await route(config, "/sessions/123");
+    expect(detail.status).toBe(200);
+    expect(detail.contentType).toBe("text/html; charset=utf-8");
+
+    const localConfig = await route(config, "/api/config");
+    expect(localConfig.status).toBe(200);
+    expect(localConfig.body).toMatchObject({
+      dbPath: config.dbPath,
+      claudeDir: config.claudeDir,
+      codexDir: config.codexDir,
+    });
   });
 
   test("lists, gets, and searches sessions", async () => {
