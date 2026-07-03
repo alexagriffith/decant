@@ -34,6 +34,11 @@ Validated on a real corpus of ~1,500 sessions / 185k messages / 60k tool calls.
 
 ## Quick start
 
+TypeScript distribution work is staged in
+[`docs/distribution.md`](docs/distribution.md): `npx @dosu/decant`, Docker, and
+source installs all route through the single Bun + TypeScript app. The Rust
+commands below remain the pre-cutover path until Phase 6 removes the old tree.
+
 ```bash
 cargo build --release
 ./target/release/decant sync                 # ingest ~/.claude + ~/.codex into SQLite

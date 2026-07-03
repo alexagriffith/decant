@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1.7
+
+FROM oven/bun:1.3.9-slim AS build
+
+WORKDIR /app
+
+COPY package.json bun.lock tsconfig.json ./
+COPY npm ./npm
+COPY scripts ./scripts
+COPY src ./src
+
+RUN bun install --frozen-lockfile
+
+ARG TARGETPLATFORM
+RUN case "${TARGETPLATFORM}" in \
+      "linux/amd64") DECANT_TARGET="linux-x64" ;; \
+      "linux/arm64") DECANT_TARGET="linux-arm64" ;; \
+      *) echo "unsupported Docker target platform: ${TARGETPLATFORM}" >&2; exit 1 ;; \
+    esac; \
+    bun run scripts/build-binaries.ts --target "${DECANT_TARGET}" --out-dir /tmp/decant-bin; \
+    cp "/tmp/decant-bin/${DECANT_TARGET}/decant" /usr/local/bin/decant
+
+FROM debian:bookworm-slim AS runtime
+
+RUN groupadd --system decant \
+    && useradd --system --gid decant --home-dir /var/lib/decant --create-home decant \
+    && mkdir -p /var/lib/decant /sources/claude /sources/codex \
+    && chown -R decant:decant /var/lib/decant /sources
+
+COPY --from=build /usr/local/bin/decant /usr/local/bin/decant
+
+USER decant
+WORKDIR /var/lib/decant
+
+ENV DECANT_DB=/var/lib/decant/decant.db
+ENV DECANT_CLAUDE_DIR=/sources/claude
+ENV DECANT_CODEX_DIR=/sources/codex
+
+VOLUME ["/var/lib/decant"]
+EXPOSE 4577
+
+ENTRYPOINT ["/usr/local/bin/decant"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "4577", "--no-fs-watch", "--interval-ms", "45000"]

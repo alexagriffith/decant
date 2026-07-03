@@ -67,6 +67,16 @@ ts-test *ARGS:
 ts-fmt:
     bunx biome check --write .
 
+# Compile Bun standalone binaries (`ARGS`: --target native|all|darwin-arm64|...)
+[group('ts')]
+ts-build-binary *ARGS:
+    bun run scripts/build-binaries.ts {{ARGS}}
+
+# Stage publishable npm launcher + platform packages under dist/npm
+[group('ts')]
+ts-build-npm *ARGS:
+    bun run scripts/build-npm.ts {{ARGS}}
+
 # Regenerate src/schema.sql from the Rust implementation (source of truth)
 [group('ts')]
 ts-gen-schema:
