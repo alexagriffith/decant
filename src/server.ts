@@ -12,11 +12,15 @@ import {
   regenerate as regenerateRecommendations,
 } from "./recommendations.ts";
 import {
+  activity as activityStats,
   byDimension,
+  dateBounds,
   fileHotspots,
   mcpUsage,
+  modelSparklines,
   parseDimension,
   parseFileGroup,
+  todayTotals,
   toolUsage,
   totals,
 } from "./stats.ts";
@@ -29,6 +33,14 @@ export interface ServeOptions {
 }
 
 type Db = ReturnType<typeof openDb>;
+
+const syncStatus = {
+  last_sync_at: null as string | null,
+  in_progress: false,
+  last_report: null as string | null,
+  last_error: null as string | null,
+  ingested_count: null as number | null,
+};
 
 export async function handleRequest(request: Request, config: Config): Promise<Response> {
   const url = new URL(request.url);
@@ -46,8 +58,17 @@ export async function handleRequest(request: Request, config: Config): Promise<R
         codexDir: config.codexDir,
       });
     }
+    if (
+      request.method === "GET" &&
+      (url.pathname === "/api/sync-status" || url.pathname === "/api/metadata/sync-status")
+    ) {
+      return json({
+        ...syncStatus,
+        timestamp: new Date().toISOString(),
+      });
+    }
     if (request.method === "POST" && url.pathname === "/api/sync") {
-      return withDb(config, (db) => json(ingestSync(db, config)));
+      return syncNow(config);
     }
     if (request.method === "GET" && url.pathname === "/api/sessions") {
       return withDb(config, (db) =>
@@ -82,6 +103,28 @@ export async function handleRequest(request: Request, config: Config): Promise<R
         return json({ error: "unknown dimension" }, 400);
       }
       return withDb(config, (db) => json(byDimension(db, dimension)));
+    }
+    if (request.method === "GET" && url.pathname === "/api/analytics/activity") {
+      return withDb(config, (db) => json(activityStats(db)));
+    }
+    if (request.method === "GET" && url.pathname === "/api/analytics/model-sparklines") {
+      return withDb(config, (db) => json(modelSparklines(db)));
+    }
+    if (request.method === "GET" && url.pathname === "/api/analytics/now") {
+      return withDb(config, (db) =>
+        json({
+          today: todayTotals(db),
+          active_sessions: [],
+          last_sync_at: syncStatus.last_sync_at,
+          sync_in_progress: syncStatus.in_progress,
+        }),
+      );
+    }
+    if (
+      request.method === "GET" &&
+      (url.pathname === "/api/date-bounds" || url.pathname === "/api/metadata/date-bounds")
+    ) {
+      return withDb(config, (db) => json(dateBounds(db)));
     }
     if (request.method === "GET" && url.pathname === "/api/files") {
       const group = parseFileGroup(url.searchParams.get("group") ?? "path");
@@ -135,6 +178,28 @@ export async function handleRequest(request: Request, config: Config): Promise<R
     return json({ error: "not found" }, 404);
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+  }
+}
+
+function syncNow(config: Config): Response {
+  syncStatus.in_progress = true;
+  syncStatus.last_error = null;
+  try {
+    return withDb(config, (db) => {
+      const report = ingestSync(db, config);
+      syncStatus.in_progress = false;
+      syncStatus.last_sync_at = new Date().toISOString();
+      syncStatus.last_report =
+        `scanned ${report.scanned}, ingested ${report.ingested}, skipped ${report.skipped}, ` +
+        `issues ${report.issues}, failed ${report.failed}`;
+      syncStatus.ingested_count = report.ingested;
+      return json(report);
+    });
+  } catch (error) {
+    syncStatus.in_progress = false;
+    syncStatus.last_sync_at = new Date().toISOString();
+    syncStatus.last_error = error instanceof Error ? error.message : String(error);
+    throw error;
   }
 }
 

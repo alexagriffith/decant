@@ -181,6 +181,40 @@ describe("server routes", () => {
     );
   });
 
+  test("returns metadata and extended analytics routes", async () => {
+    const config = freshConfig();
+    seed(config);
+
+    const activity = await route(config, "/api/analytics/activity");
+    expect(activity.status).toBe(200);
+    const activityBody = activity.body as {
+      by_hour: unknown[];
+      by_weekday: unknown[];
+      timezone: string;
+    };
+    expect(Array.isArray(activityBody.by_hour)).toBe(true);
+    expect(Array.isArray(activityBody.by_weekday)).toBe(true);
+    expect(activityBody.by_hour).toHaveLength(24);
+    expect(activityBody.by_weekday).toHaveLength(7);
+    expect(activityBody.timezone).toStartWith("UTC");
+
+    const sparks = await route(config, "/api/analytics/model-sparklines");
+    expect(sparks.status).toBe(200);
+    expect(sparks.body).toMatchObject({ days: expect.any(Array), models: expect.any(Object) });
+
+    const now = await route(config, "/api/analytics/now");
+    expect(now.status).toBe(200);
+    expect(now.body).toMatchObject({
+      today: expect.objectContaining({ sessions: expect.any(Number) }),
+      active_sessions: [],
+      sync_in_progress: false,
+    });
+
+    const bounds = await route(config, "/api/date-bounds");
+    expect(bounds.status).toBe(200);
+    expect(bounds.body).toMatchObject({ min: "2026-05-01", max: "2026-05-04" });
+  });
+
   test("mark recommendation updates status", async () => {
     const config = freshConfig();
     seed(config);
@@ -224,6 +258,14 @@ describe("server routes", () => {
       ingested: 0,
       failed: 0,
       cancelled: false,
+    });
+
+    const status = await route(config, "/api/sync-status");
+    expect(status.status).toBe(200);
+    expect(status.body).toMatchObject({
+      in_progress: false,
+      ingested_count: 0,
+      last_error: null,
     });
   });
 });

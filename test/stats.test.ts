@@ -9,12 +9,16 @@ import { upsertSession } from "../src/ingest.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 import {
+  activity,
   byDimension,
+  dateBounds,
   fileHotspots,
   mcpUsage,
+  modelSparklines,
   parseDimension,
   parseFileGroup,
   sessionFacets,
+  todayTotals,
   toolUsage,
   totals,
 } from "../src/stats.ts";
@@ -166,6 +170,31 @@ describe("stats rollups", () => {
     expect(facets?.turn_count).toBe(1);
     expect((facets?.active_seconds ?? 0) > 0).toBe(true);
     expect(sessionFacets(db, 999_999)).toBeNull();
+    db.close();
+  });
+
+  test("activity histograms are padded and date bounds span sessions", () => {
+    const db = seededEnriched();
+    const got = activity(db);
+    expect(got.by_hour).toHaveLength(24);
+    expect(got.by_weekday).toHaveLength(7);
+    expect(got.by_hour.reduce((sum, count) => sum + count, 0)).toBe(2);
+    expect(got.timezone).toStartWith("UTC");
+
+    const bounds = dateBounds(db);
+    expect(bounds.min).toBe("2026-05-03");
+    expect(bounds.max).toBe("2026-05-04");
+    db.close();
+  });
+
+  test("model sparklines share a day axis and today totals are scoped", () => {
+    const db = seededEnriched();
+    const sparks = modelSparklines(db);
+    expect(sparks.days).toEqual(["2026-05-03", "2026-05-04"]);
+    for (const counts of Object.values(sparks.models)) {
+      expect(counts).toHaveLength(sparks.days.length);
+    }
+    expect(todayTotals(db).sessions).toBe(0);
     db.close();
   });
 

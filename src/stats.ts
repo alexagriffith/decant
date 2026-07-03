@@ -210,6 +210,97 @@ export function sessionFacets(db: Database, sessionId: number): SessionFacetRow 
     .get(sessionId) as SessionFacetRow | null;
 }
 
+export interface Activity {
+  by_hour: number[];
+  by_weekday: number[];
+  timezone: string;
+  peak_hour: number | null;
+  peak_weekday: number | null;
+}
+
+export function activity(db: Database): Activity {
+  const byHour = bucket(db, "strftime('%H', s.started_at, 'localtime')", 24);
+  const byWeekday = bucket(db, "strftime('%w', s.started_at, 'localtime')", 7);
+  return {
+    by_hour: byHour,
+    by_weekday: byWeekday,
+    timezone: localTimezone(),
+    peak_hour: peak(byHour),
+    peak_weekday: peak(byWeekday),
+  };
+}
+
+export interface ModelSparklines {
+  models: Record<string, number[]>;
+  days: string[];
+}
+
+export function modelSparklines(db: Database): ModelSparklines {
+  const rows = db
+    .query(
+      `SELECT COALESCE(s.model, '(unknown)') AS model,
+              substr(s.started_at, 1, 10) AS day,
+              COUNT(*) AS count
+       FROM session s
+       WHERE s.started_at IS NOT NULL
+       GROUP BY model, day
+       ORDER BY model ASC, day ASC`,
+    )
+    .all() as { model: string; day: string; count: number }[];
+  const days = [...new Set(rows.map((row) => row.day))].sort();
+  const dayIndex = new Map(days.map((day, index) => [day, index]));
+  const models: Record<string, number[]> = {};
+  for (const row of rows) {
+    if (models[row.model] == null) {
+      models[row.model] = Array.from({ length: days.length }, () => 0);
+    }
+    const modelCounts = models[row.model];
+    const index = dayIndex.get(row.day);
+    if (index != null && modelCounts != null) {
+      modelCounts[index] = row.count;
+    }
+  }
+  return { models, days };
+}
+
+export interface DateBounds {
+  min: string | null;
+  max: string | null;
+}
+
+export function dateBounds(db: Database): DateBounds {
+  return db
+    .query(
+      `SELECT MIN(substr(started_at, 1, 10)) AS min,
+              MAX(substr(started_at, 1, 10)) AS max
+       FROM session
+       WHERE started_at IS NOT NULL`,
+    )
+    .get() as DateBounds;
+}
+
+export function todayTotals(db: Database): Totals {
+  return db
+    .query(
+      `SELECT
+         COUNT(*) AS sessions,
+         (SELECT COUNT(*) FROM message m JOIN session s2 ON s2.id = m.session_id
+          WHERE substr(s2.started_at, 1, 10) = date('now', 'localtime')) AS messages,
+         (SELECT COUNT(*) FROM tool_call t JOIN session s3 ON s3.id = t.session_id
+          WHERE substr(s3.started_at, 1, 10) = date('now', 'localtime')) AS tool_calls,
+         COALESCE(SUM(total_input_tokens), 0) AS input_tokens,
+         COALESCE(SUM(total_output_tokens), 0) AS output_tokens,
+         COALESCE(SUM(total_cache_read_tokens), 0) AS cache_read_tokens,
+         COALESCE(SUM(total_cache_creation_tokens), 0) AS cache_creation_tokens,
+         COALESCE(SUM(total_reasoning_tokens), 0) AS reasoning_tokens,
+         COALESCE(SUM(est_reasoning_tokens), 0) AS est_reasoning_tokens,
+         COALESCE(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
+       FROM session
+       WHERE substr(started_at, 1, 10) = date('now', 'localtime')`,
+    )
+    .get() as Totals;
+}
+
 function dimensionSql(dimension: Dimension): { groupExpr: string; join: string } {
   switch (dimension) {
     case "tool":
@@ -241,6 +332,48 @@ function fileGroupSql(group: FileGroup): { keyExpr: string; projectExpr: string;
         join: "JOIN session s ON s.id = f.session_id",
       };
   }
+}
+
+function bucket(db: Database, expr: string, size: number): number[] {
+  const out = Array.from({ length: size }, () => 0);
+  const rows = db
+    .query(
+      `SELECT ${expr} AS key, COUNT(*) AS count
+       FROM session s
+       WHERE s.started_at IS NOT NULL
+       GROUP BY key`,
+    )
+    .all() as { key: string | null; count: number }[];
+  for (const row of rows) {
+    const key = row.key == null || row.key === "" ? Number.NaN : Number.parseInt(row.key, 10);
+    if (Number.isInteger(key) && key >= 0 && key < size) {
+      out[key] = row.count;
+    }
+  }
+  return out;
+}
+
+function peak(counts: number[]): number | null {
+  let bestIndex: number | null = null;
+  let bestCount = 0;
+  for (const [index, count] of counts.entries()) {
+    if (count > bestCount) {
+      bestIndex = index;
+      bestCount = count;
+    }
+  }
+  return bestIndex;
+}
+
+function localTimezone(): string {
+  const offset = -new Date().getTimezoneOffset();
+  const sign = offset < 0 ? "-" : "+";
+  const absolute = Math.abs(offset);
+  const hours = Math.floor(absolute / 60)
+    .toString()
+    .padStart(2, "0");
+  const minutes = (absolute % 60).toString().padStart(2, "0");
+  return `UTC${sign}${hours}:${minutes}`;
 }
 
 function normalizeLimit(value: number | null | undefined, fallback: number): number {
