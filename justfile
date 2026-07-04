@@ -4,6 +4,11 @@
 default:
     @just --list --unsorted
 
+# Local dev convenience wrappers
+[group('dev')]
+up *ARGS:
+    bun run dev -- {{ARGS}}
+
 # Quality gates
 [group('gates')]
 check: ts-check dist-check
@@ -58,38 +63,38 @@ docker-buildx *ARGS:
 # CLI
 [group('cli')]
 sync *ARGS:
-    bun src/cli.ts sync {{ARGS}}
+    bun run src/cli.ts sync {{ARGS}}
 
 [group('cli')]
 watch *ARGS:
-    bun src/cli.ts watch {{ARGS}}
+    bun run src/cli.ts watch {{ARGS}}
 
 [group('cli')]
 serve *ARGS:
-    bun src/cli.ts serve {{ARGS}}
+    bun run src/cli.ts serve {{ARGS}}
 
 [group('cli')]
 ls *ARGS:
-    bun src/cli.ts ls {{ARGS}}
+    bun run src/cli.ts ls {{ARGS}}
 
 [group('cli')]
 search QUERY *ARGS:
-    bun src/cli.ts search "{{QUERY}}" {{ARGS}}
+    bun run src/cli.ts search "{{QUERY}}" {{ARGS}}
 
 [group('cli')]
 stats *ARGS:
-    bun src/cli.ts stats {{ARGS}}
+    bun run src/cli.ts stats {{ARGS}}
 
 [group('cli')]
 db-info *ARGS:
-    bun src/cli.ts db info {{ARGS}}
+    bun run src/cli.ts db info {{ARGS}}
 
 # Data / maintenance
 [group('data')]
 [confirm("Delete ~/.decant/decant.db and re-ingest from ~/.claude + ~/.codex?")]
 db-rebuild:
     rm -f ~/.decant/decant.db ~/.decant/decant.db-wal ~/.decant/decant.db-shm
-    bun src/cli.ts sync
+    bun run src/cli.ts sync
 
 [group('data')]
 hooks:

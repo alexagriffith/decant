@@ -35,6 +35,9 @@ import {
 } from "./stats.ts";
 import uiBundle from "./ui/index.html";
 
+export const DEFAULT_SERVE_HOST = "127.0.0.1";
+export const DEFAULT_SERVE_PORT = 3000;
+
 export interface ServeOptions {
   config: Config;
   port?: number;
@@ -45,6 +48,8 @@ type Db = ReturnType<typeof openDb>;
 type ServerEvent = { type: string };
 interface RequestContext {
   db?: Db;
+  boundHostname?: string;
+  remoteAddress?: string | null;
 }
 
 const syncStatus = {
@@ -72,7 +77,7 @@ export async function handleRequest(
   context: RequestContext = {},
 ): Promise<Response> {
   const url = new URL(request.url);
-  const securityFailure = validateLocalRequest(request, url);
+  const securityFailure = validateLocalRequest(request, url, context);
   if (securityFailure != null) {
     return securityFailure;
   }
@@ -144,6 +149,10 @@ export async function handleRequest(
       });
     }
     if (request.method === "POST" && url.pathname === "/api/sync") {
+      const contentTypeFailure = requireJsonRequest(request);
+      if (contentTypeFailure != null) {
+        return contentTypeFailure;
+      }
       return syncNow(config);
     }
     if (request.method === "GET" && url.pathname === "/api/sessions") {
@@ -374,8 +383,8 @@ function formatSse(event: ServerEvent): string {
 }
 
 export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
-  const hostname = options.hostname ?? "127.0.0.1";
-  const port = options.port ?? 4577;
+  const hostname = options.hostname ?? DEFAULT_SERVE_HOST;
+  const port = options.port ?? DEFAULT_SERVE_PORT;
   mkdirSync(dirname(options.config.dbPath), { recursive: true });
   const db = openDb(options.config.dbPath);
   const server = Bun.serve({
@@ -391,7 +400,12 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       "/files": uiBundle,
       "/settings": uiBundle,
     },
-    fetch: (request) => handleRequest(request, options.config, { db }),
+    fetch: (request, bunServer) =>
+      handleRequest(request, options.config, {
+        db,
+        boundHostname: hostname,
+        remoteAddress: bunServer.requestIP(request)?.address ?? null,
+      }),
   });
   const stop = server.stop.bind(server);
   let closed = false;
@@ -439,14 +453,22 @@ function json(value: unknown, status = 200): Response {
   });
 }
 
-function validateLocalRequest(request: Request, url: URL): Response | null {
+function validateLocalRequest(
+  request: Request,
+  url: URL,
+  context: RequestContext,
+): Response | null {
   if (!isProtectedPath(url.pathname)) {
     return null;
   }
   if (!isLoopbackHost(url.hostname)) {
     return json({ error: "forbidden host" }, 403);
   }
-  if (isMutatingMethod(request.method) && !isAllowedWriteRequest(request)) {
+  const boundToLoopback = isLoopbackHost(context.boundHostname ?? "127.0.0.1");
+  if (!boundToLoopback && !isLoopbackPeer(context.remoteAddress)) {
+    return json({ error: "forbidden remote" }, 403);
+  }
+  if (isMutatingMethod(request.method) && !isAllowedWriteRequest(request, boundToLoopback)) {
     return json({ error: "cross-origin writes are forbidden" }, 403);
   }
   return null;
@@ -460,12 +482,15 @@ function isMutatingMethod(method: string): boolean {
   return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
 }
 
-function isAllowedWriteRequest(request: Request): boolean {
+function isAllowedWriteRequest(request: Request, boundToLoopback: boolean): boolean {
   const origin = request.headers.get("origin");
   if (origin != null && !isLoopbackOrigin(origin)) {
     return false;
   }
   const site = request.headers.get("sec-fetch-site")?.toLowerCase();
+  if (!boundToLoopback && origin == null && site == null) {
+    return false;
+  }
   return site == null || site === "same-origin" || site === "same-site" || site === "none";
 }
 
@@ -481,8 +506,38 @@ function isLoopbackOrigin(origin: string): boolean {
 }
 
 function isLoopbackHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "[::1]";
+  const normalized = normalizeHost(hostname);
+  return normalized === "localhost" || normalized === "::1" || isIpv4Loopback(normalized);
+}
+
+function isLoopbackPeer(address: string | null | undefined): boolean {
+  if (address == null) {
+    return false;
+  }
+  const normalized = normalizeHost(address);
+  if (normalized.startsWith("::ffff:")) {
+    return isIpv4Loopback(normalized.slice("::ffff:".length));
+  }
+  return normalized === "::1" || isIpv4Loopback(normalized);
+}
+
+function normalizeHost(hostname: string): string {
+  const normalized = hostname.trim().toLowerCase();
+  return normalized.startsWith("[") && normalized.endsWith("]")
+    ? normalized.slice(1, -1)
+    : normalized;
+}
+
+function isIpv4Loopback(hostname: string): boolean {
+  const parts = hostname.split(".");
+  if (parts.length !== 4) {
+    return false;
+  }
+  const octets = parts.map((part) => Number.parseInt(part, 10));
+  return (
+    octets.every((octet, index) => String(octet) === parts[index] && octet >= 0 && octet <= 255) &&
+    octets[0] === 127
+  );
 }
 
 function requireJsonRequest(request: Request): Response | null {

@@ -16,16 +16,16 @@ on-ramp.
 ```bash
 git clone https://github.com/dosu-ai/decant
 cd decant
-bun install --frozen-lockfile
-pre-commit install
+bun run dev
 ```
 
-Try it end to end:
+`bun run dev` installs dependencies with `bun install --frozen-lockfile`, starts the
+local UI, and runs the startup sync. Open `http://127.0.0.1:3000`.
+
+Install optional hooks after setup if you use pre-commit locally:
 
 ```bash
-bun src/cli.ts sync
-bun src/cli.ts ls
-bun src/cli.ts serve
+pre-commit install
 ```
 
 ## Make your change

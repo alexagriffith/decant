@@ -77,7 +77,7 @@ async function route(
   if (init.body != null && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
-  const request = new Request(`http://127.0.0.1:4577${path}`, { ...init, headers });
+  const request = new Request(`http://127.0.0.1:3000${path}`, { ...init, headers });
   const response = await handleRequest(request, config);
   const contentType = response.headers.get("content-type");
   const body = contentType?.startsWith("application/json")
@@ -126,7 +126,7 @@ describe("server routes", () => {
 
   test("events route streams hello and published updates", async () => {
     const config = freshConfig();
-    const response = await handleRequest(new Request("http://127.0.0.1:4577/api/events"), config);
+    const response = await handleRequest(new Request("http://127.0.0.1:3000/api/events"), config);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
 
@@ -153,11 +153,53 @@ describe("server routes", () => {
     expect(await response.json()).toEqual({ error: "forbidden host" });
   });
 
+  test("rejects protected routes from non-loopback peers on broad binds", async () => {
+    const config = freshConfig();
+
+    const spoofedHost = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/config"),
+      config,
+      { boundHostname: "0.0.0.0", remoteAddress: "192.168.1.20" },
+    );
+    expect(spoofedHost.status).toBe(403);
+    expect(await spoofedHost.json()).toEqual({ error: "forbidden remote" });
+
+    const loopbackRead = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/config"),
+      config,
+      { boundHostname: "0.0.0.0", remoteAddress: "::ffff:127.0.0.1" },
+    );
+    expect(loopbackRead.status).toBe(200);
+
+    const bareLocalWrite = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+      config,
+      { boundHostname: "0.0.0.0", remoteAddress: "127.0.0.1" },
+    );
+    expect(bareLocalWrite.status).toBe(403);
+    expect(await bareLocalWrite.json()).toEqual({ error: "cross-origin writes are forbidden" });
+
+    const browserLocalWrite = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+        body: "{}",
+      }),
+      config,
+      { boundHostname: "0.0.0.0", remoteAddress: "127.0.0.1" },
+    );
+    expect(browserLocalWrite.status).toBe(200);
+  });
+
   test("rejects cross-origin and non-json mutating requests", async () => {
     const config = freshConfig();
 
     const crossSite = await handleRequest(
-      new Request("http://127.0.0.1:4577/api/launch/agent", {
+      new Request("http://127.0.0.1:3000/api/launch/agent", {
         method: "POST",
         headers: {
           "content-type": "text/plain",
@@ -172,7 +214,7 @@ describe("server routes", () => {
     expect(await crossSite.json()).toEqual({ error: "cross-origin writes are forbidden" });
 
     const textPlain = await handleRequest(
-      new Request("http://127.0.0.1:4577/api/search", {
+      new Request("http://127.0.0.1:3000/api/search", {
         method: "POST",
         headers: { "content-type": "text/plain" },
         body: JSON.stringify({ query: "auth" }),
@@ -181,6 +223,15 @@ describe("server routes", () => {
     );
     expect(textPlain.status).toBe(415);
     expect(await textPlain.json()).toEqual({ error: "content-type must be application/json" });
+
+    const syncWithoutJson = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/sync", { method: "POST" }),
+      config,
+    );
+    expect(syncWithoutJson.status).toBe(415);
+    expect(await syncWithoutJson.json()).toEqual({
+      error: "content-type must be application/json",
+    });
   });
 
   test("settings routes read options and persist sanitized choices", async () => {
@@ -369,7 +420,7 @@ describe("server routes", () => {
   test("sync route ingests configured source directories", async () => {
     const config = freshConfig();
 
-    const result = await route(config, "/api/sync", { method: "POST" });
+    const result = await route(config, "/api/sync", { method: "POST", body: "{}" });
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       scanned: 0,

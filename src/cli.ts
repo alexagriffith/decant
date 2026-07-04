@@ -25,7 +25,12 @@ import {
   markImplemented,
   parseStatusFilter,
 } from "./recommendations.ts";
-import { publishServerEvent, serve as serveApp } from "./server.ts";
+import {
+  DEFAULT_SERVE_HOST,
+  DEFAULT_SERVE_PORT,
+  publishServerEvent,
+  serve as serveApp,
+} from "./server.ts";
 import {
   byDimension,
   fileHotspots,
@@ -265,8 +270,8 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   program
     .command("serve")
     .description("serve the in-process web UI and keep the archive current")
-    .option("--host <host>", "host to bind", "127.0.0.1")
-    .option("--port <n>", "port to bind", parseInteger, 4577)
+    .option("--host <host>", "host to bind", DEFAULT_SERVE_HOST)
+    .option("--port <n>", "port to bind", parseInteger, DEFAULT_SERVE_PORT)
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
@@ -294,8 +299,8 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           });
           const server = serveApp({
             config,
-            hostname: commandOptions.host ?? "127.0.0.1",
-            port: commandOptions.port ?? 4577,
+            hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
+            port: commandOptions.port ?? DEFAULT_SERVE_PORT,
           });
           const handle = startWatch({
             config,
@@ -305,7 +310,9 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             onEvent: emitWatchEvent,
           });
           if (!isJson(globals()) && !globals().quiet) {
-            io.writeErr(`serving http://${commandOptions.host ?? "127.0.0.1"}:${server.port}\n`);
+            io.writeErr(
+              `serving http://${commandOptions.host ?? DEFAULT_SERVE_HOST}:${server.port}\n`,
+            );
           }
           try {
             await waitForProcessSignal();

@@ -2,7 +2,7 @@
 
 `decant serve` runs the CLI, watcher, JSON routes, SSE stream, and React UI in
 one Bun process. These routes are internal app routes, not a versioned public
-contract.
+contract. By default, the server listens on `http://127.0.0.1:3000`.
 
 ## UI
 

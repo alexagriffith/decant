@@ -272,5 +272,6 @@ describe("runCli", () => {
     expect(serve.stdout).toContain("in-process web UI");
     expect(serve.stdout).toContain("--host");
     expect(serve.stdout).toContain("--port");
+    expect(serve.stdout).toContain("(default: 3000)");
   });
 });
