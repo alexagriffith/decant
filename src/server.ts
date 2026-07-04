@@ -318,7 +318,7 @@ interface EventClient {
   close(): void;
 }
 
-function eventStream(heartbeatMs = 15_000): Response {
+function eventStream(heartbeatMs = 5_000): Response {
   const encoder = new TextEncoder();
   let client: EventClient | null = null;
   let heartbeat: Timer | null = null;
