@@ -257,6 +257,16 @@ describe("server routes", () => {
     expect(totals.status).toBe(200);
     expect(totals.body).toMatchObject({ sessions: 3, tool_calls: expect.any(Number) });
 
+    const scopedTotals = await route(config, "/api/stats/summary?from=2026-05-04&to=2026-05-04");
+    expect(scopedTotals.status).toBe(200);
+    expect(scopedTotals.body).toMatchObject({ sessions: 1 });
+
+    const scopedSessions = await route(config, "/api/sessions?from=2026-05-04&to=2026-05-04");
+    expect(scopedSessions.status).toBe(200);
+    expect(scopedSessions.body).toEqual([
+      expect.objectContaining({ source_session_id: "sess-codex-enr" }),
+    ]);
+
     const byTool = await route(config, "/api/stats/by-dimension?dim=tool");
     expect(byTool.status).toBe(200);
     expect(byTool.body).toEqual(
