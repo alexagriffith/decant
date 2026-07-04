@@ -110,7 +110,6 @@ svg {
   display: block;
   width: 1em;
   height: 1em;
-  fill: currentColor;
 }
 
 :focus-visible {
@@ -376,6 +375,60 @@ nav a[aria-current="page"] {
   color: var(--fg);
 }
 
+.date-range-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.date-range-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 2px;
+}
+
+.date-range-buttons button {
+  display: inline-grid;
+  min-width: 2.25rem;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 8px;
+}
+
+.date-range-buttons button:hover {
+  background: var(--elevated);
+  color: var(--fg);
+}
+
+.date-range-buttons button[aria-pressed="true"] {
+  background: var(--elevated);
+  color: var(--fg);
+}
+
+.date-range-buttons .icon-period-button {
+  min-width: 28px;
+  padding: 0;
+}
+
+.date-range-buttons svg {
+  width: 14px;
+  height: 14px;
+}
+
 .content {
   flex: 1;
   padding: 24px 32px 48px;
@@ -544,6 +597,75 @@ table {
   font-size: 14px;
 }
 
+.data-table {
+  min-width: 720px;
+  table-layout: fixed;
+}
+
+.mcp-table {
+  min-width: 680px;
+}
+
+.tools-table {
+  min-width: 860px;
+}
+
+.files-table {
+  min-width: 960px;
+}
+
+.col-wide {
+  width: 58%;
+}
+
+.col-number {
+  width: 14%;
+}
+
+.col-tool {
+  width: 30%;
+}
+
+.col-kind {
+  width: 12%;
+}
+
+.col-server {
+  width: 30%;
+}
+
+.col-file {
+  width: 34%;
+}
+
+.col-project {
+  width: 18%;
+}
+
+.files-table .col-file {
+  width: 27%;
+}
+
+.files-table .col-project {
+  width: 17%;
+}
+
+.files-table .col-count {
+  width: 7.5%;
+}
+
+.files-table .col-sessions {
+  width: 8%;
+}
+
+.files-table .col-total {
+  width: 6%;
+}
+
+.files-table .col-date {
+  width: 12%;
+}
+
 th,
 td {
   border-bottom: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
@@ -570,6 +692,66 @@ th {
   font-weight: 650;
   letter-spacing: 0;
   text-transform: uppercase;
+}
+
+.data-table td,
+.data-table th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-table th,
+.data-table td {
+  padding-right: 10px;
+  padding-left: 10px;
+}
+
+.files-table th,
+.files-table td {
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
+.sort-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  padding: 0;
+}
+
+.sort-header.is-right {
+  flex-direction: row-reverse;
+}
+
+.sort-header:hover,
+.sort-header.is-active {
+  color: var(--fg);
+}
+
+.sort-header svg {
+  display: none;
+  width: 12px;
+  height: 12px;
+  opacity: 0;
+}
+
+.sort-header:hover svg {
+  display: block;
+  opacity: 0.45;
+}
+
+.sort-header.is-active svg {
+  display: block;
+  opacity: 1;
 }
 
 td a {
@@ -611,11 +793,20 @@ td a:hover {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .icon-cell svg {
   width: 16px;
   height: 16px;
+  flex: 0 0 auto;
+}
+
+.icon-cell span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-filter,
@@ -633,12 +824,19 @@ select {
   width: min(22rem, 44vw);
 }
 
+.infinite-sentinel {
+  width: 1px;
+  height: 1px;
+}
+
 input::placeholder {
   color: var(--faint);
 }
 
 select {
   min-width: 11rem;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .secondary-button {
@@ -687,6 +885,10 @@ select {
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
+}
+
+.brand-mark {
+  fill: currentColor;
 }
 
 .tone-accent {
@@ -782,6 +984,10 @@ select {
   margin: 0 auto;
   display: grid;
   gap: 24px;
+}
+
+.settings-page {
+  width: min(100%, 42rem);
 }
 
 .search-form {
@@ -1284,13 +1490,15 @@ mark {
 
 .catalog-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+  grid-template-columns: repeat(3, minmax(16rem, 1fr));
   gap: 12px;
 }
 
 .catalog-card {
   display: flex;
   flex-direction: column;
+  min-height: 100%;
   padding: 16px;
 }
 
@@ -1310,20 +1518,30 @@ mark {
   font-weight: 650;
 }
 
+.catalog-card .recommendation-actions {
+  margin-top: auto;
+  padding-top: 16px;
+}
+
 .settings-form {
   display: grid;
-  gap: 24px;
-  padding: 24px;
+  padding: 8px 0;
 }
 
 .setting-select {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 18px;
+  gap: 20px;
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
+  padding: 16px 20px;
 }
 
-.setting-select span {
+.setting-select:last-child {
+  border-bottom: 0;
+}
+
+.setting-select > span:first-child {
   min-width: 0;
 }
 
@@ -1333,13 +1551,41 @@ mark {
 }
 
 .setting-select strong {
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .setting-select small {
-  margin-top: 2px;
+  margin-top: 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.select-shell {
+  position: relative;
+  display: inline-flex;
+  width: 16rem;
+  max-width: 100%;
+}
+
+.select-shell select {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  border-radius: 9px;
+  padding-right: 42px;
+  padding-left: 14px;
+}
+
+.select-shell svg {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  pointer-events: none;
+  transform: translateY(-50%);
 }
 
 .settings-note {
@@ -1643,10 +1889,25 @@ pre {
 @media (max-width: 640px) {
   .panel-heading,
   .inline-heading,
-  .section-title-row,
-  .setting-select {
+  .section-title-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .date-range-control {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+
+  .date-range-buttons {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .setting-select {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 14px 16px;
   }
 
   .session-filter,

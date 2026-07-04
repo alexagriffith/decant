@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { sessionDatePredicate } from "./date-filter.ts";
 
 export interface SessionSummary {
   id: number;
@@ -20,6 +21,8 @@ export interface ListFilter {
   tool?: string | null;
   limit?: number;
   offset?: number;
+  from?: string | null;
+  to?: string | null;
 }
 
 interface SessionSummaryRow extends Omit<SessionSummary, "is_archived"> {
@@ -29,20 +32,27 @@ interface SessionSummaryRow extends Omit<SessionSummary, "is_archived"> {
 export function listSessions(db: Database, filter: ListFilter = {}): SessionSummary[] {
   const limit = normalizeLimit(filter.limit, 50);
   const offset = normalizeOffset(filter.offset);
+  const clauses: string[] = [];
+  const params: (string | number)[] = [];
+  if (filter.tool != null) {
+    clauses.push("s.tool = ?");
+    params.push(filter.tool);
+  }
+  const date = sessionDatePredicate("s", filter);
+  if (date.sql !== "") {
+    clauses.push(date.sql);
+    params.push(...date.params);
+  }
+  const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
   const base = `
     SELECT s.id, s.tool, s.source_session_id, s.title, p.path AS project_path,
            s.model, s.started_at, s.ended_at, s.message_count,
            s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
            s.is_archived
     FROM session s LEFT JOIN project p ON p.id = s.project_id`;
-  const rows =
-    filter.tool != null
-      ? (db
-          .query(`${base} WHERE s.tool = ?1 ORDER BY s.started_at DESC LIMIT ?2 OFFSET ?3`)
-          .all(filter.tool, limit, offset) as SessionSummaryRow[])
-      : (db
-          .query(`${base} ORDER BY s.started_at DESC LIMIT ?1 OFFSET ?2`)
-          .all(limit, offset) as SessionSummaryRow[]);
+  const rows = db
+    .query(`${base}${where} ORDER BY s.started_at DESC LIMIT ? OFFSET ?`)
+    .all(...params, limit, offset) as SessionSummaryRow[];
   return rows.map(mapSessionSummary);
 }
 

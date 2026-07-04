@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Config } from "./config.ts";
+import { dateFilterFromSearch } from "./date-filter.ts";
 import { openDb } from "./db.ts";
 import type { Operation } from "./enrich.ts";
 import { sync as ingestSync } from "./ingest.ts";
@@ -75,6 +76,7 @@ export async function handleRequest(
   if (securityFailure != null) {
     return securityFailure;
   }
+  const dateFilter = dateFilterFromSearch(url.searchParams);
   try {
     if (request.method === "GET" && url.pathname === "/") {
       return html(indexHtml());
@@ -151,6 +153,7 @@ export async function handleRequest(
             tool: url.searchParams.get("tool"),
             limit: integerParam(url, "limit", 50),
             offset: integerParam(url, "offset", 0, true),
+            ...dateFilter,
           }),
         ),
       );
@@ -183,20 +186,20 @@ export async function handleRequest(
       });
     }
     if (request.method === "GET" && url.pathname === "/api/stats/summary") {
-      return withDb(config, context, (db) => json(totals(db)));
+      return withDb(config, context, (db) => json(totals(db, dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/stats/by-dimension") {
       const dimension = parseDimension(url.searchParams.get("dim") ?? "");
       if (dimension == null) {
         return json({ error: "unknown dimension" }, 400);
       }
-      return withDb(config, context, (db) => json(byDimension(db, dimension)));
+      return withDb(config, context, (db) => json(byDimension(db, dimension, dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/activity") {
-      return withDb(config, context, (db) => json(activityStats(db)));
+      return withDb(config, context, (db) => json(activityStats(db, dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/model-sparklines") {
-      return withDb(config, context, (db) => json(modelSparklines(db)));
+      return withDb(config, context, (db) => json(modelSparklines(db, dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/now") {
       return withDb(config, context, (db) =>
@@ -221,7 +224,7 @@ export async function handleRequest(
         return json({ error: "invalid files query" }, 400);
       }
       return withDb(config, context, (db) =>
-        json(fileHotspots(db, group, op, integerParam(url, "limit", 25))),
+        json(fileHotspots(db, group, op, integerParam(url, "limit", 25), dateFilter)),
       );
     }
     if (request.method === "GET" && url.pathname === "/api/tools/usage") {
@@ -231,12 +234,15 @@ export async function handleRequest(
             db,
             url.searchParams.get("errors_only") === "true",
             integerParam(url, "limit", 50),
+            dateFilter,
           ),
         ),
       );
     }
     if (request.method === "GET" && url.pathname === "/api/tools/mcp-usage") {
-      return withDb(config, context, (db) => json(mcpUsage(db, integerParam(url, "limit", 50))));
+      return withDb(config, context, (db) =>
+        json(mcpUsage(db, integerParam(url, "limit", 50), dateFilter)),
+      );
     }
     if (request.method === "GET" && url.pathname === "/api/recommendations") {
       const status = parseStatusFilter(url.searchParams.get("status") ?? "open");

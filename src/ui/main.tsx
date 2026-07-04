@@ -1,4 +1,36 @@
-import { type MouseEvent, type ReactNode, useEffect, useState } from "react";
+import * as echarts from "echarts";
+import type { LucideIcon } from "lucide-react";
+import {
+  ArrowLeft,
+  BarChart3,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  CircleDollarSign,
+  Clock3,
+  Cpu,
+  Download,
+  FileText,
+  FlaskConical,
+  Folder,
+  Inbox,
+  Lightbulb,
+  Menu,
+  MessageSquare,
+  Monitor,
+  Moon,
+  Rows3,
+  Search,
+  Settings,
+  Sun,
+  Upload,
+  Wrench,
+  X,
+  Zap,
+} from "lucide-react";
+import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -201,6 +233,19 @@ const ANTHROPIC_ICON_PATH =
 
 const SESSION_PAGE_SIZE = 100;
 type ThemeChoice = "system" | "light" | "dark";
+type RangePreset = "7d" | "30d" | "90d" | "all" | "custom";
+type DateRangeSelection = {
+  preset: RangePreset;
+  from: string | null;
+  to: string | null;
+};
+
+const RANGE_PRESETS = [
+  { key: "7d", label: "7d", days: 7 },
+  { key: "30d", label: "30d", days: 30 },
+  { key: "90d", label: "90d", days: 90 },
+] as const;
+const ALL_DATE_RANGE: DateRangeSelection = { preset: "all", from: null, to: null };
 
 function App() {
   const [path, setPath] = useState(locationPath);
@@ -209,7 +254,10 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [sessionLimit, setSessionLimit] = useState(SESSION_PAGE_SIZE);
+  const [dateRangeSelection, setDateRangeSelection] = useState<DateRangeSelection>(ALL_DATE_RANGE);
   const [menuOpen, setMenuOpen] = useState(false);
+  const loadedOnceRef = useRef(false);
+  const dateQuery = dateRangeQuery(dateRangeSelection);
   const [theme, setTheme] = useState<ThemeChoice>(() => {
     const stored = localStorage.getItem("decant-theme");
     return stored === "light" || stored === "dark" ? stored : "system";
@@ -229,26 +277,30 @@ function App() {
       document.documentElement.dataset.theme = theme;
       localStorage.setItem("decant-theme", theme);
     }
+    window.dispatchEvent(new CustomEvent("decant:set-theme"));
   }, [theme]);
 
   useEffect(() => {
+    void reloadKey;
     let cancelled = false;
-    setLoading(reloadKey === 0);
+    setLoading(!loadedOnceRef.current);
     Promise.all([
-      getJson<Summary>("/api/stats/summary"),
-      getJson<SessionSummary[]>(`/api/sessions?limit=${sessionLimit}&offset=0`),
-      getJson<DimensionRow[]>("/api/stats/by-dimension?dim=tool"),
-      getJson<DimensionRow[]>("/api/stats/by-dimension?dim=model"),
-      getJson<DimensionRow[]>("/api/stats/by-dimension?dim=project"),
-      getJson<DimensionRow[]>("/api/stats/by-dimension?dim=day"),
-      getJson<ToolRow[]>("/api/tools/usage?limit=10"),
-      getJson<McpRow[]>("/api/tools/mcp-usage?limit=10"),
-      getJson<FileRow[]>("/api/files?group=path&limit=10"),
+      getJson<Summary>(withDateQuery("/api/stats/summary", dateQuery)),
+      getJson<SessionSummary[]>(
+        withDateQuery(`/api/sessions?limit=${sessionLimit}&offset=0`, dateQuery),
+      ),
+      getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=tool", dateQuery)),
+      getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=model", dateQuery)),
+      getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=project", dateQuery)),
+      getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=day", dateQuery)),
+      getJson<ToolRow[]>(withDateQuery("/api/tools/usage?limit=100", dateQuery)),
+      getJson<McpRow[]>(withDateQuery("/api/tools/mcp-usage?limit=100", dateQuery)),
+      getJson<FileRow[]>(withDateQuery("/api/files?group=path&limit=100", dateQuery)),
       getJson<Recommendation[]>("/api/recommendations?status=open"),
       getJson<ConfigView>("/api/config"),
       getJson<SettingsInfo>("/api/settings"),
-      getJson<Activity>("/api/analytics/activity"),
-      getJson<ModelSparklines>("/api/analytics/model-sparklines"),
+      getJson<Activity>(withDateQuery("/api/analytics/activity", dateQuery)),
+      getJson<ModelSparklines>(withDateQuery("/api/analytics/model-sparklines", dateQuery)),
       getJson<NowView>("/api/analytics/now"),
       getJson<DateBounds>("/api/date-bounds"),
     ])
@@ -292,6 +344,7 @@ function App() {
             now,
             dateBounds,
           });
+          loadedOnceRef.current = true;
           setError(null);
         },
       )
@@ -308,7 +361,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey, sessionLimit]);
+  }, [dateQuery, reloadKey, sessionLimit]);
 
   useEffect(() => {
     const events = new EventSource("/api/events");
@@ -440,9 +493,14 @@ function App() {
           <div className="content-wrap">
             {error != null ? <div className="notice danger">{error}</div> : null}
             {loading ? (
-              <div className="notice">Loading archive data...</div>
+              <div className="notice">Preparing archive data...</div>
             ) : (
               renderView(active, path, data, {
+                dateRange: dateRangeSelection,
+                onDateRangeChange: (next) => {
+                  setSessionLimit(SESSION_PAGE_SIZE);
+                  setDateRangeSelection(next);
+                },
                 refresh: () => setReloadKey((key) => key + 1),
                 sessionLimit,
                 setSessionLimit,
@@ -460,6 +518,8 @@ function renderView(
   path: string,
   data: DashboardData,
   actions: {
+    dateRange: DateRangeSelection;
+    onDateRangeChange: (range: DateRangeSelection) => void;
     refresh: () => void;
     sessionLimit: number;
     setSessionLimit: (limit: number) => void;
@@ -474,14 +534,22 @@ function renderView(
       return (
         <SessionsView
           data={data}
+          dateRange={actions.dateRange}
           limit={actions.sessionLimit}
+          onDateRangeChange={actions.onDateRangeChange}
           onLimitChange={actions.setSessionLimit}
         />
       );
     case "Search":
       return <SearchView path={path} />;
     case "Analytics":
-      return <AnalyticsView data={data} />;
+      return (
+        <AnalyticsView
+          data={data}
+          dateRange={actions.dateRange}
+          onDateRangeChange={actions.onDateRangeChange}
+        />
+      );
     case "Insights":
       return (
         <InsightsView
@@ -491,16 +559,31 @@ function renderView(
         />
       );
     case "Tools & MCP":
-      return <ToolsView data={data} />;
+      return (
+        <ToolsView
+          data={data}
+          dateRange={actions.dateRange}
+          onDateRangeChange={actions.onDateRangeChange}
+        />
+      );
     case "Files":
-      return <FilesView rows={data.files} />;
+      return (
+        <FilesView
+          dateBounds={data.dateBounds}
+          dateRange={actions.dateRange}
+          onDateRangeChange={actions.onDateRangeChange}
+          rows={data.files}
+        />
+      );
     case "Settings":
       return <SettingsView config={data.config} settingsInfo={data.settings} />;
     default:
       return (
         <SessionsView
           data={data}
+          dateRange={actions.dateRange}
           limit={actions.sessionLimit}
+          onDateRangeChange={actions.onDateRangeChange}
           onLimitChange={actions.setSessionLimit}
         />
       );
@@ -509,19 +592,50 @@ function renderView(
 
 function SessionsView({
   data,
+  dateRange,
   limit,
+  onDateRangeChange,
   onLimitChange,
 }: {
   data: DashboardData;
+  dateRange: DateRangeSelection;
   limit: number;
+  onDateRangeChange: (range: DateRangeSelection) => void;
   onLimitChange: (limit: number) => void;
 }) {
   const [query, setQuery] = useState("");
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
   const total = data.summary?.sessions ?? data.sessions.length;
   const filtered = filterSessions(data.sessions, query);
   const hasMore = data.sessions.length < total;
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (sentinel == null || !hasMore) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting === true) {
+          onLimitChange(Math.min(total, limit + SESSION_PAGE_SIZE));
+        }
+      },
+      { rootMargin: "320px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, limit, onLimitChange, total]);
+
   return (
     <div className="view-stack">
+      <header className="page-heading inline-heading">
+        <div>
+          <h1>Sessions</h1>
+          <p>Every Claude Code and Codex session in your local archive.</p>
+        </div>
+        <DateRangeControl bounds={data.dateBounds} range={dateRange} onChange={onDateRangeChange} />
+      </header>
+
       <div className="stat-grid sessions-stat-grid">
         <StatCard
           icon="sessions"
@@ -597,16 +711,7 @@ function SessionsView({
         </div>
         <div className="panel-footer">
           <span>{sessionsCaption(query, filtered.length, data.sessions.length, total)}</span>
-          {hasMore ? (
-            <button
-              className="secondary-button"
-              onClick={() => onLimitChange(limit + SESSION_PAGE_SIZE)}
-              type="button"
-            >
-              <Icon name="download" />
-              Load more
-            </button>
-          ) : null}
+          <div aria-hidden="true" className="infinite-sentinel" ref={sentinelRef} />
         </div>
       </section>
     </div>
@@ -627,7 +732,7 @@ function filterSessions(sessions: SessionSummary[], query: string): SessionSumma
 
 function sessionsCaption(query: string, visible: number, loaded: number, total: number): string {
   if (query.trim() !== "") {
-    return `Showing ${formatInt(visible)} matching loaded ${visible === 1 ? "row" : "rows"} from ${formatInt(loaded)} loaded sessions`;
+    return `Showing ${formatInt(visible)} matching ${visible === 1 ? "row" : "rows"} from ${formatInt(loaded)} available sessions`;
   }
   return `Showing ${formatInt(loaded)} of ${formatInt(total)} sessions`;
 }
@@ -753,12 +858,168 @@ function HighlightedSnippet({ snippet }: { snippet: string }) {
   );
 }
 
-function AnalyticsView({ data }: { data: DashboardData }) {
+type SortDirection = "asc" | "desc";
+type SortValue = number | string | null | undefined;
+type SortState<Key extends string> = { direction: SortDirection; key: Key };
+type ModelSortKey =
+  | "cost"
+  | "input_tokens"
+  | "key"
+  | "output_tokens"
+  | "reasoning_tokens"
+  | "sessions";
+type ProjectSortKey = "cost" | "key" | "sessions";
+type McpSortKey = "calls" | "errors" | "server" | "tools";
+type ToolSortKey = "calls" | "errors" | "kind" | "server" | "tool";
+type FileSortKey =
+  | "deletes"
+  | "edits"
+  | "key"
+  | "last_touched_at"
+  | "project"
+  | "reads"
+  | "sessions"
+  | "total"
+  | "writes";
+
+function nextSort<Key extends string>(sort: SortState<Key>, key: Key): SortState<Key> {
+  return {
+    key,
+    direction: sort.key === key && sort.direction === "desc" ? "asc" : "desc",
+  };
+}
+
+function sortRows<Row, Key extends string>(
+  rows: Row[],
+  sort: SortState<Key>,
+  valueFor: (row: Row, key: Key) => SortValue,
+): Row[] {
+  return rows
+    .slice()
+    .sort((left, right) =>
+      compareSortValue(valueFor(left, sort.key), valueFor(right, sort.key), sort.direction),
+    );
+}
+
+function compareSortValue(left: SortValue, right: SortValue, direction: SortDirection): number {
+  const multiplier = direction === "asc" ? 1 : -1;
+  if (typeof left === "number" || typeof right === "number") {
+    return multiplier * ((Number(left) || 0) - (Number(right) || 0));
+  }
+  return (
+    multiplier * String(left ?? "").localeCompare(String(right ?? ""), undefined, { numeric: true })
+  );
+}
+
+function modelSortValue(row: DimensionRow, key: ModelSortKey): SortValue {
+  switch (key) {
+    case "cost":
+      return row.estimated_cost_usd;
+    case "input_tokens":
+      return row.input_tokens;
+    case "key":
+      return row.key;
+    case "output_tokens":
+      return row.output_tokens;
+    case "reasoning_tokens":
+      return row.reasoning_tokens || row.est_reasoning_tokens;
+    case "sessions":
+      return row.sessions;
+  }
+}
+
+function projectSortValue(row: DimensionRow, key: ProjectSortKey): SortValue {
+  switch (key) {
+    case "cost":
+      return row.estimated_cost_usd;
+    case "key":
+      return row.key;
+    case "sessions":
+      return row.sessions;
+  }
+}
+
+function mcpSortValue(row: McpRow, key: McpSortKey): SortValue {
+  switch (key) {
+    case "calls":
+      return row.calls;
+    case "errors":
+      return row.errors;
+    case "server":
+      return row.mcp_server;
+    case "tools":
+      return row.tools;
+  }
+}
+
+function toolSortValue(row: ToolRow, key: ToolSortKey): SortValue {
+  switch (key) {
+    case "calls":
+      return row.calls;
+    case "errors":
+      return row.errors;
+    case "kind":
+      return row.tool_kind;
+    case "server":
+      return row.mcp_server;
+    case "tool":
+      return row.tool_name;
+  }
+}
+
+function fileSortValue(row: FileRow, key: FileSortKey): SortValue {
+  switch (key) {
+    case "deletes":
+      return row.deletes;
+    case "edits":
+      return row.edits;
+    case "key":
+      return row.key;
+    case "last_touched_at":
+      return row.last_touched_at == null ? 0 : Date.parse(row.last_touched_at);
+    case "project":
+      return row.project;
+    case "reads":
+      return row.reads;
+    case "sessions":
+      return row.sessions;
+    case "total":
+      return fileTotal(row);
+    case "writes":
+      return row.writes;
+  }
+}
+
+function AnalyticsView({
+  data,
+  dateRange,
+  onDateRangeChange,
+}: {
+  data: DashboardData;
+  dateRange: DateRangeSelection;
+  onDateRangeChange: (range: DateRangeSelection) => void;
+}) {
+  const [modelSort, setModelSort] = useState<SortState<ModelSortKey>>({
+    key: "cost",
+    direction: "desc",
+  });
+  const [projectSort, setProjectSort] = useState<SortState<ProjectSortKey>>({
+    key: "cost",
+    direction: "desc",
+  });
   const byDay = data.byDay
     .filter((row) => row.key !== "")
     .slice()
     .sort((left, right) => left.key.localeCompare(right.key));
-  const maxModelCost = Math.max(1.0e-9, ...data.byModel.map((row) => row.estimated_cost_usd));
+  const modelRows = useMemo(
+    () => sortRows(data.byModel, modelSort, modelSortValue),
+    [data.byModel, modelSort],
+  );
+  const projectRows = useMemo(
+    () => sortRows(data.byProject, projectSort, projectSortValue).slice(0, 12),
+    [data.byProject, projectSort],
+  );
+  const maxModelCost = Math.max(1.0e-9, ...modelRows.map((row) => row.estimated_cost_usd));
   return (
     <div className="view-stack">
       <header className="page-heading inline-heading">
@@ -766,7 +1027,7 @@ function AnalyticsView({ data }: { data: DashboardData }) {
           <h1>Analytics</h1>
           <p>Usage and cost across your sessions.</p>
         </div>
-        <span>{dateRange(data.dateBounds)}</span>
+        <DateRangeControl bounds={data.dateBounds} range={dateRange} onChange={onDateRangeChange} />
       </header>
 
       <div className="stat-grid analytics-stat-grid">
@@ -829,23 +1090,58 @@ function AnalyticsView({ data }: { data: DashboardData }) {
           <table>
             <thead>
               <tr>
-                <th>Model</th>
+                <SortableHeader
+                  label="Model"
+                  onSort={(key) => setModelSort((sort) => nextSort(sort, key))}
+                  sort={modelSort}
+                  sortKey="key"
+                />
                 <th>Trend</th>
-                <th className="numeric">Sessions</th>
-                <th className="numeric">In tok</th>
-                <th className="numeric">Out tok</th>
-                <th className="numeric">Reason tok</th>
-                <th className="numeric">Cost</th>
+                <SortableHeader
+                  align="right"
+                  label="Sessions"
+                  onSort={(key) => setModelSort((sort) => nextSort(sort, key))}
+                  sort={modelSort}
+                  sortKey="sessions"
+                />
+                <SortableHeader
+                  align="right"
+                  label="In tok"
+                  onSort={(key) => setModelSort((sort) => nextSort(sort, key))}
+                  sort={modelSort}
+                  sortKey="input_tokens"
+                />
+                <SortableHeader
+                  align="right"
+                  label="Out tok"
+                  onSort={(key) => setModelSort((sort) => nextSort(sort, key))}
+                  sort={modelSort}
+                  sortKey="output_tokens"
+                />
+                <SortableHeader
+                  align="right"
+                  label="Reason tok"
+                  onSort={(key) => setModelSort((sort) => nextSort(sort, key))}
+                  sort={modelSort}
+                  sortKey="reasoning_tokens"
+                />
+                <SortableHeader
+                  align="right"
+                  label="Cost"
+                  onSort={(key) => setModelSort((sort) => nextSort(sort, key))}
+                  sort={modelSort}
+                  sortKey="cost"
+                />
                 <th>Share</th>
               </tr>
             </thead>
             <tbody>
-              {data.byModel.length === 0 ? (
+              {modelRows.length === 0 ? (
                 <tr>
                   <td colSpan={8}>No model activity.</td>
                 </tr>
               ) : null}
-              {data.byModel.map((row) => (
+              {modelRows.map((row) => (
                 <tr key={row.key}>
                   <td>
                     <ModelBadge model={row.key} />
@@ -880,7 +1176,7 @@ function AnalyticsView({ data }: { data: DashboardData }) {
         </div>
       </section>
 
-      {data.byProject.length > 0 ? (
+      {projectRows.length > 0 ? (
         <section className="panel">
           <div className="panel-heading">
             <div>
@@ -891,13 +1187,30 @@ function AnalyticsView({ data }: { data: DashboardData }) {
             <table>
               <thead>
                 <tr>
-                  <th>Project</th>
-                  <th className="numeric">Sessions</th>
-                  <th className="numeric">Cost</th>
+                  <SortableHeader
+                    label="Project"
+                    onSort={(key) => setProjectSort((sort) => nextSort(sort, key))}
+                    sort={projectSort}
+                    sortKey="key"
+                  />
+                  <SortableHeader
+                    align="right"
+                    label="Sessions"
+                    onSort={(key) => setProjectSort((sort) => nextSort(sort, key))}
+                    sort={projectSort}
+                    sortKey="sessions"
+                  />
+                  <SortableHeader
+                    align="right"
+                    label="Cost"
+                    onSort={(key) => setProjectSort((sort) => nextSort(sort, key))}
+                    sort={projectSort}
+                    sortKey="cost"
+                  />
                 </tr>
               </thead>
               <tbody>
-                {data.byProject.slice(0, 12).map((row) => (
+                {projectRows.map((row) => (
                   <tr key={row.key}>
                     <td className="mono truncate-cell" title={row.key}>
                       {basename(row.key)}
@@ -1012,103 +1325,128 @@ function AnalyticsChart({
   values: number[];
   variant: AnalyticsChartVariant;
 }) {
-  const width = 640;
-  const height = 240;
-  const left = 44;
-  const right = 16;
-  const top = 18;
-  const bottom = 30;
-  const plotWidth = width - left - right;
-  const plotHeight = height - top - bottom;
-  const cleanValues = labels.map((_, index) => Math.max(0, values[index] ?? 0));
-  const max = niceMax(Math.max(1, ...cleanValues));
-  const yTicks = [max, max / 2, 0];
-  const xIndexes = chartLabelIndexes(labels.length);
-  const bandwidth = labels.length === 0 ? plotWidth : plotWidth / labels.length;
-  const barWidth = Math.max(3, Math.min(26, bandwidth * 0.62));
-  const points = cleanValues.map((value, index) => ({
-    label: labels[index] ?? "",
-    value,
-    x:
-      labels.length <= 1
-        ? left + plotWidth / 2
-        : variant === "bar"
-          ? left + bandwidth * (index + 0.5)
-          : left + (index / (labels.length - 1)) * plotWidth,
-    y: top + plotHeight - (value / max) * plotHeight,
-  }));
-  const linePath = points
-    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
-    .join(" ");
-  const areaPath =
-    points.length > 1
-      ? `${linePath} L ${(points.at(-1)?.x ?? left).toFixed(2)} ${top + plotHeight} L ${left} ${top + plotHeight} Z`
-      : "";
-
-  return (
-    <svg
-      aria-label="Analytics chart"
-      className={`analytics-chart is-${variant}`}
-      preserveAspectRatio="none"
-      role="img"
-      viewBox={`0 0 ${width} ${height}`}
-    >
-      {yTicks.map((tick) => {
-        const y = top + plotHeight - (tick / max) * plotHeight;
-        return (
-          <g key={tick}>
-            <line className="chart-grid" x1={left} x2={width - right} y1={y} y2={y} />
-            <text className="chart-y-label" x={left - 10} y={y + 4}>
-              {chartValue(tick, metric)}
-            </text>
-          </g>
-        );
-      })}
-      <line
-        className="chart-axis"
-        x1={left}
-        x2={width - right}
-        y1={top + plotHeight}
-        y2={top + plotHeight}
-      />
-      {variant === "bar"
-        ? points.map((point) => (
-            <rect
-              className="chart-bar"
-              height={Math.max(2, top + plotHeight - point.y)}
-              key={point.label}
-              rx="3"
-              width={barWidth}
-              x={point.x - barWidth / 2}
-              y={Math.min(top + plotHeight - 2, point.y)}
-            >
-              <title>{`${point.label}: ${chartTooltipValue(point.value, metric)}`}</title>
-            </rect>
-          ))
-        : null}
-      {variant === "line" && areaPath !== "" ? <path className="chart-area" d={areaPath} /> : null}
-      {variant === "line" && linePath !== "" ? (
-        <path className="chart-line" d={linePath}>
-          <title>
-            {points
-              .map((point) => `${point.label}: ${chartTooltipValue(point.value, metric)}`)
-              .join("\n")}
-          </title>
-        </path>
-      ) : null}
-      {xIndexes.map((index) => {
-        const point = points[index];
-        if (point == null) {
-          return null;
-        }
-        return (
-          <text className="chart-x-label" key={point.label} x={point.x} y={height - 8}>
-            {chartLabel(point.label)}
-          </text>
-        );
-      })}
-    </svg>
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const cleanValues = useMemo(
+    () => labels.map((_, index) => Math.max(0, values[index] ?? 0)),
+    [labels, values],
   );
+
+  useEffect(() => {
+    const element = chartRef.current;
+    if (element == null) {
+      return;
+    }
+    const chart = echarts.init(element, null, { renderer: "canvas" });
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const draw = () => {
+      chart.setOption(buildChartOption({ labels, metric, values: cleanValues, variant }), true);
+      chart.resize();
+    };
+    const resize = () => chart.resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(element);
+    window.addEventListener("resize", resize);
+    window.addEventListener("decant:set-theme", draw);
+    media.addEventListener("change", draw);
+    requestAnimationFrame(draw);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("decant:set-theme", draw);
+      media.removeEventListener("change", draw);
+      chart.dispose();
+    };
+  }, [cleanValues, labels, metric, variant]);
+
+  return <div aria-label="Analytics chart" className="analytics-chart" ref={chartRef} role="img" />;
+}
+
+function buildChartOption({
+  labels,
+  metric,
+  values,
+  variant,
+}: {
+  labels: string[];
+  metric: AnalyticsChartMetric;
+  values: number[];
+  variant: AnalyticsChartVariant;
+}): echarts.EChartsOption {
+  const colors = chartColors();
+  const moneyMetric = metric === "money";
+  const seriesType = variant;
+  return {
+    color: [colors.accent, colors.info, colors.success, colors.warning],
+    textStyle: { fontFamily: "inherit", color: colors.muted },
+    animationDuration: 180,
+    grid: { left: 6, right: 16, top: 18, bottom: 6, containLabel: true },
+    tooltip: {
+      trigger: "axis",
+      backgroundColor: colors.surface,
+      borderColor: colors.line,
+      borderWidth: 1,
+      padding: [8, 12],
+      textStyle: { color: colors.fg, fontSize: 12 },
+      axisPointer: {
+        type: seriesType === "bar" ? "shadow" : "line",
+        lineStyle: { color: colors.faint, width: 1 },
+        shadowStyle: { color: `${colors.fg}0d` },
+      },
+      valueFormatter: (value) =>
+        moneyMetric ? money(Number(value ?? 0)) : formatInt(Number(value ?? 0)),
+    },
+    xAxis: {
+      type: "category",
+      data: labels,
+      boundaryGap: seriesType !== "line",
+      axisLine: { lineStyle: { color: colors.line } },
+      axisTick: { show: false },
+      axisLabel: {
+        color: colors.faint,
+        fontSize: 11,
+        hideOverlap: true,
+        formatter: (value: string) => chartLabel(value),
+      },
+    },
+    yAxis: {
+      type: "value",
+      axisLabel: {
+        color: colors.faint,
+        fontSize: 11,
+        formatter: (value: number) => chartValue(value, metric),
+      },
+      splitLine: { lineStyle: { color: colors.line, type: "dashed" } },
+    },
+    series: [
+      {
+        name: moneyMetric ? "cost" : "sessions",
+        type: seriesType,
+        data: values,
+        smooth: seriesType === "line",
+        showSymbol: false,
+        barMaxWidth: 26,
+        itemStyle: { borderRadius: seriesType === "bar" ? [3, 3, 0, 0] : 0 },
+        lineStyle: { width: 2 },
+        areaStyle: seriesType === "line" ? { opacity: 0.1 } : undefined,
+      },
+    ],
+  };
+}
+
+function chartColors() {
+  const styles = getComputedStyle(document.documentElement);
+  const value = (name: string) => styles.getPropertyValue(name).trim();
+  return {
+    fg: value("--fg"),
+    muted: value("--muted"),
+    faint: value("--faint"),
+    line: value("--line"),
+    surface: value("--surface"),
+    accent: value("--accent"),
+    info: value("--info"),
+    success: value("--success"),
+    warning: value("--warning"),
+  };
 }
 
 function Sparkline({ tone = "accent", values }: { tone?: BadgeTone; values: number[] }) {
@@ -1162,33 +1500,6 @@ function peakIndex(values: number[]): number | null {
   return max > 0 ? values.indexOf(max) : null;
 }
 
-function niceMax(value: number): number {
-  if (value <= 1) {
-    return 1;
-  }
-  const exponent = Math.floor(Math.log10(value));
-  const base = 10 ** exponent;
-  const normalized = value / base;
-  const nice = normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
-  return nice * base;
-}
-
-function chartLabelIndexes(count: number): number[] {
-  if (count <= 0) {
-    return [];
-  }
-  if (count <= 7) {
-    return Array.from({ length: count }, (_, index) => index);
-  }
-  const maxLabels = count <= 14 ? 7 : count <= 31 ? 8 : 10;
-  const step = Math.max(1, Math.ceil((count - 1) / (maxLabels - 1)));
-  const indexes = new Set<number>([0, count - 1]);
-  for (let index = 0; index < count; index += step) {
-    indexes.add(index);
-  }
-  return [...indexes].sort((left, right) => left - right);
-}
-
 function chartLabel(value: string): string {
   return /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(5, 10) : value;
 }
@@ -1196,10 +1507,6 @@ function chartLabel(value: string): string {
 function chartValue(value: number, metric: AnalyticsChartMetric): string {
   const formatted = compactAxis(value);
   return metric === "money" ? `$${formatted}` : formatted;
-}
-
-function chartTooltipValue(value: number, metric: AnalyticsChartMetric): string {
-  return metric === "money" ? money(value) : formatInt(value);
 }
 
 function compactAxis(value: number): string {
@@ -1227,14 +1534,18 @@ type BadgeTone =
   | "claude"
   | "openai";
 
+type BrandIconName = "anthropic" | "claude" | "openai";
+
 type IconName =
-  | "anthropic"
   | "arrowLeft"
   | "beaker"
   | "bolt"
   | "chart"
   | "check"
-  | "claude"
+  | "chevronDown"
+  | "chevronLeft"
+  | "chevronRight"
+  | "chevronUp"
   | "clock"
   | "cpu"
   | "desktop"
@@ -1247,7 +1558,6 @@ type IconName =
   | "messages"
   | "money"
   | "moon"
-  | "openai"
   | "search"
   | "sessions"
   | "settings"
@@ -1304,7 +1614,7 @@ function ToolBadge({ tool }: { tool: string | null | undefined }) {
   if (tool === "claude_code") {
     return (
       <Badge tone="claude">
-        <Icon name="claude" />
+        <BrandMark name="claude" />
         Claude
       </Badge>
     );
@@ -1312,7 +1622,7 @@ function ToolBadge({ tool }: { tool: string | null | undefined }) {
   if (tool === "codex") {
     return (
       <Badge tone="openai">
-        <Icon name="openai" />
+        <BrandMark name="openai" />
         Codex
       </Badge>
     );
@@ -1328,7 +1638,7 @@ function ModelBadge({ model }: { model: string | null | undefined }) {
   const icon = modelBrandIcon(model, tone);
   return (
     <Badge mono tone={tone}>
-      {icon == null ? null : <Icon name={icon} />}
+      {icon == null ? null : <BrandMark name={icon} />}
       {model}
     </Badge>
   );
@@ -1352,6 +1662,92 @@ function Bar({ fraction, tone }: { fraction: number; tone: BadgeTone }) {
     <div className="bar">
       <span className={`tone-${tone}`} style={{ width: `${pct}%` }} />
     </div>
+  );
+}
+
+function DateRangeControl({
+  bounds,
+  range,
+  onChange,
+}: {
+  bounds: DateBounds | null;
+  range: DateRangeSelection;
+  onChange: (range: DateRangeSelection) => void;
+}) {
+  return (
+    <div className="date-range-control">
+      <div className="date-range-buttons">
+        {range.from != null && range.to != null ? (
+          <button
+            aria-label="Previous period"
+            className="icon-period-button"
+            onClick={() => onChange(shiftDateRange(range, -1))}
+            type="button"
+          >
+            <Icon name="chevronLeft" />
+          </button>
+        ) : null}
+        {RANGE_PRESETS.map((preset) => (
+          <button
+            aria-pressed={range.preset === preset.key}
+            key={preset.key}
+            onClick={() => onChange(applyDatePreset(preset.key, bounds))}
+            type="button"
+          >
+            {preset.label}
+          </button>
+        ))}
+        <button
+          aria-pressed={range.preset === "all"}
+          onClick={() => onChange(ALL_DATE_RANGE)}
+          type="button"
+        >
+          All
+        </button>
+        {range.from != null && range.to != null ? (
+          <button
+            aria-label="Next period"
+            className="icon-period-button"
+            onClick={() => onChange(shiftDateRange(range, 1))}
+            type="button"
+          >
+            <Icon name="chevronRight" />
+          </button>
+        ) : null}
+      </div>
+      <span>{dateRangeLabel(range)}</span>
+    </div>
+  );
+}
+
+function SortableHeader<Key extends string>({
+  align = "left",
+  label,
+  onSort,
+  sort,
+  sortKey,
+}: {
+  align?: "left" | "right";
+  label: string;
+  onSort: (key: Key) => void;
+  sort: SortState<Key>;
+  sortKey: Key;
+}) {
+  const active = sort.key === sortKey;
+  return (
+    <th
+      aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}
+      className={align === "right" ? "numeric" : undefined}
+    >
+      <button
+        className={`sort-header${align === "right" ? " is-right" : ""}${active ? " is-active" : ""}`}
+        onClick={() => onSort(sortKey)}
+        type="button"
+      >
+        <span>{label}</span>
+        <Icon name={active && sort.direction === "asc" ? "chevronUp" : "chevronDown"} />
+      </button>
+    </th>
   );
 }
 
@@ -1550,81 +1946,87 @@ function PromotionMeta({ row }: { row: Recommendation }) {
 }
 
 function Icon({ name }: { name: IconName }) {
+  const Component = iconComponent(name);
+  return <Component aria-hidden="true" focusable="false" strokeWidth={2} />;
+}
+
+function BrandMark({ name }: { name: BrandIconName }) {
   return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      {iconPath(name)}
+    <svg aria-hidden="true" className="brand-mark" focusable="false" viewBox="0 0 24 24">
+      <path d={brandIconPath(name)} />
     </svg>
   );
 }
 
-function iconPath(name: IconName) {
+function iconComponent(name: IconName): LucideIcon {
+  switch (name) {
+    case "arrowLeft":
+      return ArrowLeft;
+    case "beaker":
+      return FlaskConical;
+    case "bolt":
+      return Zap;
+    case "chart":
+      return BarChart3;
+    case "check":
+      return Check;
+    case "chevronDown":
+      return ChevronDown;
+    case "chevronLeft":
+      return ChevronLeft;
+    case "chevronRight":
+      return ChevronRight;
+    case "chevronUp":
+      return ChevronUp;
+    case "clock":
+      return Clock3;
+    case "cpu":
+      return Cpu;
+    case "desktop":
+      return Monitor;
+    case "download":
+      return Download;
+    case "file":
+      return FileText;
+    case "folder":
+      return Folder;
+    case "inbox":
+      return Inbox;
+    case "lightbulb":
+      return Lightbulb;
+    case "menu":
+      return Menu;
+    case "messages":
+      return MessageSquare;
+    case "money":
+      return CircleDollarSign;
+    case "moon":
+      return Moon;
+    case "search":
+      return Search;
+    case "sessions":
+      return Rows3;
+    case "settings":
+      return Settings;
+    case "sun":
+      return Sun;
+    case "tools":
+      return Wrench;
+    case "upload":
+      return Upload;
+    case "x":
+      return X;
+  }
+}
+
+function brandIconPath(name: BrandIconName): string {
   switch (name) {
     case "anthropic":
-      return <path d={ANTHROPIC_ICON_PATH} />;
-    case "arrowLeft":
-      return <path d="M10 19 3 12l7-7v4h11v6H10v4Z" />;
-    case "beaker":
-      return (
-        <path d="M9 3h6v2l-1 1v4.3l5 7.9A2 2 0 0 1 17.3 21H6.7A2 2 0 0 1 5 18.2l5-7.9V6L9 5V3Zm1.8 9-4.1 6.5h10.6L13.2 12h-2.4Z" />
-      );
-    case "bolt":
-      return <path d="m13 2-8 12h6l-1 8 9-13h-6l1-7Z" />;
-    case "chart":
-      return <path d="M4 20V10h4v10H4Zm6 0V4h4v16h-4Zm6 0v-7h4v7h-4Z" />;
-    case "check":
-      return <path d="m9.2 16.2-4-4L3.8 13.6l5.4 5.4L20.5 7.7 19.1 6.3 9.2 16.2Z" />;
+      return ANTHROPIC_ICON_PATH;
     case "claude":
-      return <path d={CLAUDE_ICON_PATH} />;
-    case "clock":
-      return <path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 5h-2v6l5 3 1-1.7-4-2.3V7Z" />;
-    case "cpu":
-      return (
-        <path d="M8 2h2v3h4V2h2v3h3v3h3v2h-3v4h3v2h-3v3h-3v3h-2v-3h-4v3H8v-3H5v-3H2v-2h3v-4H2V8h3V5h3V2Zm-1 5v10h10V7H7Zm3 3h4v4h-4v-4Z" />
-      );
-    case "desktop":
-      return <path d="M3 4h18v12H3V4Zm7 14h4v2h4v2H6v-2h4v-2Z" />;
-    case "download":
-      return <path d="M11 3h2v9l3-3 1.4 1.4L12 15.8l-5.4-5.4L8 9l3 3V3ZM5 19h14v2H5v-2Z" />;
-    case "file":
-      return <path d="M6 2h8l4 4v16H6V2Zm7 1.5V7h3.5L13 3.5ZM8 11h8v2H8v-2Zm0 4h8v2H8v-2Z" />;
-    case "folder":
-      return <path d="M3 6h7l2 2h9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6Z" />;
-    case "inbox":
-      return <path d="M5 4h14l3 9v7H2v-7l3-9Zm1.4 2-2 6H9l2 3h2l2-3h4.6l-2-6H6.4Z" />;
-    case "lightbulb":
-      return <path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Zm-4 17h8v2H8v-2Z" />;
-    case "menu":
-      return <path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z" />;
-    case "messages":
-      return <path d="M4 4h16v11H8l-4 4V4Zm4 4h8v2H8V8Zm0 3h6v2H8v-2Z" />;
-    case "money":
-      return (
-        <path d="M3 6h18v12H3V6Zm2 3a3 3 0 0 0 3-1h8a3 3 0 0 0 3 3v2a3 3 0 0 0-3 3H8a3 3 0 0 0-3-3V9Zm7 6a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-      );
-    case "moon":
-      return <path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 9 9 0 1 0 20 15.5Z" />;
+      return CLAUDE_ICON_PATH;
     case "openai":
-      return <path d={OPENAI_ICON_PATH} />;
-    case "search":
-      return (
-        <path d="M10 3a7 7 0 1 0 4.2 12.6l4.6 4.6 1.4-1.4-4.6-4.6A7 7 0 0 0 10 3Zm0 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Z" />
-      );
-    case "sessions":
-      return <path d="M4 5h16v4H4V5Zm0 6h16v4H4v-4Zm0 6h16v2H4v-2Z" />;
-    case "settings":
-      return (
-        <path d="m12 2 2 3.5 4 .5-2.5 3 1 4-4.5-1.8L7.5 13l1-4L6 6l4-.5L12 2Zm0 7a3 3 0 1 0 .01 0H12Z" />
-      );
-    case "sun":
-      return (
-        <path d="M11 1h2v4h-2V1Zm0 18h2v4h-2v-4ZM1 11h4v2H1v-2Zm18 0h4v2h-4v-2ZM4.2 2.8 7 5.6 5.6 7 2.8 4.2l1.4-1.4Zm14.2 14.2 2.8 2.8-1.4 1.4-2.8-2.8 1.4-1.4ZM19.8 2.8l1.4 1.4L18.4 7 17 5.6l2.8-2.8ZM5.6 17 7 18.4l-2.8 2.8-1.4-1.4L5.6 17ZM12 7a5 5 0 1 1 0 10 5 5 0 0 1 0-10Z" />
-      );
-    case "tools":
-      return <path d="m21 7-5 5-2-2 5-5a6 6 0 0 0-8 7L3 20l1 1 8-8a6 6 0 0 0 9-6Z" />;
-    case "upload":
-      return <path d="M11 21h2v-9l3 3 1.4-1.4L12 8.2l-5.4 5.4L8 15l3-3v9ZM5 3h14v2H5V3Z" />;
-    case "x":
-      return <path d="m6.4 5 12.6 12.6-1.4 1.4L5 6.4 6.4 5Zm11.2 0L19 6.4 6.4 19 5 17.6 17.6 5Z" />;
+      return OPENAI_ICON_PATH;
   }
 }
 
@@ -1683,7 +2085,7 @@ function field(label: string, value: string | null): string | null {
   return isPresent(value) ? `${label}: ${value}` : null;
 }
 
-function modelBrandIcon(model: string, tone: BadgeTone): IconName | null {
+function modelBrandIcon(model: string, tone: BadgeTone): BrandIconName | null {
   if (tone === "openai") {
     return "openai";
   }
@@ -1865,7 +2267,7 @@ function InsightsView({
         {signals.length === 0 ? (
           <EmptyState
             icon="lightbulb"
-            message="Sync more sessions to surface patterns."
+            message="More session history will surface patterns."
             title="No signals yet"
           />
         ) : null}
@@ -1925,7 +2327,29 @@ function InsightsView({
   );
 }
 
-function ToolsView({ data }: { data: DashboardData }) {
+function ToolsView({
+  data,
+  dateRange,
+  onDateRangeChange,
+}: {
+  data: DashboardData;
+  dateRange: DateRangeSelection;
+  onDateRangeChange: (range: DateRangeSelection) => void;
+}) {
+  const [mcpSort, setMcpSort] = useState<SortState<McpSortKey>>({
+    key: "calls",
+    direction: "desc",
+  });
+  const [toolSort, setToolSort] = useState<SortState<ToolSortKey>>({
+    key: "calls",
+    direction: "desc",
+  });
+  const mcpRows = useMemo(() => sortRows(data.mcp, mcpSort, mcpSortValue), [data.mcp, mcpSort]);
+  const toolRows = useMemo(
+    () => sortRows(data.tools, toolSort, toolSortValue),
+    [data.tools, toolSort],
+  );
+
   return (
     <div className="view-stack">
       <header className="page-heading inline-heading">
@@ -1933,7 +2357,7 @@ function ToolsView({ data }: { data: DashboardData }) {
           <h1>Tools &amp; MCP</h1>
           <p>Tool and MCP-server call volume, scoped to your archive.</p>
         </div>
-        <span>{dateRange(data.dateBounds)}</span>
+        <DateRangeControl bounds={data.dateBounds} range={dateRange} onChange={onDateRangeChange} />
       </header>
 
       <section className="panel">
@@ -1943,7 +2367,7 @@ function ToolsView({ data }: { data: DashboardData }) {
             <p>Model Context Protocol servers and their call volume</p>
           </div>
         </div>
-        {data.mcp.length === 0 ? (
+        {mcpRows.length === 0 ? (
           <EmptyState
             icon="cpu"
             message="No MCP tool calls in this range."
@@ -1951,21 +2375,52 @@ function ToolsView({ data }: { data: DashboardData }) {
           />
         ) : (
           <div className="table-scroll">
-            <table>
+            <table className="data-table mcp-table">
+              <colgroup>
+                <col className="col-wide" />
+                <col className="col-number" />
+                <col className="col-number" />
+                <col className="col-number" />
+              </colgroup>
               <thead>
                 <tr>
-                  <th>Server</th>
-                  <th className="numeric">Tools</th>
-                  <th className="numeric">Calls</th>
-                  <th className="numeric">Errors</th>
+                  <SortableHeader
+                    label="Server"
+                    onSort={(key) => setMcpSort((sort) => nextSort(sort, key))}
+                    sort={mcpSort}
+                    sortKey="server"
+                  />
+                  <SortableHeader
+                    align="right"
+                    label="Tools"
+                    onSort={(key) => setMcpSort((sort) => nextSort(sort, key))}
+                    sort={mcpSort}
+                    sortKey="tools"
+                  />
+                  <SortableHeader
+                    align="right"
+                    label="Calls"
+                    onSort={(key) => setMcpSort((sort) => nextSort(sort, key))}
+                    sort={mcpSort}
+                    sortKey="calls"
+                  />
+                  <SortableHeader
+                    align="right"
+                    label="Errors"
+                    onSort={(key) => setMcpSort((sort) => nextSort(sort, key))}
+                    sort={mcpSort}
+                    sortKey="errors"
+                  />
                 </tr>
               </thead>
               <tbody>
-                {data.mcp.map((row) => (
+                {mcpRows.map((row) => (
                   <tr key={row.mcp_server}>
-                    <td className="mono icon-cell">
-                      <Icon name="cpu" />
-                      {row.mcp_server}
+                    <td className="mono">
+                      <span className="icon-cell">
+                        <Icon name="cpu" />
+                        <span>{row.mcp_server}</span>
+                      </span>
                     </td>
                     <td className="numeric muted">{formatInt(row.tools)}</td>
                     <td className="numeric">{formatInt(row.calls)}</td>
@@ -1992,23 +2447,57 @@ function ToolsView({ data }: { data: DashboardData }) {
           </div>
         </div>
         <div className="table-scroll">
-          <table>
+          <table className="data-table tools-table">
+            <colgroup>
+              <col className="col-tool" />
+              <col className="col-kind" />
+              <col className="col-server" />
+              <col className="col-number" />
+              <col className="col-number" />
+            </colgroup>
             <thead>
               <tr>
-                <th>Tool</th>
-                <th>Kind</th>
-                <th>Server</th>
-                <th className="numeric">Calls</th>
-                <th className="numeric">Errors</th>
+                <SortableHeader
+                  label="Tool"
+                  onSort={(key) => setToolSort((sort) => nextSort(sort, key))}
+                  sort={toolSort}
+                  sortKey="tool"
+                />
+                <SortableHeader
+                  label="Kind"
+                  onSort={(key) => setToolSort((sort) => nextSort(sort, key))}
+                  sort={toolSort}
+                  sortKey="kind"
+                />
+                <SortableHeader
+                  label="Server"
+                  onSort={(key) => setToolSort((sort) => nextSort(sort, key))}
+                  sort={toolSort}
+                  sortKey="server"
+                />
+                <SortableHeader
+                  align="right"
+                  label="Calls"
+                  onSort={(key) => setToolSort((sort) => nextSort(sort, key))}
+                  sort={toolSort}
+                  sortKey="calls"
+                />
+                <SortableHeader
+                  align="right"
+                  label="Errors"
+                  onSort={(key) => setToolSort((sort) => nextSort(sort, key))}
+                  sort={toolSort}
+                  sortKey="errors"
+                />
               </tr>
             </thead>
             <tbody>
-              {data.tools.length === 0 ? (
+              {toolRows.length === 0 ? (
                 <tr>
                   <td colSpan={5}>No tool calls.</td>
                 </tr>
               ) : null}
-              {data.tools.map((row) => (
+              {toolRows.map((row) => (
                 <tr key={`${row.tool_name}-${row.tool_kind}-${row.mcp_server ?? ""}`}>
                   <td className="mono">{row.tool_name}</td>
                   <td>
@@ -2044,15 +2533,49 @@ function ToolsView({ data }: { data: DashboardData }) {
   );
 }
 
-function FilesView({ rows }: { rows: FileRow[] }) {
+function FilesView({
+  dateBounds,
+  dateRange,
+  onDateRangeChange,
+  rows,
+}: {
+  dateBounds: DateBounds | null;
+  dateRange: DateRangeSelection;
+  onDateRangeChange: (range: DateRangeSelection) => void;
+  rows: FileRow[];
+}) {
   const [group, setGroup] = useState<"path" | "ext">("path");
   const [op, setOp] = useState<"read" | "edit" | "write" | "delete" | null>(null);
   const [fileRows, setFileRows] = useState(rows);
+  const [fileSort, setFileSort] = useState<SortState<FileSortKey>>({
+    key: "total",
+    direction: "desc",
+  });
+  const sortedFileRows = useMemo(
+    () => sortRows(fileRows, fileSort, fileSortValue),
+    [fileRows, fileSort],
+  );
 
   useEffect(() => {
+    if (group === "path" && op == null) {
+      setFileRows(rows);
+    }
+  }, [group, op, rows]);
+
+  useEffect(() => {
+    let cancelled = false;
     const opParam = op == null ? "" : `&op=${op}`;
-    void getJson<FileRow[]>(`/api/files?group=${group}&limit=100${opParam}`).then(setFileRows);
-  }, [group, op]);
+    void getJson<FileRow[]>(
+      withDateQuery(`/api/files?group=${group}&limit=100${opParam}`, dateRangeQuery(dateRange)),
+    ).then((nextRows) => {
+      if (!cancelled) {
+        setFileRows(nextRows);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [dateRange, group, op]);
 
   return (
     <div className="view-stack">
@@ -2064,6 +2587,7 @@ function FilesView({ rows }: { rows: FileRow[] }) {
             heavy edits are churn.
           </p>
         </div>
+        <DateRangeControl bounds={dateBounds} range={dateRange} onChange={onDateRangeChange} />
       </header>
 
       <div className="segment-row">
@@ -2104,22 +2628,87 @@ function FilesView({ rows }: { rows: FileRow[] }) {
           />
         ) : (
           <div className="table-scroll">
-            <table>
+            <table className="data-table files-table">
+              <colgroup>
+                <col className="col-file" />
+                {group === "path" ? <col className="col-project" /> : null}
+                <col className="col-count" />
+                <col className="col-count" />
+                <col className="col-count" />
+                <col className="col-count" />
+                <col className="col-sessions" />
+                <col className="col-total" />
+                <col className="col-date" />
+              </colgroup>
               <thead>
                 <tr>
-                  <th>{group === "ext" ? "Extension" : "File"}</th>
-                  {group === "path" ? <th>Project</th> : null}
-                  <th className="numeric">Reads</th>
-                  <th className="numeric">Edits</th>
-                  <th className="numeric">Writes</th>
-                  <th className="numeric">Deletes</th>
-                  <th className="numeric">Sessions</th>
-                  <th className="numeric">Total</th>
-                  <th className="numeric">Last touched</th>
+                  <SortableHeader
+                    label={group === "ext" ? "Extension" : "File"}
+                    onSort={(key) => setFileSort((sort) => nextSort(sort, key))}
+                    sort={fileSort}
+                    sortKey="key"
+                  />
+                  {group === "path" ? (
+                    <SortableHeader
+                      label="Project"
+                      onSort={(key) => setFileSort((sort) => nextSort(sort, key))}
+                      sort={fileSort}
+                      sortKey="project"
+                    />
+                  ) : null}
+                  <SortableHeader
+                    align="right"
+                    label="Reads"
+                    onSort={(key) => setFileSort((sort) => nextSort(sort, key))}
+                    sort={fileSort}
+                    sortKey="reads"
+                  />
+                  <SortableHeader
+                    align="right"
+                    label="Edits"
+                    onSort={(key) => setFileSort((sort) => nextSort(sort, key))}
+                    sort={fileSort}
+                    sortKey="edits"
+                  />
+                  <SortableHeader
+                    align="right"
+                    label="Writes"
+                    onSort={(key) => setFileSort((sort) => nextSort(sort, key))}
+                    sort={fileSort}
+                    sortKey="writes"
+                  />
+                  <SortableHeader
+                    align="right"
+                    label="Deletes"
+                    onSort={(key) => setFileSort((sort) => nextSort(sort, key))}
+                    sort={fileSort}
+                    sortKey="deletes"
+                  />
+                  <SortableHeader
+                    align="right"
+                    label="Sessions"
+                    onSort={(key) => setFileSort((sort) => nextSort(sort, key))}
+                    sort={fileSort}
+                    sortKey="sessions"
+                  />
+                  <SortableHeader
+                    align="right"
+                    label="Total"
+                    onSort={(key) => setFileSort((sort) => nextSort(sort, key))}
+                    sort={fileSort}
+                    sortKey="total"
+                  />
+                  <SortableHeader
+                    align="right"
+                    label="Last touched"
+                    onSort={(key) => setFileSort((sort) => nextSort(sort, key))}
+                    sort={fileSort}
+                    sortKey="last_touched_at"
+                  />
                 </tr>
               </thead>
               <tbody>
-                {fileRows.map((row) => (
+                {sortedFileRows.map((row) => (
                   <tr key={`${group}-${row.project ?? ""}-${row.key}`}>
                     <td className="mono truncate-cell">
                       <a href={`/search?q=${encodeURIComponent(`"${row.key}"`)}`}>{row.key}</a>
@@ -2231,13 +2820,16 @@ function SettingSelect({
         <strong>{label}</strong>
         <small>{help}</small>
       </span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {options.map(([key, name]) => (
-          <option key={key} value={key}>
-            {name}
-          </option>
-        ))}
-      </select>
+      <span className="select-shell">
+        <select value={value} onChange={(event) => onChange(event.target.value)}>
+          {options.map(([key, name]) => (
+            <option key={key} value={key}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <Icon name="chevronDown" />
+      </span>
     </label>
   );
 }
@@ -2252,7 +2844,7 @@ function SessionDetailView({ id }: { id: number }) {
   }, [id]);
 
   if (detail == null) {
-    return <div className="notice">Loading session...</div>;
+    return <div className="notice">Preparing session...</div>;
   }
 
   const messages = renderableMessages(detail.messages);
@@ -2475,6 +3067,100 @@ async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+function applyDatePreset(
+  key: (typeof RANGE_PRESETS)[number]["key"],
+  bounds: DateBounds | null,
+): DateRangeSelection {
+  const preset = RANGE_PRESETS.find((item) => item.key === key);
+  const to = validIsoDate(bounds?.max) ?? todayIsoDate();
+  if (preset == null) {
+    return ALL_DATE_RANGE;
+  }
+  return {
+    preset: key,
+    from: addDays(to, -(preset.days - 1)),
+    to,
+  };
+}
+
+function shiftDateRange(range: DateRangeSelection, direction: -1 | 1): DateRangeSelection {
+  if (range.from == null || range.to == null) {
+    return range;
+  }
+  const span = Math.max(1, daysBetween(range.from, range.to) + 1);
+  return {
+    preset: "custom",
+    from: addDays(range.from, span * direction),
+    to: addDays(range.to, span * direction),
+  };
+}
+
+function dateRangeQuery(range: DateRangeSelection): string {
+  const params = new URLSearchParams();
+  if (range.from != null) {
+    params.set("from", range.from);
+  }
+  if (range.to != null) {
+    params.set("to", range.to);
+  }
+  return params.toString();
+}
+
+function withDateQuery(path: string, dateQuery: string): string {
+  if (dateQuery === "") {
+    return path;
+  }
+  return `${path}${path.includes("?") ? "&" : "?"}${dateQuery}`;
+}
+
+function dateRangeLabel(range: DateRangeSelection): string {
+  if (range.from == null || range.to == null) {
+    return "All time";
+  }
+  return range.from === range.to
+    ? formatDateLabel(range.from)
+    : `${formatDateLabel(range.from)} to ${formatDateLabel(range.to)}`;
+}
+
+function addDays(isoDate: string, days: number): string {
+  const date = parseIsoDate(isoDate) ?? new Date();
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function daysBetween(from: string, to: string): number {
+  const start = parseIsoDate(from)?.getTime() ?? 0;
+  const end = parseIsoDate(to)?.getTime() ?? start;
+  return Math.round((end - start) / 86_400_000);
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function validIsoDate(value: string | null | undefined): string | null {
+  if (value == null || parseIsoDate(value) == null) {
+    return null;
+  }
+  return value;
+}
+
+function parseIsoDate(value: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value ? null : date;
+}
+
+function formatDateLabel(value: string): string {
+  const date = parseIsoDate(value);
+  if (date == null) {
+    return value;
+  }
+  return date.toLocaleDateString(undefined, { month: "short", day: "2-digit", year: "numeric" });
+}
+
 function activeRoute(path: string): string {
   const pathname = pathOnly(path);
   if (pathname.startsWith("/sessions/")) {
@@ -2500,13 +3186,6 @@ function activeRouteKey(path: string): string {
 
 function titleFor(active: string): string {
   return active === "Sessions" ? "Session Archive" : active;
-}
-
-function dateRange(bounds: DateBounds | null): string {
-  if (bounds?.min == null || bounds.max == null) {
-    return "all time";
-  }
-  return bounds.min === bounds.max ? bounds.min : `${bounds.min}..${bounds.max}`;
 }
 
 function prettyJson(value: string | null): string {
