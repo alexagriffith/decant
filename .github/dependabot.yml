@@ -1,22 +1,12 @@
 version: 2
 updates:
-  - package-ecosystem: "cargo"
+  - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
 
-  - package-ecosystem: "mix"
-    directory: "/web"
-    schedule:
-      interval: "weekly"
-
-  - package-ecosystem: "npm"
-    directory: "/web/assets"
-    schedule:
-      interval: "weekly"
-
-  - package-ecosystem: "swift"
-    directory: "/macos"
+  - package-ecosystem: "docker"
+    directory: "/"
     schedule:
       interval: "weekly"
 

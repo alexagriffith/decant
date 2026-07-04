@@ -1,0 +1,112 @@
+[
+  {
+    "tool": "claude_code",
+    "source_session_id": "distill",
+    "seq": 5,
+    "path": "/Users/dev/proj/NOTES.md",
+    "rel_path": "NOTES.md",
+    "ext": "md",
+    "operation": "write",
+    "timestamp": "2026-05-05T10:03:00.000Z"
+  },
+  {
+    "tool": "claude_code",
+    "source_session_id": "distill",
+    "seq": 5,
+    "path": "/Users/dev/proj/src/main.rs",
+    "rel_path": "src/main.rs",
+    "ext": "rs",
+    "operation": "edit",
+    "timestamp": "2026-05-05T10:03:00.000Z"
+  },
+  {
+    "tool": "claude_code",
+    "source_session_id": "enriched",
+    "seq": 1,
+    "path": "/Users/dev/proj/src/main.rs",
+    "rel_path": "src/main.rs",
+    "ext": "rs",
+    "operation": "read",
+    "timestamp": "2026-05-03T10:01:00.000Z"
+  },
+  {
+    "tool": "claude_code",
+    "source_session_id": "enriched",
+    "seq": 3,
+    "path": "/Users/dev/proj/README.md",
+    "rel_path": "README.md",
+    "ext": "md",
+    "operation": "write",
+    "timestamp": "2026-05-03T10:02:00.000Z"
+  },
+  {
+    "tool": "claude_code",
+    "source_session_id": "enriched",
+    "seq": 3,
+    "path": "/Users/dev/proj/nb.ipynb",
+    "rel_path": "nb.ipynb",
+    "ext": "ipynb",
+    "operation": "edit",
+    "timestamp": "2026-05-03T10:02:00.000Z"
+  },
+  {
+    "tool": "claude_code",
+    "source_session_id": "enriched",
+    "seq": 3,
+    "path": "/Users/dev/proj/src/main.rs",
+    "rel_path": "src/main.rs",
+    "ext": "rs",
+    "operation": "edit",
+    "timestamp": "2026-05-03T10:02:00.000Z"
+  },
+  {
+    "tool": "claude_code",
+    "source_session_id": "sample",
+    "seq": 1,
+    "path": "/Users/dev/proj/auth_test.py",
+    "rel_path": "auth_test.py",
+    "ext": "py",
+    "operation": "read",
+    "timestamp": "2026-05-01T10:00:05.000Z"
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-distill",
+    "seq": 5,
+    "path": "docs/new.md",
+    "rel_path": "docs/new.md",
+    "ext": "md",
+    "operation": "write",
+    "timestamp": "2026-05-06T09:00:07.000Z"
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-enr",
+    "seq": 2,
+    "path": "docs/new.md",
+    "rel_path": "docs/new.md",
+    "ext": "md",
+    "operation": "write",
+    "timestamp": "2026-05-04T09:00:05.000Z"
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-enr",
+    "seq": 2,
+    "path": "old.txt",
+    "rel_path": "old.txt",
+    "ext": "txt",
+    "operation": "delete",
+    "timestamp": "2026-05-04T09:00:05.000Z"
+  },
+  {
+    "tool": "codex",
+    "source_session_id": "sess-codex-enr",
+    "seq": 2,
+    "path": "src/lib.rs",
+    "rel_path": "src/lib.rs",
+    "ext": "rs",
+    "operation": "edit",
+    "timestamp": "2026-05-04T09:00:05.000Z"
+  }
+]

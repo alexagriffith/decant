@@ -1,0 +1,72 @@
+[
+  {
+    "tool_name": "Bash",
+    "tool_kind": "builtin",
+    "mcp_server": null,
+    "calls": 5,
+    "errors": 1
+  },
+  {
+    "tool_name": "exec_command",
+    "tool_kind": "builtin",
+    "mcp_server": null,
+    "calls": 4,
+    "errors": 0
+  },
+  {
+    "tool_name": "Edit",
+    "tool_kind": "builtin",
+    "mcp_server": null,
+    "calls": 2,
+    "errors": 1
+  },
+  {
+    "tool_name": "Read",
+    "tool_kind": "builtin",
+    "mcp_server": null,
+    "calls": 2,
+    "errors": 0
+  },
+  {
+    "tool_name": "Write",
+    "tool_kind": "builtin",
+    "mcp_server": null,
+    "calls": 2,
+    "errors": 0
+  },
+  {
+    "tool_name": "apply_patch",
+    "tool_kind": "builtin",
+    "mcp_server": null,
+    "calls": 2,
+    "errors": 0
+  },
+  {
+    "tool_name": "Agent",
+    "tool_kind": "builtin",
+    "mcp_server": null,
+    "calls": 1,
+    "errors": 0
+  },
+  {
+    "tool_name": "NotebookEdit",
+    "tool_kind": "builtin",
+    "mcp_server": null,
+    "calls": 1,
+    "errors": 0
+  },
+  {
+    "tool_name": "Skill",
+    "tool_kind": "builtin",
+    "mcp_server": null,
+    "calls": 1,
+    "errors": 0
+  },
+  {
+    "tool_name": "mcp__github__create_issue",
+    "tool_kind": "mcp",
+    "mcp_server": "github",
+    "calls": 1,
+    "errors": 0
+  }
+]

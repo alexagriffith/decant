@@ -1,0 +1,22 @@
+{
+  "name": "@dosu/decant-darwin-x64",
+  "version": "0.0.0",
+  "description": "Decant compiled binary for macOS x64.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dosu-ai/decant.git"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/decant"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

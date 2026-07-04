@@ -1,0 +1,9 @@
+.git
+.github
+.pre-commit-cache
+dist
+node_modules
+*.db
+*.db-shm
+*.db-wal
+.DS_Store

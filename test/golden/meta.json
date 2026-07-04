@@ -1,0 +1,91 @@
+{
+  "generator": "frozen pre-typescript golden snapshot",
+  "source_of_truth": "pre-typescript implementation",
+  "baseline_rev": "bea97bcb49884cb7a7de9dc6cf441925c597c749-dirty",
+  "fixtures": [
+    "fixtures/claude/distill.jsonl",
+    "fixtures/claude/enriched.jsonl",
+    "fixtures/claude/mcp.jsonl",
+    "fixtures/claude/sample.jsonl",
+    "fixtures/codex/distill.jsonl",
+    "fixtures/codex/enriched.jsonl",
+    "fixtures/codex/sample.jsonl"
+  ],
+  "row_dumps": [
+    "blocks",
+    "file_refs",
+    "messages",
+    "recommendations",
+    "sessions",
+    "tool_calls"
+  ],
+  "cli_commands": {
+    "distill-script": [
+      "distill",
+      "script",
+      "--json"
+    ],
+    "distill-script-just": [
+      "distill",
+      "script",
+      "--as",
+      "just",
+      "--json"
+    ],
+    "distill-skill-agents": [
+      "distill",
+      "skill",
+      "--kind",
+      "agents",
+      "--project",
+      "/Users/dev/proj",
+      "--json"
+    ],
+    "files-ext": [
+      "files",
+      "--group",
+      "ext",
+      "--json"
+    ],
+    "ls": [
+      "ls",
+      "--json"
+    ],
+    "mcp-stats": [
+      "mcp",
+      "stats",
+      "--limit",
+      "10",
+      "--json"
+    ],
+    "project-ls": [
+      "project",
+      "ls",
+      "--json"
+    ],
+    "search-auth": [
+      "search",
+      "auth",
+      "--limit",
+      "5",
+      "--json"
+    ],
+    "stats": [
+      "stats",
+      "--json"
+    ],
+    "stats-by-model": [
+      "stats",
+      "--by",
+      "model",
+      "--json"
+    ],
+    "tool-stats": [
+      "tool",
+      "stats",
+      "--limit",
+      "10",
+      "--json"
+    ]
+  }
+}

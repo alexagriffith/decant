@@ -1,0 +1,36 @@
+{
+  "name": "@dosu/decant",
+  "version": "0.0.0",
+  "description": "Extract Claude Code and Codex CLI sessions into a normalized, full-text-searchable local SQLite archive.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dosu-ai/decant.git"
+  },
+  "homepage": "https://github.com/dosu-ai/decant#readme",
+  "bugs": {
+    "url": "https://github.com/dosu-ai/decant/issues"
+  },
+  "type": "commonjs",
+  "bin": {
+    "decant": "./bin/decant.cjs"
+  },
+  "files": [
+    "bin/decant.cjs",
+    "targets.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@dosu/decant-darwin-arm64": "0.0.0",
+    "@dosu/decant-darwin-x64": "0.0.0",
+    "@dosu/decant-linux-arm64": "0.0.0",
+    "@dosu/decant-linux-x64": "0.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
