@@ -120,6 +120,22 @@ describe("stats rollups", () => {
     db.close();
   });
 
+  test("date filters scope analytics rollups", () => {
+    const db = seededEnriched();
+    const filter = { from: "2026-05-04", to: "2026-05-04" };
+
+    expect(totals(db, filter).sessions).toBe(1);
+    expect(byDimension(db, "tool", filter)).toMatchObject([{ key: "codex", sessions: 1 }]);
+    expect(modelSparklines(db, filter).days).toEqual(["2026-05-04"]);
+    expect(activity(db, filter).by_weekday.reduce((sum, count) => sum + count, 0)).toBe(1);
+    expect(toolUsage(db, false, 50, filter).some((row) => row.tool_name === "Read")).toBe(false);
+    expect(fileHotspots(db, "path", null, 50, filter).some((row) => row.key === "nb.ipynb")).toBe(
+      false,
+    );
+
+    db.close();
+  });
+
   test("reasoning tokens surface in rollups", () => {
     const db = seededEnriched();
     expect(totals(db).reasoning_tokens).toBe(40);
