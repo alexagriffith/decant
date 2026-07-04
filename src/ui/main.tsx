@@ -191,6 +191,14 @@ const navItems: NavItem[] = [
   { key: "tools", href: "/tools", label: "Tools & MCP", icon: "tools" },
   { key: "files", href: "/files", label: "Files", icon: "file" },
 ];
+
+const CLAUDE_ICON_PATH =
+  "m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z";
+const OPENAI_ICON_PATH =
+  "M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z";
+const ANTHROPIC_ICON_PATH =
+  "M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z";
+
 const SESSION_PAGE_SIZE = 100;
 type ThemeChoice = "system" | "light" | "dark";
 
@@ -843,7 +851,10 @@ function AnalyticsView({ data }: { data: DashboardData }) {
                     <ModelBadge model={row.key} />
                   </td>
                   <td>
-                    <Sparkline values={data.modelSparklines?.models[row.key] ?? []} />
+                    <Sparkline
+                      tone={brandTone(row.key)}
+                      values={data.modelSparklines?.models[row.key] ?? []}
+                    />
                   </td>
                   <td className="numeric">{formatInt(row.sessions)}</td>
                   <td className="numeric muted">{compact(row.input_tokens)}</td>
@@ -905,18 +916,26 @@ function AnalyticsView({ data }: { data: DashboardData }) {
 }
 
 function ActivityPanel({ activity }: { activity: Activity | null }) {
+  const labels = Array.from({ length: 24 }, (_, hour) => hourLabel(hour));
+  const peak = activity?.peak_hour ?? peakIndex(activity?.by_hour ?? []);
   return (
     <section className="panel">
       <div className="panel-heading">
         <div>
           <h2>Busiest hours</h2>
-          <p>{activity?.timezone ?? "Local time"}</p>
+          <p>
+            {peak == null
+              ? "Sessions by hour, local time"
+              : `Local time, you ship most around ${hourLabel(peak)}`}
+          </p>
         </div>
       </div>
-      <div className="panel-body chart-stack">
-        <Histogram
-          labels={Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0"))}
+      <div className="panel-body chart-panel-body">
+        <AnalyticsChart
+          labels={labels}
+          metric="int"
           values={activity?.by_hour ?? []}
+          variant="bar"
         />
       </div>
     </section>
@@ -924,18 +943,22 @@ function ActivityPanel({ activity }: { activity: Activity | null }) {
 }
 
 function WeekdayPanel({ activity }: { activity: Activity | null }) {
+  const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const peak = activity?.peak_weekday ?? peakIndex(activity?.by_weekday ?? []);
   return (
     <section className="panel">
       <div className="panel-heading">
         <div>
           <h2>Busiest days</h2>
-          <p>Sessions by weekday</p>
+          <p>{peak == null ? "Sessions by weekday" : `You ship most on ${weekdayLabel(peak)}`}</p>
         </div>
       </div>
-      <div className="panel-body chart-stack">
-        <Histogram
-          labels={["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]}
+      <div className="panel-body chart-panel-body">
+        <AnalyticsChart
+          labels={labels}
+          metric="int"
           values={activity?.by_weekday ?? []}
+          variant="bar"
         />
       </div>
     </section>
@@ -963,9 +986,11 @@ function DailyPanel({
         {rows.length === 0 ? (
           <EmptyState icon="chart" message="Widen the date range." title="No data in range" />
         ) : (
-          <Histogram
-            labels={rows.map((row) => row.key.slice(5))}
-            values={values.map((value) => Math.round(value))}
+          <AnalyticsChart
+            labels={rows.map((row) => row.key)}
+            metric={metric === "cost" ? "money" : "int"}
+            values={values}
+            variant={metric === "cost" ? "line" : "bar"}
           />
         )}
       </div>
@@ -973,39 +998,223 @@ function DailyPanel({
   );
 }
 
-function Histogram({ labels, values }: { labels: string[]; values: number[] }) {
-  const max = Math.max(1, ...values);
+type AnalyticsChartMetric = "int" | "money";
+type AnalyticsChartVariant = "bar" | "line";
+
+function AnalyticsChart({
+  labels,
+  metric,
+  values,
+  variant,
+}: {
+  labels: string[];
+  metric: AnalyticsChartMetric;
+  values: number[];
+  variant: AnalyticsChartVariant;
+}) {
+  const width = 640;
+  const height = 240;
+  const left = 44;
+  const right = 16;
+  const top = 18;
+  const bottom = 30;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const cleanValues = labels.map((_, index) => Math.max(0, values[index] ?? 0));
+  const max = niceMax(Math.max(1, ...cleanValues));
+  const yTicks = [max, max / 2, 0];
+  const xIndexes = chartLabelIndexes(labels.length);
+  const bandwidth = labels.length === 0 ? plotWidth : plotWidth / labels.length;
+  const barWidth = Math.max(3, Math.min(26, bandwidth * 0.62));
+  const points = cleanValues.map((value, index) => ({
+    label: labels[index] ?? "",
+    value,
+    x:
+      labels.length <= 1
+        ? left + plotWidth / 2
+        : variant === "bar"
+          ? left + bandwidth * (index + 0.5)
+          : left + (index / (labels.length - 1)) * plotWidth,
+    y: top + plotHeight - (value / max) * plotHeight,
+  }));
+  const linePath = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
+    .join(" ");
+  const areaPath =
+    points.length > 1
+      ? `${linePath} L ${(points.at(-1)?.x ?? left).toFixed(2)} ${top + plotHeight} L ${left} ${top + plotHeight} Z`
+      : "";
+
   return (
-    <div className="histogram">
-      {labels.map((label, index) => {
-        const value = values[index] ?? 0;
+    <svg
+      aria-label="Analytics chart"
+      className={`analytics-chart is-${variant}`}
+      preserveAspectRatio="none"
+      role="img"
+      viewBox={`0 0 ${width} ${height}`}
+    >
+      {yTicks.map((tick) => {
+        const y = top + plotHeight - (tick / max) * plotHeight;
         return (
-          <span key={label} title={`${label}: ${value}`}>
-            <i style={{ height: `${Math.max(3, (value / max) * 100)}%` }} />
-            <b>{label}</b>
-          </span>
+          <g key={tick}>
+            <line className="chart-grid" x1={left} x2={width - right} y1={y} y2={y} />
+            <text className="chart-y-label" x={left - 10} y={y + 4}>
+              {chartValue(tick, metric)}
+            </text>
+          </g>
         );
       })}
-    </div>
+      <line
+        className="chart-axis"
+        x1={left}
+        x2={width - right}
+        y1={top + plotHeight}
+        y2={top + plotHeight}
+      />
+      {variant === "bar"
+        ? points.map((point) => (
+            <rect
+              className="chart-bar"
+              height={Math.max(2, top + plotHeight - point.y)}
+              key={point.label}
+              rx="3"
+              width={barWidth}
+              x={point.x - barWidth / 2}
+              y={Math.min(top + plotHeight - 2, point.y)}
+            >
+              <title>{`${point.label}: ${chartTooltipValue(point.value, metric)}`}</title>
+            </rect>
+          ))
+        : null}
+      {variant === "line" && areaPath !== "" ? <path className="chart-area" d={areaPath} /> : null}
+      {variant === "line" && linePath !== "" ? (
+        <path className="chart-line" d={linePath}>
+          <title>
+            {points
+              .map((point) => `${point.label}: ${chartTooltipValue(point.value, metric)}`)
+              .join("\n")}
+          </title>
+        </path>
+      ) : null}
+      {xIndexes.map((index) => {
+        const point = points[index];
+        if (point == null) {
+          return null;
+        }
+        return (
+          <text className="chart-x-label" key={point.label} x={point.x} y={height - 8}>
+            {chartLabel(point.label)}
+          </text>
+        );
+      })}
+    </svg>
   );
 }
 
-function Sparkline({ values }: { values: number[] }) {
-  const max = Math.max(1, ...values);
-  const width = 160;
-  const height = 36;
-  const points = values
-    .map((value, index) => {
-      const x = values.length <= 1 ? 0 : (index / (values.length - 1)) * width;
-      const y = height - (value / max) * (height - 4) - 2;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
+function Sparkline({ tone = "accent", values }: { tone?: BadgeTone; values: number[] }) {
+  const points = sparkPoints(values);
+  if (points == null) {
+    return <span className="spark-empty">-</span>;
+  }
   return (
-    <svg aria-hidden="true" className="sparkline" viewBox={`0 0 ${width} ${height}`}>
+    <svg
+      aria-hidden="true"
+      className={`sparkline tone-${tone}`}
+      preserveAspectRatio="none"
+      viewBox="0 0 100 24"
+    >
       <polyline points={points} />
     </svg>
   );
+}
+
+function sparkPoints(values: number[]): string | null {
+  const cleanValues = values.map((value) => Math.max(0, value));
+  if (cleanValues.length < 2) {
+    return null;
+  }
+  const max = Math.max(1, ...cleanValues);
+  return cleanValues
+    .map((value, index) => {
+      const x = (index / (cleanValues.length - 1)) * 100;
+      const y = 23 - (value / max) * 22;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+}
+
+function hourLabel(hour: number): string {
+  if (hour === 0) {
+    return "12a";
+  }
+  if (hour === 12) {
+    return "12p";
+  }
+  return hour < 12 ? `${hour}a` : `${hour - 12}p`;
+}
+
+function weekdayLabel(day: number): string {
+  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day] ?? String(day);
+}
+
+function peakIndex(values: number[]): number | null {
+  const max = Math.max(0, ...values);
+  return max > 0 ? values.indexOf(max) : null;
+}
+
+function niceMax(value: number): number {
+  if (value <= 1) {
+    return 1;
+  }
+  const exponent = Math.floor(Math.log10(value));
+  const base = 10 ** exponent;
+  const normalized = value / base;
+  const nice = normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return nice * base;
+}
+
+function chartLabelIndexes(count: number): number[] {
+  if (count <= 0) {
+    return [];
+  }
+  if (count <= 7) {
+    return Array.from({ length: count }, (_, index) => index);
+  }
+  const maxLabels = count <= 14 ? 7 : count <= 31 ? 8 : 10;
+  const step = Math.max(1, Math.ceil((count - 1) / (maxLabels - 1)));
+  const indexes = new Set<number>([0, count - 1]);
+  for (let index = 0; index < count; index += step) {
+    indexes.add(index);
+  }
+  return [...indexes].sort((left, right) => left - right);
+}
+
+function chartLabel(value: string): string {
+  return /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(5, 10) : value;
+}
+
+function chartValue(value: number, metric: AnalyticsChartMetric): string {
+  const formatted = compactAxis(value);
+  return metric === "money" ? `$${formatted}` : formatted;
+}
+
+function chartTooltipValue(value: number, metric: AnalyticsChartMetric): string {
+  return metric === "money" ? money(value) : formatInt(value);
+}
+
+function compactAxis(value: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) {
+    return `${trimNumber(value / 1_000_000)}M`;
+  }
+  if (abs >= 1_000) {
+    return `${trimNumber(value / 1_000)}K`;
+  }
+  return trimNumber(value);
+}
+
+function trimNumber(value: number): string {
+  return Number.isInteger(value) ? formatInt(value) : value.toFixed(2).replace(/\.?0+$/, "");
 }
 
 type BadgeTone =
@@ -1019,11 +1228,13 @@ type BadgeTone =
   | "openai";
 
 type IconName =
+  | "anthropic"
   | "arrowLeft"
   | "beaker"
   | "bolt"
   | "chart"
   | "check"
+  | "claude"
   | "clock"
   | "cpu"
   | "desktop"
@@ -1036,6 +1247,7 @@ type IconName =
   | "messages"
   | "money"
   | "moon"
+  | "openai"
   | "search"
   | "sessions"
   | "settings"
@@ -1090,10 +1302,20 @@ function Badge({
 
 function ToolBadge({ tool }: { tool: string | null | undefined }) {
   if (tool === "claude_code") {
-    return <Badge tone="claude">Claude</Badge>;
+    return (
+      <Badge tone="claude">
+        <Icon name="claude" />
+        Claude
+      </Badge>
+    );
   }
   if (tool === "codex") {
-    return <Badge tone="openai">Codex</Badge>;
+    return (
+      <Badge tone="openai">
+        <Icon name="openai" />
+        Codex
+      </Badge>
+    );
   }
   return <Badge>{tool ?? "-"}</Badge>;
 }
@@ -1102,8 +1324,11 @@ function ModelBadge({ model }: { model: string | null | undefined }) {
   if (model == null || model === "") {
     return <span className="faint">-</span>;
   }
+  const tone = brandTone(model);
+  const icon = modelBrandIcon(model, tone);
   return (
-    <Badge mono tone={brandTone(model)}>
+    <Badge mono tone={tone}>
+      {icon == null ? null : <Icon name={icon} />}
       {model}
     </Badge>
   );
@@ -1334,6 +1559,8 @@ function Icon({ name }: { name: IconName }) {
 
 function iconPath(name: IconName) {
   switch (name) {
+    case "anthropic":
+      return <path d={ANTHROPIC_ICON_PATH} />;
     case "arrowLeft":
       return <path d="M10 19 3 12l7-7v4h11v6H10v4Z" />;
     case "beaker":
@@ -1346,6 +1573,8 @@ function iconPath(name: IconName) {
       return <path d="M4 20V10h4v10H4Zm6 0V4h4v16h-4Zm6 0v-7h4v7h-4Z" />;
     case "check":
       return <path d="m9.2 16.2-4-4L3.8 13.6l5.4 5.4L20.5 7.7 19.1 6.3 9.2 16.2Z" />;
+    case "claude":
+      return <path d={CLAUDE_ICON_PATH} />;
     case "clock":
       return <path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 5h-2v6l5 3 1-1.7-4-2.3V7Z" />;
     case "cpu":
@@ -1374,6 +1603,8 @@ function iconPath(name: IconName) {
       );
     case "moon":
       return <path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 9 9 0 1 0 20 15.5Z" />;
+    case "openai":
+      return <path d={OPENAI_ICON_PATH} />;
     case "search":
       return (
         <path d="M10 3a7 7 0 1 0 4.2 12.6l4.6 4.6 1.4-1.4-4.6-4.6A7 7 0 0 0 10 3Zm0 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Z" />
@@ -1452,12 +1683,36 @@ function field(label: string, value: string | null): string | null {
   return isPresent(value) ? `${label}: ${value}` : null;
 }
 
+function modelBrandIcon(model: string, tone: BadgeTone): IconName | null {
+  if (tone === "openai") {
+    return "openai";
+  }
+  if (tone === "claude") {
+    return model.toLowerCase().includes("anthropic") && !model.toLowerCase().includes("claude")
+      ? "anthropic"
+      : "claude";
+  }
+  return null;
+}
+
 function brandTone(model: string | null | undefined): BadgeTone {
   const normalized = (model ?? "").toLowerCase();
-  if (normalized.includes("claude") || normalized.includes("anthropic")) {
+  if (
+    normalized.includes("claude") ||
+    normalized.includes("anthropic") ||
+    normalized.includes("opus") ||
+    normalized.includes("sonnet") ||
+    normalized.includes("haiku")
+  ) {
     return "claude";
   }
-  if (normalized.includes("gpt") || normalized.includes("openai") || normalized.includes("o3")) {
+  if (
+    normalized.includes("gpt") ||
+    normalized.includes("openai") ||
+    normalized.includes("codex") ||
+    normalized.startsWith("o1") ||
+    normalized.startsWith("o3")
+  ) {
     return "openai";
   }
   return "neutral";

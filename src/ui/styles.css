@@ -683,6 +683,12 @@ select {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
+.badge svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
 .tone-accent {
   color: var(--accent);
 }
@@ -749,6 +755,10 @@ select {
 .badge.tone-openai,
 .stat-icon.tone-openai {
   background: var(--elevated);
+}
+
+.bar span.tone-openai {
+  color: var(--muted);
 }
 
 .notice {
@@ -894,6 +904,62 @@ mark {
   gap: 18px;
 }
 
+.chart-panel-body {
+  padding: 16px 18px 12px;
+}
+
+.analytics-chart {
+  display: block;
+  width: 100%;
+  height: 16rem;
+  color: var(--accent);
+}
+
+.analytics-chart .chart-grid {
+  stroke: var(--line);
+  stroke-dasharray: 3 5;
+  stroke-width: 1;
+}
+
+.analytics-chart .chart-axis {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.analytics-chart .chart-x-label,
+.analytics-chart .chart-y-label {
+  fill: var(--faint);
+  font-size: 11px;
+  font-weight: 500;
+  vector-effect: non-scaling-stroke;
+}
+
+.analytics-chart .chart-x-label {
+  text-anchor: middle;
+}
+
+.analytics-chart .chart-y-label {
+  text-anchor: end;
+}
+
+.analytics-chart .chart-bar {
+  fill: var(--accent);
+}
+
+.analytics-chart .chart-area {
+  fill: currentColor;
+  opacity: 0.1;
+}
+
+.analytics-chart .chart-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
 .histogram {
   display: grid;
   align-items: end;
@@ -933,6 +999,14 @@ mark {
   color: var(--accent);
 }
 
+.sparkline.tone-claude {
+  color: var(--claude);
+}
+
+.sparkline.tone-openai {
+  color: var(--muted);
+}
+
 .sparkline polyline {
   fill: none;
   stroke: currentColor;
@@ -940,6 +1014,11 @@ mark {
   stroke-linejoin: round;
   stroke-width: 1.6;
   vector-effect: non-scaling-stroke;
+}
+
+.spark-empty {
+  color: var(--faint);
+  font-size: 12px;
 }
 
 .share-cell {
