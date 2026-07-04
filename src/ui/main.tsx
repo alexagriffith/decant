@@ -145,6 +145,8 @@ type Recommendation = {
   trigger: string | null;
   evidence: string | null;
   success_metric: string | null;
+  note: string | null;
+  implemented_at: string | null;
 };
 
 type ConfigView = {
@@ -296,7 +298,7 @@ function App() {
       getJson<ToolRow[]>(withDateQuery("/api/tools/usage?limit=100", dateQuery)),
       getJson<McpRow[]>(withDateQuery("/api/tools/mcp-usage?limit=100", dateQuery)),
       getJson<FileRow[]>(withDateQuery("/api/files?group=path&limit=100", dateQuery)),
-      getJson<Recommendation[]>("/api/recommendations?status=open"),
+      getJson<Recommendation[]>("/api/recommendations?status=all"),
       getJson<ConfigView>("/api/config"),
       getJson<SettingsInfo>("/api/settings"),
       getJson<Activity>(withDateQuery("/api/analytics/activity", dateQuery)),
@@ -350,7 +352,7 @@ function App() {
       )
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
+          setError(errorMessage(err));
         }
       })
       .finally(() => {
@@ -379,6 +381,12 @@ function App() {
   const activeKey = activeRouteKey(path);
   const metrics = data.summary;
   const lastActivity = latestSessionDay(data.sessions);
+  const runSync = () => {
+    setError(null);
+    void getJson<unknown>("/api/sync", { method: "POST", body: "{}" })
+      .then(() => setReloadKey((key) => key + 1))
+      .catch((err: unknown) => setError(errorMessage(err)));
+  };
 
   return (
     <div className="app-shell">
@@ -463,6 +471,10 @@ function App() {
             <span>Search...</span>
             <kbd>/</kbd>
           </a>
+          <button className="secondary-button" onClick={runSync} type="button">
+            <Icon name="upload" />
+            Sync
+          </button>
           <a
             aria-label="Settings"
             className="icon-button"
@@ -2214,14 +2226,25 @@ function InsightsView({
   onMarked: () => void;
 }) {
   const [pending, setPending] = useState<string | null>(null);
-  const signals = rows
+  const [error, setError] = useState<string | null>(null);
+  const openRows = rows.filter((row) => row.status === "open");
+  const implementedRows = rows
+    .filter((row) => row.status === "implemented")
+    .slice()
+    .sort(
+      (left, right) =>
+        implementedTimestamp(right) - implementedTimestamp(left) || right.score - left.score,
+    );
+  const signals = openRows
     .filter((row) => row.kind === "signal")
     .slice()
     .sort((left, right) => right.score - left.score);
   const [hero, ...rest] = signals;
-  const catalogGroups = groupByCategory(rows.filter((row) => row.kind === "catalog"));
+  const catalogGroups = groupByCategory(openRows.filter((row) => row.kind === "catalog"));
+  const canLaunch = settingsInfo?.can_launch === true;
   const completeRecommendation = (row: Recommendation) => {
-    if (row.prompt != null && row.prompt.trim() !== "" && settingsInfo?.can_launch === true) {
+    setError(null);
+    if (isPresent(row.prompt) && canLaunch && settingsInfo != null) {
       setPending(row.key);
       void getJson<{ ok: boolean }>("/api/launch/agent", {
         method: "POST",
@@ -2232,10 +2255,11 @@ function InsightsView({
         }),
       })
         .then(() => onMarked())
+        .catch((err: unknown) => setError(errorMessage(err)))
         .finally(() => setPending(null));
       return;
     }
-    if (row.prompt != null && row.prompt.trim() !== "") {
+    if (isPresent(row.prompt)) {
       void navigator.clipboard?.writeText(handoffPrompt(row));
       return;
     }
@@ -2245,6 +2269,7 @@ function InsightsView({
       body: JSON.stringify({ key: row.key, source: "ui" }),
     })
       .then(onMarked)
+      .catch((err: unknown) => setError(errorMessage(err)))
       .finally(() => setPending(null));
   };
 
@@ -2254,6 +2279,8 @@ function InsightsView({
         <h1>Insights</h1>
         <p>What could make your coding agents better, drawn from your archive.</p>
       </header>
+
+      {error != null ? <div className="notice danger inline-notice">{error}</div> : null}
 
       <section className="view-stack">
         <div className="section-title-row">
@@ -2277,7 +2304,7 @@ function InsightsView({
             pending={pending}
             row={hero}
             onComplete={completeRecommendation}
-            canLaunch={settingsInfo?.can_launch === true}
+            canLaunch={canLaunch}
           />
         ) : null}
 
@@ -2289,7 +2316,7 @@ function InsightsView({
                 pending={pending}
                 row={row}
                 onComplete={completeRecommendation}
-                canLaunch={settingsInfo?.can_launch === true}
+                canLaunch={canLaunch}
               />
             ))}
           </div>
@@ -2315,7 +2342,7 @@ function InsightsView({
                     pending={pending}
                     row={row}
                     onComplete={completeRecommendation}
-                    canLaunch={settingsInfo?.can_launch === true}
+                    canLaunch={canLaunch}
                   />
                 ))}
               </div>
@@ -2323,7 +2350,46 @@ function InsightsView({
           ))}
         </section>
       ) : null}
+
+      {implementedRows.length > 0 ? (
+        <section className="view-stack insights-history-heading">
+          <div className="section-title-row">
+            <div>
+              <h2>Implemented</h2>
+              <p>Recommendations already marked complete</p>
+            </div>
+            <span>{formatInt(implementedRows.length)} saved</span>
+          </div>
+          <div className="catalog-grid">
+            {implementedRows.map((row) => (
+              <ImplementedRecommendationCard key={row.key} row={row} />
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
+  );
+}
+
+function ImplementedRecommendationCard({ row }: { row: Recommendation }) {
+  const implementedLabel =
+    row.implemented_at == null ? "Implemented" : `Implemented ${shortDate(row.implemented_at)}`;
+  return (
+    <article className="catalog-card">
+      <div>
+        <span className={`signal-icon tone-${toneName(row.tone)}`}>
+          <Icon name={recommendationIcon(row)} />
+        </span>
+        <h4>{row.title}</h4>
+      </div>
+      <p className="settings-note">
+        {implementedLabel}
+        {isPresent(row.note) ? `: ${row.note}` : ""}
+      </p>
+      {row.detail != null ? <p>{row.detail}</p> : null}
+      {row.suggestion != null ? <p>{row.suggestion}</p> : null}
+      <PromotionPanel compact row={row} />
+    </article>
   );
 }
 
@@ -2743,18 +2809,34 @@ function SettingsView({
   settingsInfo: SettingsInfo | null;
 }) {
   const [settings, setSettings] = useState<UserSettings | null>(settingsInfo?.settings ?? null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setSettings(settingsInfo?.settings ?? null);
+    setSaveError(null);
   }, [settingsInfo]);
 
   const save = (patch: Partial<UserSettings>) => {
-    const next = { ...(settings ?? settingsInfo?.settings), ...patch } as UserSettings;
+    const base = settings ?? settingsInfo?.settings;
+    if (base == null) {
+      return;
+    }
+    const previous = settings;
+    const next = { ...base, ...patch };
     setSettings(next);
+    setSaveError(null);
+    setSaving(true);
     void getJson<SettingsInfo>("/api/settings", {
       method: "POST",
       body: JSON.stringify(next),
-    }).then((response) => setSettings(response.settings));
+    })
+      .then((response) => setSettings(response.settings))
+      .catch((err: unknown) => {
+        setSettings(previous ?? base);
+        setSaveError(errorMessage(err));
+      })
+      .finally(() => setSaving(false));
   };
 
   return (
@@ -2791,12 +2873,15 @@ function SettingsView({
             onChange={(ide) => save({ ide })}
           />
         </div>
-      </section>
-      {settingsInfo?.can_launch !== true ? (
+        {saveError != null ? <div className="notice danger inline-notice">{saveError}</div> : null}
         <p className="settings-note">
-          Opening terminals and editors works on macOS only. Your choices are still saved.
+          {saving
+            ? "Saving preferences..."
+            : settingsInfo?.can_launch === true
+              ? "Native launcher is available on this Mac."
+              : "Native launcher is unavailable on this platform."}
         </p>
-      ) : null}
+      </section>
     </div>
   );
 }
@@ -2836,12 +2921,35 @@ function SettingSelect({
 
 function SessionDetailView({ id }: { id: number }) {
   const [detail, setDetail] = useState<SessionDetailData | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (Number.isFinite(id)) {
-      void getJson<SessionDetailData>(`/api/sessions/${id}`).then(setDetail);
+    let cancelled = false;
+    setDetail(null);
+    setError(null);
+    if (!Number.isFinite(id)) {
+      setError("Invalid session id.");
+      return;
     }
+    void getJson<SessionDetailData>(`/api/sessions/${id}`)
+      .then((next) => {
+        if (!cancelled) {
+          setDetail(next);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(errorMessage(err));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
+
+  if (error != null) {
+    return <div className="notice danger">Unable to load session: {error}</div>;
+  }
 
   if (detail == null) {
     return <div className="notice">Preparing session...</div>;
@@ -3161,6 +3269,10 @@ function formatDateLabel(value: string): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "2-digit", year: "numeric" });
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function activeRoute(path: string): string {
   const pathname = pathOnly(path);
   if (pathname.startsWith("/sessions/")) {
@@ -3186,6 +3298,23 @@ function activeRouteKey(path: string): string {
 
 function titleFor(active: string): string {
   return active === "Sessions" ? "Session Archive" : active;
+}
+
+function shortDate(value: string): string {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) {
+    return value;
+  }
+  return new Date(time).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function implementedTimestamp(row: Recommendation): number {
+  const time = Date.parse(row.implemented_at ?? "");
+  return Number.isFinite(time) ? time : 0;
 }
 
 function prettyJson(value: string | null): string {

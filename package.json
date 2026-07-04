@@ -13,6 +13,9 @@
     "bun": ">=1.3.0"
   },
   "scripts": {
+    "dev": "bun run scripts/dev.ts",
+    "up": "bun run dev",
+    "start": "bun run src/cli.ts serve",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",

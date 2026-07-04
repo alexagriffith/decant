@@ -37,7 +37,7 @@ ENV DECANT_CLAUDE_DIR=/sources/claude
 ENV DECANT_CODEX_DIR=/sources/codex
 
 VOLUME ["/var/lib/decant"]
-EXPOSE 4577
+EXPOSE 3000
 
 ENTRYPOINT ["/usr/local/bin/decant"]
-CMD ["serve", "--host", "0.0.0.0", "--port", "4577", "--no-fs-watch", "--interval-ms", "45000"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "3000", "--no-fs-watch", "--interval-ms", "45000"]

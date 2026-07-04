@@ -108,8 +108,8 @@ describe("distill pure helpers", () => {
     expect(url).toContain("https://alice:<REDACTED>@github.com");
     expect(url).not.toContain("supersecretpw");
 
-    const [gluedUrl] = redact("echo abc9postgres://alice:supersecretpw@db.local/app");
-    expect(gluedUrl).toContain("abc9postgres://alice:<REDACTED>@db.local/app");
+    const [gluedUrl] = redact("echo x_postgres://alice:supersecretpw@db.local/app");
+    expect(gluedUrl).toContain("x_postgres://alice:<REDACTED>@db.local/app");
     expect(gluedUrl).not.toContain("supersecretpw");
 
     const [header] = redact("curl -H 'X-Api-Key: abcdef1234567890'");

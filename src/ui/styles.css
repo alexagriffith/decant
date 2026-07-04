@@ -1495,6 +1495,10 @@ mark {
   gap: 12px;
 }
 
+.insights-history-heading {
+  margin-top: 20px;
+}
+
 .catalog-card {
   display: flex;
   flex-direction: column;
