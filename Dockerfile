@@ -35,6 +35,7 @@ WORKDIR /var/lib/decant
 ENV DECANT_DB=/var/lib/decant/decant.db
 ENV DECANT_CLAUDE_DIR=/sources/claude
 ENV DECANT_CODEX_DIR=/sources/codex
+ENV DECANT_TRUSTED_PEERS=172.16.0.0/12
 
 VOLUME ["/var/lib/decant"]
 EXPOSE 3000

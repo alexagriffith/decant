@@ -60,7 +60,9 @@ docker run --rm \
 Keep the `127.0.0.1:` host prefix on the Docker port publish. Publishing as
 `-p 3000:3000` exposes the archive port on every host interface. The container
 binds `0.0.0.0` only inside its own network namespace so Docker's host loopback
-publish can reach it.
+publish can reach it. The image trusts Docker bridge peers by default via
+`DECANT_TRUSTED_PEERS=172.16.0.0/12`; use a narrower value if your local Docker
+network is different.
 
 ## CLI
 
@@ -91,12 +93,15 @@ All read commands support `--json`. Use `--db /path/to/decant.db` or
   `~/.claude/projects`.
 - `DECANT_CODEX_DIR`: Codex home directory, default `~/.codex`.
 - `DECANT_CONFIG_DIR`: settings directory, default `~/.config/decant`.
+- `DECANT_TRUSTED_PEERS`: comma-separated peer IPs or IPv4 CIDRs allowed through
+  the local API guard when `serve` is bound to a non-loopback host.
 
 `decant serve` binds `127.0.0.1:3000` by default. Override with
 `--host`/`--port`.
 
-Archives older than schema v8 are rebuild-only. Delete the archive and re-run
-`decant sync`; source logs remain the source of truth.
+Archives older than schema v8 are rebuild-only. v8 archives migrate to v9 on
+open; older archives should be deleted and rebuilt with `decant sync`. Source
+logs remain the source of truth.
 
 ## How It Works
 

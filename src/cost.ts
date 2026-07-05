@@ -161,23 +161,43 @@ export function estimateCost(
   usage: TokenUsage,
   pricing: ReadonlyMap<string, Price>,
 ): number {
+  const parts = estimateCostParts(model, usage, pricing);
+  return parts.input + parts.output + parts.cacheRead + parts.cacheCreation;
+}
+
+export interface CostParts {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+}
+
+export function estimateCostParts(
+  model: string | null | undefined,
+  usage: TokenUsage,
+  pricing: ReadonlyMap<string, Price>,
+): CostParts {
   if (model == null) {
-    return 0.0;
+    return emptyCostParts();
   }
   const key = canonicalModel(model);
   if (key == null) {
-    return 0.0;
+    return emptyCostParts();
   }
   const price = pricing.get(key);
   if (price == null) {
-    return 0.0;
+    return emptyCostParts();
   }
 
   const per = (tokens: number, rate: number): number => (tokens * rate) / 1_000_000.0;
-  return (
-    per(usage.input, price.inputPerMtok) +
-    per(usage.output, price.outputPerMtok) +
-    per(usage.cacheRead, price.cacheReadPerMtok) +
-    per(usage.cacheCreation, price.cacheWritePerMtok)
-  );
+  return {
+    input: per(usage.input, price.inputPerMtok),
+    output: per(usage.output, price.outputPerMtok),
+    cacheRead: per(usage.cacheRead, price.cacheReadPerMtok),
+    cacheCreation: per(usage.cacheCreation, price.cacheWritePerMtok),
+  };
+}
+
+function emptyCostParts(): CostParts {
+  return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
 }

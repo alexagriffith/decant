@@ -33,12 +33,26 @@ interface TurnAcc {
 
 type JsonObject = { [key: string]: Json };
 
-export function parseClaudeSession(sourceSessionId: string, content: string): ParsedSession {
+export interface ClaudeParseOptions {
+  sourcePath?: string;
+  sidecarMeta?: Json;
+}
+
+export function parseClaudeSession(
+  sourceSessionId: string,
+  content: string,
+  options: ClaudeParseOptions = {},
+): ParsedSession {
   const messages: NormalizedMessage[] = [];
   const issues: ParsedSession["issues"] = [];
   const billed = new Map<string, number>();
   const turns = new Map<string, TurnAcc>();
 
+  let rootSourceSessionId: string | null = null;
+  const pathIndicatesSubagent = isSubagentPath(options.sourcePath) || isObject(options.sidecarMeta);
+  let sawSidechainRecord = false;
+  let sawMainRecord = false;
+  let agentId = agentIdFromPath(options.sourcePath);
   let cwd: string | null = null;
   let gitBranch: string | null = null;
   let cliVersion: string | null = null;
@@ -65,6 +79,13 @@ export function parseClaudeSession(sourceSessionId: string, content: string): Pa
     }
 
     const typ = asString(get(value, "type")) ?? "";
+    rootSourceSessionId ??= asString(get(value, "sessionId"));
+    if (asBoolean(get(value, "isSidechain")) === true) {
+      sawSidechainRecord = true;
+    } else if (typ === "user" || typ === "assistant" || typ === "system") {
+      sawMainRecord = true;
+    }
+    agentId ??= asString(get(value, "agentId"));
     const timestamp = asString(get(value, "timestamp"));
     if (timestamp != null) {
       startedAt ??= timestamp;
@@ -135,6 +156,20 @@ export function parseClaudeSession(sourceSessionId: string, content: string): Pa
   }
 
   const model = primaryModel(messages);
+  const meta = isObject(options.sidecarMeta) ? options.sidecarMeta : {};
+  const spawnToolUseId = asString(meta.toolUseId);
+  const agentType =
+    asString(meta.subagent_type) ?? asString(meta.subagentType) ?? asString(meta.agentType);
+  const spawnDepth = asInteger(meta.spawnDepth);
+  const isSubagent = pathIndicatesSubagent || (sawSidechainRecord && !sawMainRecord);
+  const rawMeta: Json = {
+    sessionId: rootSourceSessionId,
+    isSubagent,
+    agentId,
+    agentType,
+    spawnToolUseId,
+    spawnDepth,
+  };
 
   return {
     session: {
@@ -149,7 +184,13 @@ export function parseClaudeSession(sourceSessionId: string, content: string): Pa
       startedAt,
       endedAt,
       isArchived: false,
-      rawMeta: null,
+      isSubagent,
+      rootSourceSessionId,
+      spawnToolUseId,
+      agentId,
+      agentType,
+      spawnDepth,
+      rawMeta,
       totals,
       estReasoningTokens,
       reasoningSource: anyThinking ? "inferred" : "none",
@@ -451,4 +492,16 @@ function asInteger(value: Json | undefined): number | null {
 
 function byteLength(value: string): number {
   return encoder.encode(value).length;
+}
+
+function isSubagentPath(path: string | undefined): boolean {
+  return path?.split("/").includes("subagents") === true;
+}
+
+function agentIdFromPath(path: string | undefined): string | null {
+  const filename = path?.split("/").at(-1);
+  if (filename == null || !filename.startsWith("agent-") || !filename.endsWith(".jsonl")) {
+    return null;
+  }
+  return filename.slice("agent-".length, -".jsonl".length);
 }
