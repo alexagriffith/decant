@@ -1209,12 +1209,15 @@ function cleanSessionTitle(value: string | null | undefined): string | null {
   if (value == null || value.trim() === "") {
     return null;
   }
-  const text = value.trim();
+  const text = stripAnsi(value).trim();
   if (isPermissionsText(text)) {
     return "Execution permissions";
   }
   if (/^<local-command-caveat>/i.test(text)) {
     return "Command context";
+  }
+  if (/^<local-command-std(?:out|err)>/i.test(text) || /^<local-command-output>/i.test(text)) {
+    return "Command output";
   }
   if (/^<command-name>/i.test(text)) {
     return "Command context";
@@ -1245,6 +1248,11 @@ function stripMarkupTags(value: string): string {
     .replace(/<\/?[a-z][a-z0-9_-]*\b[^>]*>/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function stripAnsi(value: string): string {
+  const pattern = `${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`;
+  return value.replace(new RegExp(pattern, "g"), "");
 }
 
 function isPermissionsText(value: string): boolean {

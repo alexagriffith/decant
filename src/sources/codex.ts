@@ -25,6 +25,11 @@ export function parseCodexSession(
   let startedAt: string | null = null;
   let endedAt: string | null = null;
   let title: string | null = null;
+  let isSubagent = false;
+  let parentThreadId: string | null = null;
+  let agentId: string | null = null;
+  let agentType: string | null = null;
+  let spawnDepth: number | null = null;
   let totals = emptyUsage();
   let sawTokenCount = false;
   let rawMeta: Json = null;
@@ -59,6 +64,26 @@ export function parseCodexSession(
       sourceSessionId = asString(get(payload, "id")) ?? sourceSessionId;
       cwd = asString(get(payload, "cwd")) ?? cwd;
       cliVersion = asString(get(payload, "cli_version")) ?? cliVersion;
+      const source = get(payload, "source");
+      const subagentSource = get(source, "subagent");
+      const threadSpawn = get(subagentSource, "thread_spawn");
+      parentThreadId =
+        asString(get(payload, "parent_thread_id")) ??
+        asString(get(threadSpawn, "parent_thread_id")) ??
+        parentThreadId;
+      isSubagent = isSubagent || subagentSource !== undefined || parentThreadId != null;
+      const nickname =
+        asString(get(payload, "agent_nickname")) ?? asString(get(threadSpawn, "agent_nickname"));
+      const role =
+        asString(get(payload, "agent_role")) ??
+        asString(get(threadSpawn, "agent_role")) ??
+        asString(subagentSource);
+      agentId = nickname ?? agentId;
+      agentType = role ?? agentType;
+      spawnDepth =
+        asInteger(get(threadSpawn, "depth")) ??
+        asInteger(get(payload, "spawn_depth")) ??
+        spawnDepth;
       rawMeta = payload;
     } else if (typ === "turn_context") {
       model = asString(get(payload, "model")) ?? model;
@@ -102,12 +127,12 @@ export function parseCodexSession(
       startedAt,
       endedAt,
       isArchived: false,
-      isSubagent: false,
-      rootSourceSessionId: null,
+      isSubagent,
+      rootSourceSessionId: parentThreadId,
       spawnToolUseId: null,
-      agentId: null,
-      agentType: null,
-      spawnDepth: null,
+      agentId: agentId ?? (isSubagent ? sourceSessionId : null),
+      agentType,
+      spawnDepth,
       rawMeta,
       totals,
       estReasoningTokens: 0,

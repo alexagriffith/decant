@@ -141,8 +141,8 @@ export function sync(
     report.issues += parsed.issues.length;
   }
 
+  resolveSubagentParents(db);
   if (report.ingested > 0) {
-    resolveSubagentParents(db);
     resolveWorktreeRoots(db);
     regenerateRecommendations(db);
   }
@@ -169,7 +169,13 @@ export function seedModelPricing(db: Database): void {
        cache_write_per_mtok, source, updated_at
      )
      VALUES (?1, ?2, ?3, ?4, ?5, 'seed', datetime('now'))
-     ON CONFLICT(model) DO NOTHING`,
+     ON CONFLICT(model) DO UPDATE SET
+       input_per_mtok = excluded.input_per_mtok,
+       output_per_mtok = excluded.output_per_mtok,
+       cache_read_per_mtok = excluded.cache_read_per_mtok,
+       cache_write_per_mtok = excluded.cache_write_per_mtok,
+       updated_at = excluded.updated_at
+     WHERE model_pricing.source = 'seed'`,
   );
   const apply = db.transaction((entries: ReturnType<typeof defaultPricing>) => {
     for (const [model, price] of entries) {
@@ -190,16 +196,18 @@ export function resolveSubagentParents(db: Database): void {
     .query(
       `SELECT s.id, s.source_session_id, s.raw_meta, s.source_path, s.spawn_tool_use_id,
               s.agent_id, s.agent_type, s.spawn_depth, s.is_subagent,
+              s.tool,
               (SELECT m.raw
                FROM message m
                WHERE m.session_id = s.id
                ORDER BY m.seq
                LIMIT 1) AS first_raw
        FROM session s
-       WHERE s.tool = 'claude_code'`,
+       WHERE s.tool IN ('claude_code', 'codex')`,
     )
     .all() as {
     id: number;
+    tool: Tool;
     source_session_id: string;
     raw_meta: string | null;
     source_path: string | null;
@@ -211,15 +219,15 @@ export function resolveSubagentParents(db: Database): void {
     first_raw: string | null;
   }[];
 
-  const rootBySource = new Map<string, number>();
+  const sessionBySource = new Map<string, number>();
   const rootByClaudeSession = new Map<string, number>();
   const rootByChild = new Map<number, number>();
   const inferred = new Map<number, InferredSubagent>();
   for (const row of rows) {
     const info = inferSubagent(row);
     inferred.set(row.id, info);
+    sessionBySource.set(sourceKey(row.tool, row.source_session_id), row.id);
     if (!info.isSubagent) {
-      rootBySource.set(row.source_session_id, row.id);
       if (info.rootKey != null) {
         rootByClaudeSession.set(info.rootKey, row.id);
       }
@@ -234,7 +242,7 @@ export function resolveSubagentParents(db: Database): void {
     const rootKey = info.rootKey;
     const rootId =
       (rootKey == null ? null : rootByClaudeSession.get(rootKey)) ??
-      (rootKey == null ? null : rootBySource.get(rootKey)) ??
+      (rootKey == null ? null : sessionBySource.get(sourceKey(row.tool, rootKey))) ??
       null;
     if (rootId != null) {
       rootByChild.set(row.id, rootId);
@@ -247,6 +255,20 @@ export function resolveSubagentParents(db: Database): void {
      JOIN session s ON s.id = b.session_id
      WHERE b.type = 'tool_use' AND b.tool_use_id = ?1
      ORDER BY s.is_subagent DESC, b.id DESC
+     LIMIT 1`,
+  );
+  const findCodexSpawner = db.prepare(
+    `SELECT call.tool_use_id AS tool_use_id
+     FROM block result
+     JOIN block call
+       ON call.session_id = result.session_id
+      AND call.tool_use_id = result.tool_use_id
+      AND call.type = 'tool_use'
+     WHERE result.session_id = ?1
+       AND result.type = 'tool_result'
+       AND call.tool_name = 'spawn_agent'
+       AND result.tool_result LIKE ?2
+     ORDER BY call.id DESC
      LIMIT 1`,
   );
   const update = db.prepare(
@@ -267,8 +289,15 @@ export function resolveSubagentParents(db: Database): void {
       }
       const rootId = rootByChild.get(row.id) ?? null;
       let parentId: number | null = null;
-      if (info.spawnToolUseId != null) {
-        const spawner = findSpawner.get(info.spawnToolUseId) as { session_id: number } | null;
+      let spawnToolUseId = info.spawnToolUseId;
+      if (spawnToolUseId == null && row.tool === "codex" && rootId != null) {
+        const spawner = findCodexSpawner.get(rootId, `%${row.source_session_id}%`) as {
+          tool_use_id: string;
+        } | null;
+        spawnToolUseId = spawner?.tool_use_id ?? null;
+      }
+      if (spawnToolUseId != null) {
+        const spawner = findSpawner.get(spawnToolUseId) as { session_id: number } | null;
         if (spawner != null && spawner.session_id !== row.id) {
           parentId = spawner.session_id;
         }
@@ -277,7 +306,7 @@ export function resolveSubagentParents(db: Database): void {
       update.run(
         1,
         parentId === row.id ? null : parentId,
-        info.spawnToolUseId,
+        spawnToolUseId,
         info.agentId,
         info.agentType,
         info.spawnDepth,
@@ -286,6 +315,10 @@ export function resolveSubagentParents(db: Database): void {
     }
   });
   apply();
+}
+
+function sourceKey(tool: Tool, sourceSessionId: string): string {
+  return `${tool}\0${sourceSessionId}`;
 }
 
 interface InferredSubagent {
@@ -298,6 +331,8 @@ interface InferredSubagent {
 }
 
 function inferSubagent(row: {
+  tool: Tool;
+  source_session_id: string;
   raw_meta: string | null;
   source_path: string | null;
   spawn_tool_use_id: string | null;
@@ -309,26 +344,44 @@ function inferSubagent(row: {
 }): InferredSubagent {
   const meta = parseObject(row.raw_meta);
   const first = parseObject(row.first_raw);
+  const source = get(meta, "source");
+  const subagentSource = get(source, "subagent");
+  const threadSpawn = get(subagentSource, "thread_spawn");
+  const parentThreadId =
+    asString(get(meta, "parent_thread_id")) ?? asString(get(threadSpawn, "parent_thread_id"));
   const fromPath = row.source_path != null && /(?:^|[/\\])subagents(?:[/\\])/.test(row.source_path);
   const isSubagent =
     row.is_subagent !== 0 ||
     fromPath ||
     asBoolean(get(meta, "isSubagent")) === true ||
-    asBoolean(get(first, "isSidechain")) === true;
+    asBoolean(get(first, "isSidechain")) === true ||
+    subagentSource !== undefined ||
+    parentThreadId != null;
   return {
     isSubagent,
-    rootKey: asString(get(meta, "sessionId")) ?? asString(get(first, "sessionId")),
+    rootKey:
+      parentThreadId ?? asString(get(meta, "sessionId")) ?? asString(get(first, "sessionId")),
     spawnToolUseId:
       row.spawn_tool_use_id ??
       asString(get(meta, "spawnToolUseId")) ??
       asString(get(meta, "toolUseId")),
-    agentId: row.agent_id ?? asString(get(meta, "agentId")) ?? asString(get(first, "agentId")),
+    agentId:
+      row.agent_id ??
+      asString(get(meta, "agent_nickname")) ??
+      asString(get(threadSpawn, "agent_nickname")) ??
+      asString(get(meta, "agentId")) ??
+      asString(get(first, "agentId")) ??
+      (isSubagent && row.tool === "codex" ? row.source_session_id : null),
     agentType:
       row.agent_type ??
+      asString(get(meta, "agent_role")) ??
+      asString(get(threadSpawn, "agent_role")) ??
+      asString(subagentSource) ??
       asString(get(meta, "agentType")) ??
       asString(get(meta, "subagentType")) ??
       asString(get(meta, "subagent_type")),
-    spawnDepth: row.spawn_depth ?? asInteger(get(meta, "spawnDepth")),
+    spawnDepth:
+      row.spawn_depth ?? asInteger(get(threadSpawn, "depth")) ?? asInteger(get(meta, "spawnDepth")),
   };
 }
 

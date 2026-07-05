@@ -41,6 +41,39 @@ describe("parseCodexSession", () => {
     expect(parsed.session.title).toBe("TODO audit");
   });
 
+  test("parses subagent session metadata", () => {
+    const content = [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-05-01T10:00:00Z",
+        payload: {
+          id: "child-thread",
+          cwd: "/tmp/proj",
+          parent_thread_id: "parent-thread",
+          agent_nickname: "Ada",
+          agent_role: "explorer",
+          source: {
+            subagent: {
+              thread_spawn: {
+                parent_thread_id: "parent-thread",
+                depth: 1,
+                agent_nickname: "Ada",
+                agent_role: "explorer",
+              },
+            },
+          },
+        },
+      }),
+    ].join("\n");
+
+    const session = parseCodexSession("fallback", `${content}\n`, new Map()).session;
+    expect(session.isSubagent).toBe(true);
+    expect(session.rootSourceSessionId).toBe("parent-thread");
+    expect(session.agentId).toBe("Ada");
+    expect(session.agentType).toBe("explorer");
+    expect(session.spawnDepth).toBe(1);
+  });
+
   test("malformed and blank lines and unknown top types", () => {
     const content = [
       "",

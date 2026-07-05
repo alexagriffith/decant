@@ -528,6 +528,125 @@ describe("sync", () => {
     db.close();
   });
 
+  test("links Codex subagent rollout files under their parent session", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    write(
+      join(config.codexDir, "sessions", "2026", "05", "01", "rollout-root.jsonl"),
+      [
+        {
+          type: "session_meta",
+          timestamp: "2026-05-01T10:00:00.000Z",
+          payload: {
+            id: "root-thread",
+            cwd: "/Users/dev/proj",
+            cli_version: "0.121.0",
+            source: "cli",
+          },
+        },
+        {
+          type: "turn_context",
+          timestamp: "2026-05-01T10:00:00.500Z",
+          payload: { model: "gpt-5.5", cwd: "/Users/dev/proj" },
+        },
+        {
+          type: "response_item",
+          timestamp: "2026-05-01T10:00:01.000Z",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Investigate auth failures" }],
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: "2026-05-01T10:00:02.000Z",
+          payload: {
+            type: "function_call",
+            name: "spawn_agent",
+            call_id: "call_spawn",
+            arguments: JSON.stringify({ agent_type: "explorer", message: "audit auth" }),
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: "2026-05-01T10:00:03.000Z",
+          payload: {
+            type: "function_call_output",
+            call_id: "call_spawn",
+            output: { agent_id: "child-thread", nickname: "Ada" },
+          },
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n"),
+    );
+    write(
+      join(config.codexDir, "sessions", "2026", "05", "01", "rollout-child.jsonl"),
+      [
+        {
+          type: "session_meta",
+          timestamp: "2026-05-01T10:00:04.000Z",
+          payload: {
+            id: "child-thread",
+            cwd: "/Users/dev/proj",
+            parent_thread_id: "root-thread",
+            agent_nickname: "Ada",
+            agent_role: "explorer",
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: "root-thread",
+                  depth: 1,
+                  agent_nickname: "Ada",
+                  agent_role: "explorer",
+                },
+              },
+            },
+          },
+        },
+        {
+          type: "turn_context",
+          timestamp: "2026-05-01T10:00:04.500Z",
+          payload: { model: "codex-auto-review", cwd: "/Users/dev/proj" },
+        },
+        {
+          type: "response_item",
+          timestamp: "2026-05-01T10:00:05.000Z",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "audit auth" }],
+          },
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n"),
+    );
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2, failed: 0 });
+    const rootRows = listSessions(db);
+    expect(rootRows.map((row) => row.source_session_id)).toEqual(["root-thread"]);
+    expect(rootRows[0]?.subagent_count).toBe(1);
+    const nested = listSessions(db, { includeNestedSubagents: true })[0]?.subagents?.[0];
+    expect(nested?.source_session_id).toBe("child-thread");
+    expect(nested?.agent_id).toBe("Ada");
+    expect(nested?.agent_type).toBe("explorer");
+    expect(nested?.spawn_tool_use_id).toBe("call_spawn");
+    expect(listSessions(db, { includeSubagents: true, limit: 10 })).toHaveLength(2);
+    const rootId = (
+      db.query("SELECT id FROM session WHERE source_session_id = 'root-thread'").get() as {
+        id: number;
+      }
+    ).id;
+    expect(getSession(db, rootId)?.subagents[0]?.spawn_tool_use_id).toBe("call_spawn");
+    db.close();
+  });
+
   test("backfills legacy Claude subagent rows from source path and message raw", () => {
     const dir = freshCase();
     const db = openFreshDb(dir);

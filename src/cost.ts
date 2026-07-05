@@ -7,103 +7,87 @@ export interface Price {
   cacheWritePerMtok: number;
 }
 
+function claudePrice(inputPerMtok: number, outputPerMtok: number): Price {
+  return {
+    inputPerMtok,
+    outputPerMtok,
+    cacheReadPerMtok: inputPerMtok * 0.1,
+    cacheWritePerMtok: inputPerMtok * 1.25,
+  };
+}
+
+function openAiPrice(
+  inputPerMtok: number,
+  cacheReadPerMtok: number | null,
+  outputPerMtok: number,
+): Price {
+  return {
+    inputPerMtok,
+    outputPerMtok,
+    cacheReadPerMtok: cacheReadPerMtok ?? inputPerMtok,
+    cacheWritePerMtok: inputPerMtok,
+  };
+}
+
 export function defaultPricing(): Map<string, Price> {
+  // Standard first-party API text-token rates per 1M tokens. Claude cache writes use
+  // the 5-minute cache-write rate because session logs do not distinguish 1h writes.
   return new Map<string, Price>([
-    [
-      "claude-fable",
-      {
-        inputPerMtok: 10.0,
-        outputPerMtok: 50.0,
-        cacheReadPerMtok: 1.0,
-        cacheWritePerMtok: 12.5,
-      },
-    ],
-    [
-      "claude-opus",
-      {
-        inputPerMtok: 5.0,
-        outputPerMtok: 25.0,
-        cacheReadPerMtok: 0.5,
-        cacheWritePerMtok: 6.25,
-      },
-    ],
-    [
-      "claude-sonnet",
-      {
-        inputPerMtok: 3.0,
-        outputPerMtok: 15.0,
-        cacheReadPerMtok: 0.3,
-        cacheWritePerMtok: 3.75,
-      },
-    ],
-    [
-      "claude-haiku",
-      {
-        inputPerMtok: 1.0,
-        outputPerMtok: 5.0,
-        cacheReadPerMtok: 0.1,
-        cacheWritePerMtok: 1.25,
-      },
-    ],
-    [
-      "gpt-5",
-      {
-        inputPerMtok: 1.25,
-        outputPerMtok: 10.0,
-        cacheReadPerMtok: 0.125,
-        cacheWritePerMtok: 1.25,
-      },
-    ],
-    [
-      "gpt-5.4",
-      {
-        inputPerMtok: 2.5,
-        outputPerMtok: 15.0,
-        cacheReadPerMtok: 0.25,
-        cacheWritePerMtok: 2.5,
-      },
-    ],
-    [
-      "gpt-5.4-mini",
-      {
-        inputPerMtok: 0.75,
-        outputPerMtok: 4.5,
-        cacheReadPerMtok: 0.075,
-        cacheWritePerMtok: 0.75,
-      },
-    ],
-    [
-      "gpt-5.4-nano",
-      {
-        inputPerMtok: 0.2,
-        outputPerMtok: 1.25,
-        cacheReadPerMtok: 0.02,
-        cacheWritePerMtok: 0.2,
-      },
-    ],
-    [
-      "gpt-5.5",
-      {
-        inputPerMtok: 5.0,
-        outputPerMtok: 30.0,
-        cacheReadPerMtok: 0.5,
-        cacheWritePerMtok: 5.0,
-      },
-    ],
-    [
-      "gpt-5.3-codex",
-      {
-        inputPerMtok: 1.75,
-        outputPerMtok: 14.0,
-        cacheReadPerMtok: 0.175,
-        cacheWritePerMtok: 1.75,
-      },
-    ],
+    ["claude-fable", claudePrice(10.0, 50.0)],
+    ["claude-opus", claudePrice(5.0, 25.0)],
+    ["claude-opus-4.1", claudePrice(15.0, 75.0)],
+    ["claude-opus-4", claudePrice(15.0, 75.0)],
+    ["claude-sonnet-5", claudePrice(2.0, 10.0)],
+    ["claude-sonnet", claudePrice(3.0, 15.0)],
+    ["claude-haiku", claudePrice(1.0, 5.0)],
+    ["claude-haiku-3.5", claudePrice(0.8, 4.0)],
+    ["gpt-5.5", openAiPrice(5.0, 0.5, 30.0)],
+    ["gpt-5.5-pro", openAiPrice(30.0, null, 180.0)],
+    ["gpt-5.4", openAiPrice(2.5, 0.25, 15.0)],
+    ["gpt-5.4-mini", openAiPrice(0.75, 0.075, 4.5)],
+    ["gpt-5.4-nano", openAiPrice(0.2, 0.02, 1.25)],
+    ["gpt-5.4-pro", openAiPrice(30.0, null, 180.0)],
+    ["gpt-5.2", openAiPrice(1.75, 0.175, 14.0)],
+    ["gpt-5.2-pro", openAiPrice(21.0, null, 168.0)],
+    ["gpt-5.1", openAiPrice(1.25, 0.125, 10.0)],
+    ["gpt-5", openAiPrice(1.25, 0.125, 10.0)],
+    ["gpt-5-mini", openAiPrice(0.25, 0.025, 2.0)],
+    ["gpt-5-nano", openAiPrice(0.05, 0.005, 0.4)],
+    ["gpt-5-pro", openAiPrice(15.0, null, 120.0)],
+    ["gpt-4.1", openAiPrice(2.0, 0.5, 8.0)],
+    ["gpt-4.1-mini", openAiPrice(0.4, 0.1, 1.6)],
+    ["gpt-4.1-nano", openAiPrice(0.1, 0.025, 0.4)],
+    ["gpt-4o", openAiPrice(2.5, 1.25, 10.0)],
+    ["gpt-4o-2024-05-13", openAiPrice(5.0, null, 15.0)],
+    ["gpt-4o-mini", openAiPrice(0.15, 0.075, 0.6)],
+    ["o1", openAiPrice(15.0, 7.5, 60.0)],
+    ["o1-pro", openAiPrice(150.0, null, 600.0)],
+    ["o3-pro", openAiPrice(20.0, null, 80.0)],
+    ["o3", openAiPrice(2.0, 0.5, 8.0)],
+    ["o4-mini", openAiPrice(1.1, 0.275, 4.4)],
+    ["o3-mini", openAiPrice(1.1, 0.55, 4.4)],
+    ["o1-mini", openAiPrice(1.1, 0.55, 4.4)],
+    ["gpt-4-turbo-2024-04-09", openAiPrice(10.0, null, 30.0)],
+    ["gpt-4-0125-preview", openAiPrice(10.0, null, 30.0)],
+    ["gpt-4-1106-preview", openAiPrice(10.0, null, 30.0)],
+    ["gpt-4-1106-vision-preview", openAiPrice(10.0, null, 30.0)],
+    ["gpt-4-0613", openAiPrice(30.0, null, 60.0)],
+    ["gpt-4-0314", openAiPrice(30.0, null, 60.0)],
+    ["gpt-4-32k", openAiPrice(60.0, null, 120.0)],
+    ["gpt-3.5-turbo", openAiPrice(0.5, null, 1.5)],
+    ["gpt-3.5-turbo-0125", openAiPrice(0.5, null, 1.5)],
+    ["gpt-3.5-turbo-1106", openAiPrice(1.0, null, 2.0)],
+    ["gpt-3.5-turbo-0613", openAiPrice(1.5, null, 2.0)],
+    ["gpt-3.5-0301", openAiPrice(1.5, null, 2.0)],
+    ["gpt-3.5-turbo-instruct", openAiPrice(1.5, null, 2.0)],
+    ["gpt-3.5-turbo-16k-0613", openAiPrice(3.0, null, 4.0)],
+    ["davinci-002", openAiPrice(2.0, null, 2.0)],
+    ["babbage-002", openAiPrice(0.4, null, 0.4)],
   ]);
 }
 
 function canonicalModel(raw: string): string | null {
-  const model = raw.toLowerCase();
+  const model = raw.toLowerCase().replace(/^openai[/:]/, "");
 
   if (
     model.includes("claude") ||
@@ -116,37 +100,92 @@ function canonicalModel(raw: string): string | null {
       return "claude-fable";
     }
     if (model.includes("opus")) {
+      if (model.includes("opus-4-1") || model.includes("opus-4.1")) {
+        return "claude-opus-4.1";
+      }
+      if (
+        model.includes("opus-4-5") ||
+        model.includes("opus-4.5") ||
+        model.includes("opus-4-6") ||
+        model.includes("opus-4.6") ||
+        model.includes("opus-4-7") ||
+        model.includes("opus-4.7") ||
+        model.includes("opus-4-8") ||
+        model.includes("opus-4.8")
+      ) {
+        return "claude-opus";
+      }
+      if (model.includes("opus-4")) {
+        return "claude-opus-4";
+      }
       return "claude-opus";
     }
     if (model.includes("sonnet")) {
+      if (model.includes("sonnet-5")) {
+        return "claude-sonnet-5";
+      }
       return "claude-sonnet";
     }
     if (model.includes("haiku")) {
+      if (model.includes("haiku-3-5") || model.includes("haiku-3.5")) {
+        return "claude-haiku-3.5";
+      }
       return "claude-haiku";
     }
     return null;
   }
 
-  if (model.startsWith("codex-auto-review")) {
-    return "gpt-5.3-codex";
+  if (model.startsWith("codex-auto-review") || model.startsWith("gpt-5.3-codex")) {
+    return "gpt-5.2";
   }
-  if (model.startsWith("gpt-5.4-nano")) {
-    return "gpt-5.4-nano";
-  }
-  if (model.startsWith("gpt-5.4-mini")) {
-    return "gpt-5.4-mini";
-  }
-  if (model.startsWith("gpt-5.4")) {
-    return "gpt-5.4";
-  }
-  if (model.startsWith("gpt-5.5")) {
-    return "gpt-5.5";
-  }
-  if (model.startsWith("gpt-5.3-codex") || model.startsWith("gpt-5.2")) {
-    return "gpt-5.3-codex";
-  }
-  if (model.startsWith("gpt-5")) {
-    return "gpt-5";
+
+  for (const key of [
+    "gpt-5.5-pro",
+    "gpt-5.5",
+    "gpt-5.4-nano",
+    "gpt-5.4-mini",
+    "gpt-5.4-pro",
+    "gpt-5.4",
+    "gpt-5.2-pro",
+    "gpt-5.2",
+    "gpt-5.1",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "gpt-5-pro",
+    "gpt-5",
+    "gpt-4o-2024-05-13",
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-4.1-nano",
+    "gpt-4.1-mini",
+    "gpt-4.1",
+    "o1-pro",
+    "o3-pro",
+    "o4-mini",
+    "o3-mini",
+    "o1-mini",
+    "o3",
+    "o1",
+    "gpt-4-turbo-2024-04-09",
+    "gpt-4-0125-preview",
+    "gpt-4-1106-vision-preview",
+    "gpt-4-1106-preview",
+    "gpt-4-0613",
+    "gpt-4-0314",
+    "gpt-4-32k",
+    "gpt-3.5-turbo-16k-0613",
+    "gpt-3.5-turbo-instruct",
+    "gpt-3.5-turbo-0125",
+    "gpt-3.5-turbo-1106",
+    "gpt-3.5-turbo-0613",
+    "gpt-3.5-0301",
+    "gpt-3.5-turbo",
+    "davinci-002",
+    "babbage-002",
+  ]) {
+    if (model.startsWith(key)) {
+      return key;
+    }
   }
 
   return null;

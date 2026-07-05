@@ -364,10 +364,6 @@ function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSum
        ORDER BY s.id, m.seq, b.ordinal`,
     )
     .all(...sessions.map((session) => session.id)) as { session_id: number; text: string }[];
-  if (rows.length === 0) {
-    return sessions;
-  }
-
   const titleBySession = new Map<number, string>();
   for (const row of rows) {
     if (titleBySession.has(row.session_id)) {
@@ -378,21 +374,59 @@ function withDisplayTitles(db: Database, sessions: SessionSummary[]): SessionSum
       titleBySession.set(row.session_id, title);
     }
   }
-  if (titleBySession.size === 0) {
-    return sessions;
-  }
   return sessions.map((session) => {
-    const title = titleBySession.get(session.id);
+    const title = titleBySession.get(session.id) ?? readableFallbackTitle(session.title);
     return title == null ? session : { ...session, title };
   });
 }
 
 function readableUserTitle(text: string): string | null {
-  const trimmed = text.trim();
+  const trimmed = stripAnsi(text).trim();
   if (trimmed === "" || isAgentContextText(trimmed)) {
     return null;
   }
   return preview(trimmed.replace(/\s+/g, " "), 180);
+}
+
+function readableFallbackTitle(text: string | null | undefined): string | null {
+  if (text == null) {
+    return null;
+  }
+  const trimmed = stripAnsi(text).trim();
+  if (trimmed === "") {
+    return null;
+  }
+  if (
+    /^<permissions instructions>/i.test(trimmed) ||
+    trimmed.includes("Filesystem sandboxing defines")
+  ) {
+    return "Execution permissions";
+  }
+  if (/^<local-command-caveat>/i.test(trimmed) || /^<command-name>/i.test(trimmed)) {
+    return "Command context";
+  }
+  if (
+    /^<local-command-std(?:out|err)>/i.test(trimmed) ||
+    /^<local-command-output>/i.test(trimmed)
+  ) {
+    return "Command output";
+  }
+  if (/^<environment_context>/i.test(trimmed)) {
+    return "Environment context";
+  }
+  if (/^<teammate-message\b/i.test(trimmed)) {
+    return tagAttribute(trimmed, "summary") ?? "Subagent request";
+  }
+  if (trimmed.startsWith("# AGENTS.md instructions") || trimmed.includes("<INSTRUCTIONS>")) {
+    return "Repository instructions";
+  }
+  if (/^The following is the Codex agent history/i.test(trimmed)) {
+    return "Agent history";
+  }
+  if (/^Use prior reviews as context/i.test(trimmed)) {
+    return "Review context";
+  }
+  return null;
 }
 
 function isAgentContextText(text: string): boolean {
@@ -400,6 +434,8 @@ function isAgentContextText(text: string): boolean {
   return (
     /^<permissions instructions>/i.test(trimmed) ||
     /^<local-command-caveat>/i.test(trimmed) ||
+    /^<local-command-std(?:out|err)>/i.test(trimmed) ||
+    /^<local-command-output>/i.test(trimmed) ||
     /^<command-name>/i.test(trimmed) ||
     /^<teammate-message\b/i.test(trimmed) ||
     trimmed.includes("<environment_context>") ||
@@ -408,6 +444,17 @@ function isAgentContextText(text: string): boolean {
     /^The following is the Codex agent history/i.test(trimmed) ||
     /^Use prior reviews as context/i.test(trimmed)
   );
+}
+
+function stripAnsi(value: string): string {
+  const pattern = `${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`;
+  return value.replace(new RegExp(pattern, "g"), "");
+}
+
+function tagAttribute(value: string, name: string): string | null {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`${escapedName}="([^"]*)"`, "i");
+  return value.match(pattern)?.[1] ?? null;
 }
 
 function withNestedSubagents(db: Database, sessions: SessionSummary[]): SessionSummary[] {
