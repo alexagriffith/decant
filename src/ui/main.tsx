@@ -50,6 +50,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
+import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import "./styles.css";
 
 type Summary = {
@@ -328,20 +329,43 @@ function App() {
   const [data, setData] = useState<DashboardData>(emptyData);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [loadedSessionKey, setLoadedSessionKey] = useState<string | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionLimit, setSessionLimit] = useState(SESSION_PAGE_SIZE);
   const [dateRangeSelection, setDateRangeSelection] = useState<DateRangeSelection>(ALL_DATE_RANGE);
   const [menuOpen, setMenuOpen] = useState(false);
   const dateQuery = dateRangeQuery(dateRangeSelection);
+  const sessionLoadKey = `${dateQuery}:${reloadKey}`;
+  const refreshTimerRef = useRef<number | null>(null);
   const [theme, setTheme] = useState<ThemeChoice>(() => {
     const stored = localStorage.getItem("decant-theme");
     return stored === "light" || stored === "dark" ? stored : "system";
   });
+
+  const requestRefresh = useCallback(() => {
+    if (refreshTimerRef.current != null) {
+      window.clearTimeout(refreshTimerRef.current);
+    }
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      setReloadKey((key) => key + 1);
+    }, 100);
+  }, []);
 
   useEffect(() => {
     const onPop = () => setPath(locationPath());
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  useEffect(
+    () => () => {
+      if (refreshTimerRef.current != null) {
+        window.clearTimeout(refreshTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (theme === "system") {
@@ -355,11 +379,11 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    const resetKey = `${dateQuery}:${reloadKey}`;
-    void resetKey;
+    void dateQuery;
     setData((current) => ({ ...current, sessions: [] }));
+    setLoadedSessionKey(null);
     setSessionLimit(SESSION_PAGE_SIZE);
-  }, [dateQuery, reloadKey]);
+  }, [dateQuery]);
 
   useEffect(() => {
     void reloadKey;
@@ -440,15 +464,23 @@ function App() {
   }, [dateQuery, reloadKey]);
 
   useEffect(() => {
-    void reloadKey;
     let cancelled = false;
-    const offset = data.sessions.length;
-    const limit = Math.max(0, sessionLimit - offset);
-    if (limit <= 0) {
+    const plan = planSessionLoad({
+      loadedRequestKey: loadedSessionKey,
+      loadedRows: data.sessions.length,
+      pageSize: SESSION_PAGE_SIZE,
+      requestKey: sessionLoadKey,
+      sessionLimit,
+    });
+    if (plan == null) {
       return;
     }
+    setSessionsLoading(true);
     void getJson<SessionSummary[]>(
-      withDateQuery(`/api/sessions?limit=${limit}&offset=${offset}&with_subagents=true`, dateQuery),
+      withDateQuery(
+        `/api/sessions?limit=${plan.limit}&offset=${plan.offset}&with_subagents=true`,
+        dateQuery,
+      ),
     )
       .then((sessions) => {
         if (cancelled) {
@@ -456,30 +488,36 @@ function App() {
         }
         setData((current) => ({
           ...current,
-          sessions: offset === 0 ? sessions : [...current.sessions, ...sessions],
+          sessions: plan.replace ? sessions : [...current.sessions, ...sessions],
         }));
+        setLoadedSessionKey(sessionLoadKey);
+        setError(null);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
           setError(errorMessage(err));
         }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSessionsLoading(false);
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [data.sessions.length, dateQuery, reloadKey, sessionLimit]);
+  }, [data.sessions.length, dateQuery, loadedSessionKey, sessionLimit, sessionLoadKey]);
 
   useEffect(() => {
     const events = new EventSource("/api/events");
-    const refresh = () => setReloadKey((key) => key + 1);
-    events.addEventListener("sync", refresh);
-    events.addEventListener("archive_updated", refresh);
+    events.addEventListener("sync", requestRefresh);
+    events.addEventListener("archive_updated", requestRefresh);
     return () => {
-      events.removeEventListener("sync", refresh);
-      events.removeEventListener("archive_updated", refresh);
+      events.removeEventListener("sync", requestRefresh);
+      events.removeEventListener("archive_updated", requestRefresh);
       events.close();
     };
-  }, []);
+  }, [requestRefresh]);
 
   const active = activeRoute(path);
   const activeKey = activeRouteKey(path);
@@ -492,7 +530,7 @@ function App() {
     }
     setError(null);
     void getJson<unknown>("/api/sync", { method: "POST", body: "{}" })
-      .then(() => setReloadKey((key) => key + 1))
+      .then(requestRefresh)
       .catch((err: unknown) => setError(errorMessage(err)));
   };
 
@@ -624,8 +662,9 @@ function App() {
                 setSessionLimit(SESSION_PAGE_SIZE);
                 setDateRangeSelection(next);
               },
-              refresh: () => setReloadKey((key) => key + 1),
+              refresh: requestRefresh,
               sessionLimit,
+              sessionsLoading,
               setSessionLimit,
             })}
           </div>
@@ -644,6 +683,7 @@ function renderView(
     onDateRangeChange: (range: DateRangeSelection) => void;
     refresh: () => void;
     sessionLimit: number;
+    sessionsLoading: boolean;
     setSessionLimit: (limit: number) => void;
   },
 ) {
@@ -658,6 +698,7 @@ function renderView(
           data={data}
           dateRange={actions.dateRange}
           limit={actions.sessionLimit}
+          loading={actions.sessionsLoading}
           onDateRangeChange={actions.onDateRangeChange}
           onLimitChange={actions.setSessionLimit}
         />
@@ -707,6 +748,7 @@ function renderView(
           data={data}
           dateRange={actions.dateRange}
           limit={actions.sessionLimit}
+          loading={actions.sessionsLoading}
           onDateRangeChange={actions.onDateRangeChange}
           onLimitChange={actions.setSessionLimit}
         />
@@ -718,12 +760,14 @@ function SessionsView({
   data,
   dateRange,
   limit,
+  loading,
   onDateRangeChange,
   onLimitChange,
 }: {
   data: DashboardData;
   dateRange: DateRangeSelection;
   limit: number;
+  loading: boolean;
   onDateRangeChange: (range: DateRangeSelection) => void;
   onLimitChange: (limit: number) => void;
 }) {
@@ -732,8 +776,12 @@ function SessionsView({
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const total = data.summary?.sessions ?? data.sessions.length;
   const filtered = filterSessions(data.sessions, query);
-  const hasMore = data.sessions.length < total;
-  const waitingForSessions = data.sessions.length === 0 && total > 0 && query.trim() === "";
+  const hasMore = !loading && data.sessions.length < total;
+  const waitingForSessions = shouldShowSessionSkeleton({
+    isLoading: loading,
+    loadedRows: data.sessions.length,
+    query,
+  });
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -865,7 +913,9 @@ function SessionsView({
           </table>
         </div>
         <div className="panel-footer">
-          <span>{sessionsCaption(query, filtered.length, data.sessions.length, total)}</span>
+          <span>
+            {sessionsCaption(query, filtered.length, data.sessions.length, total, loading)}
+          </span>
           <div aria-hidden="true" className="infinite-sentinel" ref={sentinelRef} />
         </div>
       </section>
@@ -1117,7 +1167,21 @@ function sessionMatchesQuery(session: SessionSummary, needle: string): boolean {
   );
 }
 
-function sessionsCaption(query: string, visible: number, loaded: number, total: number): string {
+function sessionsCaption(
+  query: string,
+  visible: number,
+  loaded: number,
+  total: number,
+  loading: boolean,
+): string {
+  if (loading && query.trim() === "") {
+    if (loaded === 0) {
+      return total > 0 ? `Loading ${formatInt(total)} sessions...` : "Loading sessions...";
+    }
+    return loaded < total
+      ? `Refreshing ${formatInt(loaded)} of ${formatInt(total)} sessions`
+      : `Refreshing ${formatInt(loaded)} sessions`;
+  }
   if (query.trim() !== "") {
     return `Showing ${formatInt(visible)} matching ${visible === 1 ? "row" : "rows"} from ${formatInt(loaded)} available sessions`;
   }
