@@ -18,6 +18,7 @@ import { resolveWorktreeRoots } from "./worktree.ts";
 export interface IngestConfig {
   claudeDir: string;
   codexDir: string;
+  sourcePaths?: string[];
 }
 
 export interface SyncReport {
@@ -51,23 +52,23 @@ interface ToolUseBlock {
 }
 
 export function discover(config: IngestConfig): SourceFile[] {
+  if (config.sourcePaths != null && config.sourcePaths.length > 0) {
+    return discoverSourcePaths(config.sourcePaths);
+  }
+
   const out: SourceFile[] = [];
   collect(config.claudeDir, "claude_code", false, (name) => name.endsWith(".jsonl"), out);
-  collect(
-    join(config.codexDir, "sessions"),
-    "codex",
-    false,
-    (name) => name.startsWith("rollout-") && name.endsWith(".jsonl"),
-    out,
-  );
-  collect(
-    join(config.codexDir, "archived_sessions"),
-    "codex",
-    true,
-    (name) => name.startsWith("rollout-") && name.endsWith(".jsonl"),
-    out,
-  );
+  collect(join(config.codexDir, "sessions"), "codex", false, isCodexRollout, out);
+  collect(join(config.codexDir, "archived_sessions"), "codex", true, isCodexRollout, out);
   return out;
+}
+
+export function discoverSourcePaths(paths: string[]): SourceFile[] {
+  const out: SourceFile[] = [];
+  for (const path of paths) {
+    collectSourcePath(path, out);
+  }
+  return dedupeSourceFiles(out);
 }
 
 export function sync(
@@ -673,6 +674,66 @@ function collect(
       out.push({ tool, path, archived });
     }
   }
+}
+
+function collectSourcePath(path: string, out: SourceFile[]): void {
+  let stats: Stats;
+  try {
+    stats = statSync(path);
+  } catch {
+    return;
+  }
+
+  if (stats.isFile()) {
+    const source = sourceFileForPath(path);
+    if (source != null) {
+      out.push(source);
+    }
+    return;
+  }
+
+  if (!stats.isDirectory()) {
+    return;
+  }
+
+  for (const child of walk(path)) {
+    const source = sourceFileForPath(child);
+    if (source != null) {
+      out.push(source);
+    }
+  }
+}
+
+function sourceFileForPath(path: string): SourceFile | null {
+  const name = pathBasename(path);
+  if (!name.endsWith(".jsonl") || name === "session_index.jsonl") {
+    return null;
+  }
+  if (isCodexRollout(name)) {
+    return { tool: "codex", path, archived: hasPathSegment(path, "archived_sessions") };
+  }
+  return { tool: "claude_code", path, archived: false };
+}
+
+function dedupeSourceFiles(files: SourceFile[]): SourceFile[] {
+  const seen = new Set<string>();
+  const unique: SourceFile[] = [];
+  for (const file of files) {
+    if (seen.has(file.path)) {
+      continue;
+    }
+    seen.add(file.path);
+    unique.push(file);
+  }
+  return unique;
+}
+
+function isCodexRollout(name: string): boolean {
+  return name.startsWith("rollout-") && name.endsWith(".jsonl");
+}
+
+function hasPathSegment(path: string, segment: string): boolean {
+  return path.split(/[\\/]+/).includes(segment);
 }
 
 function readClaudeSidecarMeta(path: string): Json | null {

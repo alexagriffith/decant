@@ -192,6 +192,31 @@ describe("runCli", () => {
     );
   });
 
+  test("sync --path ingests only the requested source files", async () => {
+    const fixtureCase = freshCase();
+    const targetDir = join(workDir, `case-${caseCounter}-targeted`);
+    const claudePath = join(targetDir, "claude-one.jsonl");
+    const codexPath = join(targetDir, "rollout-codex-one.jsonl");
+    mkdirSync(targetDir, { recursive: true });
+    copyFileSync(join(import.meta.dir, "..", "fixtures", "claude", "sample.jsonl"), claudePath);
+    copyFileSync(join(import.meta.dir, "..", "fixtures", "codex", "sample.jsonl"), codexPath);
+
+    const result = await runCli(
+      ["--db", fixtureCase.dbPath, "--json", "sync", "--path", claudePath, "--path", codexPath],
+      { homeDir: targetDir },
+    );
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({ scanned: 2, ingested: 2, issues: 0 });
+
+    const list = await runCli(["--db", fixtureCase.dbPath, "--json", "--no-sync", "ls"]);
+    expect(list.code).toBe(0);
+    expect(
+      (JSON.parse(list.stdout) as { source_session_id: string }[]).map(
+        (session) => session.source_session_id,
+      ),
+    ).toEqual(["sess-codex-1", "claude-one"]);
+  });
+
   test("invalid options return code 2 with an error", async () => {
     const { dbPath } = await syncedCase();
     const unknownOption = await runCli(["--definitely-not-real"]);
@@ -205,6 +230,10 @@ describe("runCli", () => {
     const result = await runCli(["--db", dbPath, "--no-sync", "stats", "--by", "nope"]);
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("unknown --by value");
+
+    const missingPath = await runCli(["--db", dbPath, "sync", "--path", "/tmp/definitely-missing"]);
+    expect(missingPath.code).toBe(2);
+    expect(missingPath.stderr).toContain("--path does not exist");
 
     const badFormat = await runCli(["--format", "bogus", "ls"]);
     expect(badFormat.code).toBe(2);
