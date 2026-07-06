@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,7 +15,7 @@ function freshPath(): string {
   return join(workDir, `archive-${dbCounter}.db`);
 }
 
-// Inventory of the frozen v8 baseline. Shadow tables
+// Inventory of the frozen v9 baseline. Shadow tables
 // of block_fts are excluded; they are implementation details of FTS5.
 const BASELINE_TABLES = [
   "block",
@@ -32,7 +32,7 @@ const BASELINE_TABLES = [
   "tool_call",
 ];
 const BASELINE_TRIGGERS = ["block_ad", "block_ai", "block_au"];
-const BASELINE_INDEX_COUNT = 22;
+const BASELINE_INDEX_COUNT = 24;
 
 function inventory(db: Database, type: string): string[] {
   return (
@@ -149,10 +149,37 @@ describe("openDb", () => {
     expect(() => openDb(path)).toThrow(/newer/i);
   });
 
+  test("migrates a v8 archive to v9", () => {
+    const path = freshPath();
+    const db = new Database(path, { create: true, strict: true });
+    db.exec(`
+      CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+      CREATE TABLE session(id INTEGER PRIMARY KEY, tool TEXT NOT NULL, source_session_id TEXT NOT NULL);
+    `);
+    const insert = db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, datetime('now'))",
+    );
+    for (let version = 1; version <= 8; version += 1) {
+      insert.run(version);
+    }
+    db.close();
+
+    const migrated = openDb(path);
+    expect(
+      (
+        migrated.query("SELECT MAX(version) AS version FROM schema_migrations").get() as {
+          version: number;
+        }
+      ).version,
+    ).toBe(9);
+    expect(inventory(migrated, "index")).toContain("idx_session_parent");
+    migrated.close();
+  });
+
   test("rejects a pre-baseline archive and points at rebuilding it", () => {
     const path = freshPath();
     const db = openDb(path);
-    db.exec(`DELETE FROM schema_migrations WHERE version = ${LATEST_SCHEMA_VERSION}`);
+    db.exec("DELETE FROM schema_migrations WHERE version >= 8");
     db.close();
     expect(() => openDb(path)).toThrow(/rebuild/i);
   });

@@ -23,7 +23,7 @@ export function totals(db: Database, filter?: DateFilter | null): Totals {
          SELECT * FROM session s ${whereClause(date)}
        )
        SELECT
-         (SELECT COUNT(*) FROM filtered_session) AS sessions,
+         (SELECT COUNT(*) FROM filtered_session WHERE is_subagent = 0) AS sessions,
          (SELECT COUNT(*) FROM message m JOIN filtered_session s2 ON s2.id = m.session_id) AS messages,
          (SELECT COUNT(*) FROM tool_call t JOIN filtered_session s3 ON s3.id = t.session_id) AS tool_calls,
          (SELECT COALESCE(SUM(total_input_tokens), 0) FROM filtered_session) AS input_tokens,
@@ -72,7 +72,7 @@ export function byDimension(
          SELECT * FROM session s ${whereClause(date)}
        )
        SELECT ${groupExpr} AS key,
-              COUNT(*) AS sessions,
+              COALESCE(SUM(CASE WHEN s.is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
               COALESCE(SUM(s.total_input_tokens), 0) AS input_tokens,
               COALESCE(SUM(s.total_output_tokens), 0) AS output_tokens,
               COALESCE(SUM(s.total_reasoning_tokens), 0) AS reasoning_tokens,
@@ -321,7 +321,7 @@ export function todayTotals(db: Database): Totals {
   return db
     .query(
       `SELECT
-         COUNT(*) AS sessions,
+         COALESCE(SUM(CASE WHEN is_subagent = 0 THEN 1 ELSE 0 END), 0) AS sessions,
          (SELECT COUNT(*) FROM message m JOIN session s2 ON s2.id = m.session_id
           WHERE substr(s2.started_at, 1, 10) = date('now', 'localtime')) AS messages,
          (SELECT COUNT(*) FROM tool_call t JOIN session s3 ON s3.id = t.session_id

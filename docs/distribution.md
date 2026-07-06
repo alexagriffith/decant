@@ -67,7 +67,7 @@ Local run:
 
 ```sh
 docker run --rm \
-  -p 127.0.0.1:4577:4577 \
+  -p 127.0.0.1:3000:3000 \
   -v decant-data:/var/lib/decant \
   -v "$HOME/.claude/projects:/sources/claude:ro" \
   -v "$HOME/.codex:/sources/codex:ro" \
@@ -79,17 +79,20 @@ Release workflow publishes `ghcr.io/dosu-ai/decant:latest`.
 
 The container binds `0.0.0.0` inside the network namespace so Docker port
 publishing can reach it. Publish to `127.0.0.1` on the host, as shown above.
-Do not use `-p 4577:4577` unless you intentionally want to expose the archive
-port on every host interface.
+Do not use `-p 3000:3000` unless you intentionally want to expose the archive
+port on every host interface. The image sets
+`DECANT_TRUSTED_PEERS=172.16.0.0/12` so requests forwarded from Docker bridge
+peers can pass the local-only API guard; override it with a narrower peer or
+CIDR if your Docker network uses a different gateway.
 
 ## Source
 
 Source remains the contributor path and the fastest dev loop:
 
 ```sh
-bun install
-bun run src/cli.ts sync
-bun run src/cli.ts serve
+bun run dev
 ```
 
-Source installs require Bun. npm and Docker installs do not.
+`bun run dev` runs `bun install --frozen-lockfile`, starts `decant serve`, performs
+the startup sync, and keeps the archive current. Source installs require Bun.
+npm and Docker installs do not.

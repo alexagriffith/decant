@@ -21,7 +21,7 @@ The pre-cutover tree is preserved in the signed `pre-typescript` tag.
 | Path | Responsibility |
 |---|---|
 | `src/cli.ts` | Commander CLI entrypoint and all stdout/stderr/exit-code policy. |
-| `src/db.ts`, `src/schema.sql` | SQLite opener and frozen v8 baseline schema. |
+| `src/db.ts`, `src/schema.sql` | SQLite opener and frozen v9 baseline schema. |
 | `src/sources/` | Per-tool parsers: `claude.ts`, `codex.ts`. |
 | `src/ingest.ts` | Idempotent sync from source logs into the archive. |
 | `src/query.ts`, `src/stats.ts`, `src/export.ts` | Read/query/render surfaces. |
@@ -39,7 +39,7 @@ The pre-cutover tree is preserved in the signed `pre-typescript` tag.
 
 ## Setup
 
-- Bun 1.3+ (`bun install --frozen-lockfile`).
+- Bun 1.3+ (`bun run dev` performs a frozen install before serving).
 - Docker only if you are validating the container image.
 - No Rust, Elixir, Erlang, or Swift toolchain is required for mainline work.
 
@@ -48,6 +48,9 @@ The pre-cutover tree is preserved in the signed `pre-typescript` tag.
 Run from the repo root.
 
 ```sh
+# One-command local UI + startup sync
+bun run dev
+
 # Quality gates
 bun test
 bunx tsc --noEmit
@@ -55,18 +58,18 @@ bunx biome check .
 just check
 
 # CLI
-bun src/cli.ts sync
-bun src/cli.ts ls
-bun src/cli.ts search "auth bug"
-bun src/cli.ts stats --by model
-bun src/cli.ts files --group ext
-bun src/cli.ts distill script
-bun src/cli.ts recommendations ls
-bun src/cli.ts --db /tmp/decant.db ls
+bun run src/cli.ts sync
+bun run src/cli.ts ls
+bun run src/cli.ts search "auth bug"
+bun run src/cli.ts stats --by model
+bun run src/cli.ts files --group ext
+bun run src/cli.ts distill script
+bun run src/cli.ts recommendations ls
+bun run src/cli.ts --db /tmp/decant.db ls
 
 # Long-running local modes
-bun src/cli.ts watch
-bun src/cli.ts serve
+bun run src/cli.ts watch
+bun run src/cli.ts serve
 
 # Distribution
 bun run scripts/build-binaries.ts --target native
@@ -80,7 +83,7 @@ Config:
 - Source dirs: `DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`, or command flags.
 - Settings dir: `DECANT_CONFIG_DIR`; settings default to
   `~/.config/decant/settings.json`.
-- `serve` binds `127.0.0.1:4577` by default; override with `--host`/`--port`.
+- `serve` binds `127.0.0.1:3000` by default; override with `--host`/`--port`.
 
 ## Definition of done
 
@@ -108,9 +111,10 @@ A change is ready when:
 4. **Costs are computed at ingest** with `cost::estimateCost` and stored on the
    session row. Editing pricing does not rewrite historical rows; rebuild the
    archive to recompute.
-5. **The schema baseline is v8.** Pre-v8 archives are intentionally rebuild-only:
+5. **The schema baseline is v9.** Pre-v8 archives are intentionally rebuild-only:
    delete the archive and re-ingest from the source directories. Do not add
-   forward migrations unless that product decision changes.
+   broad forward migrations unless that product decision changes; the narrow
+   v8-to-v9 migration preserves existing TypeScript-cutover archives.
 6. **Parsers are the extension point.** A new source tool means
    `src/sources/<tool>.ts`, synthetic fixtures, parser tests, ingest/query tests,
    and golden updates.

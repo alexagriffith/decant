@@ -35,9 +35,10 @@ WORKDIR /var/lib/decant
 ENV DECANT_DB=/var/lib/decant/decant.db
 ENV DECANT_CLAUDE_DIR=/sources/claude
 ENV DECANT_CODEX_DIR=/sources/codex
+ENV DECANT_TRUSTED_PEERS=172.16.0.0/12
 
 VOLUME ["/var/lib/decant"]
-EXPOSE 4577
+EXPOSE 3000
 
 ENTRYPOINT ["/usr/local/bin/decant"]
-CMD ["serve", "--host", "0.0.0.0", "--port", "4577", "--no-fs-watch", "--interval-ms", "45000"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "3000", "--no-fs-watch", "--interval-ms", "45000"]

@@ -3,10 +3,11 @@ import { dirname } from "node:path";
 import type { Config } from "./config.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
 import { openDb } from "./db.ts";
+import { refreshDerivedMetadata } from "./derived.ts";
 import type { Operation } from "./enrich.ts";
-import { sync as ingestSync } from "./ingest.ts";
+import type { sync as ingestSync } from "./ingest.ts";
 import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
-import { getSession, listSessions, search } from "./query.ts";
+import { getSession, listProjects, listSessions, search } from "./query.ts";
 import {
   list as listRecommendations,
   markImplemented,
@@ -33,18 +34,26 @@ import {
   toolUsage,
   totals,
 } from "./stats.ts";
+import { tokenEconomics, tokenEconomicsForSession } from "./token-economics.ts";
 import uiBundle from "./ui/index.html";
+
+export const DEFAULT_SERVE_HOST = "127.0.0.1";
+export const DEFAULT_SERVE_PORT = 3000;
 
 export interface ServeOptions {
   config: Config;
   port?: number;
   hostname?: string;
+  trustedPeers?: string[];
 }
 
 type Db = ReturnType<typeof openDb>;
 type ServerEvent = { type: string };
 interface RequestContext {
   db?: Db;
+  boundHostname?: string;
+  remoteAddress?: string | null;
+  trustedPeers?: string[];
 }
 
 const syncStatus = {
@@ -55,6 +64,7 @@ const syncStatus = {
   ingested_count: null as number | null,
 };
 const eventClients = new Set<EventClient>();
+const metadataHydrated = new WeakSet<Db>();
 
 export function publishServerEvent<T extends ServerEvent>(event: T): void {
   for (const client of [...eventClients]) {
@@ -72,7 +82,7 @@ export async function handleRequest(
   context: RequestContext = {},
 ): Promise<Response> {
   const url = new URL(request.url);
-  const securityFailure = validateLocalRequest(request, url);
+  const securityFailure = validateLocalRequest(request, url, context);
   if (securityFailure != null) {
     return securityFailure;
   }
@@ -144,13 +154,21 @@ export async function handleRequest(
       });
     }
     if (request.method === "POST" && url.pathname === "/api/sync") {
-      return syncNow(config);
+      const contentTypeFailure = requireJsonRequest(request);
+      if (contentTypeFailure != null) {
+        return contentTypeFailure;
+      }
+      return await syncNow(config);
     }
     if (request.method === "GET" && url.pathname === "/api/sessions") {
       return withDb(config, context, (db) =>
         json(
           listSessions(db, {
             tool: url.searchParams.get("tool"),
+            model: url.searchParams.get("model"),
+            project: url.searchParams.get("project"),
+            includeSubagents: url.searchParams.get("include_subagents") === "true",
+            includeNestedSubagents: url.searchParams.get("with_subagents") === "true",
             limit: integerParam(url, "limit", 50),
             offset: integerParam(url, "offset", 0, true),
             ...dateFilter,
@@ -158,10 +176,24 @@ export async function handleRequest(
         ),
       );
     }
+    if (request.method === "GET" && url.pathname === "/api/projects") {
+      return withDb(config, context, (db) => json(listProjects(db)));
+    }
+    const sessionEconomicsMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/token-economics$/);
+    if (request.method === "GET" && sessionEconomicsMatch != null) {
+      return withDb(config, context, (db) => {
+        const economics = tokenEconomicsForSession(db, Number(sessionEconomicsMatch[1]));
+        return economics == null ? json({ error: "session not found" }, 404) : json(economics);
+      });
+    }
     const sessionMatch = url.pathname.match(/^\/api\/sessions\/(\d+)$/);
     if (request.method === "GET" && sessionMatch != null) {
       return withDb(config, context, (db) => {
-        const detail = getSession(db, Number(sessionMatch[1]));
+        const messageLimit = integerParam(url, "message_limit", 0, true);
+        const detail = getSession(db, Number(sessionMatch[1]), {
+          messageLimit: messageLimit > 0 ? messageLimit : null,
+          messageOffset: integerParam(url, "message_offset", 0, true),
+        });
         return detail == null ? json({ error: "session not found" }, 404) : json(detail);
       });
     }
@@ -200,6 +232,9 @@ export async function handleRequest(
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/model-sparklines") {
       return withDb(config, context, (db) => json(modelSparklines(db, dateFilter)));
+    }
+    if (request.method === "GET" && url.pathname === "/api/analytics/token-economics") {
+      return withDb(config, context, (db) => json(tokenEconomics(db, dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/now") {
       return withDb(config, context, (db) =>
@@ -289,34 +324,54 @@ function settingsResponse(settings = getSettings()): Record<string, unknown> {
   };
 }
 
-function syncNow(config: Config): Response {
+async function syncNow(config: Config): Promise<Response> {
   syncStatus.in_progress = true;
   syncStatus.last_error = null;
   try {
-    return withDb(config, {}, (db) => {
-      const report = ingestSync(db, config);
-      syncStatus.in_progress = false;
-      syncStatus.last_sync_at = new Date().toISOString();
-      syncStatus.last_report =
-        `scanned ${report.scanned}, ingested ${report.ingested}, skipped ${report.skipped}, ` +
-        `issues ${report.issues}, failed ${report.failed}`;
-      syncStatus.ingested_count = report.ingested;
-      publishServerEvent({ type: "sync", reason: "manual", report, status: { ...syncStatus } });
-      if (report.ingested > 0) {
-        publishServerEvent({
-          type: "archive_updated",
-          ingested: report.ingested,
-          last_sync_at: syncStatus.last_sync_at,
-        });
-      }
-      return json(report);
-    });
+    const report = await runSyncWorker(config);
+    syncStatus.in_progress = false;
+    syncStatus.last_sync_at = new Date().toISOString();
+    syncStatus.last_report =
+      `scanned ${report.scanned}, ingested ${report.ingested}, skipped ${report.skipped}, ` +
+      `issues ${report.issues}, failed ${report.failed}`;
+    syncStatus.ingested_count = report.ingested;
+    publishServerEvent({ type: "sync", reason: "manual", report, status: { ...syncStatus } });
+    if (report.ingested > 0) {
+      publishServerEvent({
+        type: "archive_updated",
+        ingested: report.ingested,
+        last_sync_at: syncStatus.last_sync_at,
+      });
+    }
+    return json(report);
   } catch (error) {
     syncStatus.in_progress = false;
     syncStatus.last_sync_at = new Date().toISOString();
     syncStatus.last_error = error instanceof Error ? error.message : String(error);
     throw error;
   }
+}
+
+function runSyncWorker(config: Config): Promise<ReturnType<typeof ingestSync>> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./sync-worker.ts", import.meta.url), { type: "module" });
+    worker.addEventListener("message", (event) => {
+      const data = event.data as
+        | { ok: true; report: ReturnType<typeof ingestSync> }
+        | { ok: false; error: string };
+      worker.terminate();
+      if (data.ok) {
+        resolve(data.report);
+      } else {
+        reject(new Error(data.error));
+      }
+    });
+    worker.addEventListener("error", (event) => {
+      worker.terminate();
+      reject(event.error instanceof Error ? event.error : new Error(String(event.error)));
+    });
+    worker.postMessage(config);
+  });
 }
 
 interface EventClient {
@@ -374,15 +429,19 @@ function formatSse(event: ServerEvent): string {
 }
 
 export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
-  const hostname = options.hostname ?? "127.0.0.1";
-  const port = options.port ?? 4577;
+  const hostname = options.hostname ?? DEFAULT_SERVE_HOST;
+  const port = options.port ?? DEFAULT_SERVE_PORT;
+  const trustedPeers = options.trustedPeers ?? parsePeerList(process.env.DECANT_TRUSTED_PEERS);
   mkdirSync(dirname(options.config.dbPath), { recursive: true });
   const db = openDb(options.config.dbPath);
+  ensureDerivedMetadata(db);
   const server = Bun.serve({
     hostname,
     port,
     routes: {
       "/": uiBundle,
+      "/projects": uiBundle,
+      "/sessions": uiBundle,
       "/sessions/:id": uiBundle,
       "/search": uiBundle,
       "/analytics": uiBundle,
@@ -391,7 +450,13 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       "/files": uiBundle,
       "/settings": uiBundle,
     },
-    fetch: (request) => handleRequest(request, options.config, { db }),
+    fetch: (request, bunServer) =>
+      handleRequest(request, options.config, {
+        db,
+        boundHostname: hostname,
+        remoteAddress: bunServer.requestIP(request)?.address ?? null,
+        trustedPeers,
+      }),
   });
   const stop = server.stop.bind(server);
   let closed = false;
@@ -410,15 +475,25 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
 
 function withDb(config: Config, context: RequestContext, callback: (db: Db) => Response): Response {
   if (context.db != null) {
+    ensureDerivedMetadata(context.db);
     return callback(context.db);
   }
   mkdirSync(dirname(config.dbPath), { recursive: true });
   const db = openDb(config.dbPath);
   try {
+    ensureDerivedMetadata(db);
     return callback(db);
   } finally {
     db.close();
   }
+}
+
+function ensureDerivedMetadata(db: Db): void {
+  if (metadataHydrated.has(db)) {
+    return;
+  }
+  refreshDerivedMetadata(db, { ignoreReadonly: true });
+  metadataHydrated.add(db);
 }
 
 function isSearchSyntaxError(error: unknown): boolean {
@@ -439,14 +514,26 @@ function json(value: unknown, status = 200): Response {
   });
 }
 
-function validateLocalRequest(request: Request, url: URL): Response | null {
+function validateLocalRequest(
+  request: Request,
+  url: URL,
+  context: RequestContext,
+): Response | null {
   if (!isProtectedPath(url.pathname)) {
     return null;
   }
   if (!isLoopbackHost(url.hostname)) {
     return json({ error: "forbidden host" }, 403);
   }
-  if (isMutatingMethod(request.method) && !isAllowedWriteRequest(request)) {
+  const boundToLoopback = isLoopbackHost(context.boundHostname ?? "127.0.0.1");
+  if (
+    !boundToLoopback &&
+    !isLoopbackPeer(context.remoteAddress) &&
+    !isTrustedPeer(context.remoteAddress, context.trustedPeers ?? [])
+  ) {
+    return json({ error: "forbidden remote" }, 403);
+  }
+  if (isMutatingMethod(request.method) && !isAllowedWriteRequest(request, boundToLoopback)) {
     return json({ error: "cross-origin writes are forbidden" }, 403);
   }
   return null;
@@ -460,12 +547,15 @@ function isMutatingMethod(method: string): boolean {
   return method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
 }
 
-function isAllowedWriteRequest(request: Request): boolean {
+function isAllowedWriteRequest(request: Request, boundToLoopback: boolean): boolean {
   const origin = request.headers.get("origin");
   if (origin != null && !isLoopbackOrigin(origin)) {
     return false;
   }
   const site = request.headers.get("sec-fetch-site")?.toLowerCase();
+  if (!boundToLoopback && origin == null && site == null) {
+    return false;
+  }
   return site == null || site === "same-origin" || site === "same-site" || site === "none";
 }
 
@@ -481,8 +571,95 @@ function isLoopbackOrigin(origin: string): boolean {
 }
 
 function isLoopbackHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "[::1]";
+  const normalized = normalizeHost(hostname);
+  return normalized === "localhost" || normalized === "::1" || isIpv4Loopback(normalized);
+}
+
+function isLoopbackPeer(address: string | null | undefined): boolean {
+  if (address == null) {
+    return false;
+  }
+  const normalized = normalizeHost(address);
+  if (normalized.startsWith("::ffff:")) {
+    return isIpv4Loopback(normalized.slice("::ffff:".length));
+  }
+  return normalized === "::1" || isIpv4Loopback(normalized);
+}
+
+function isTrustedPeer(address: string | null | undefined, trustedPeers: string[]): boolean {
+  if (address == null) {
+    return false;
+  }
+  const normalized = normalizeHost(address);
+  const ipv4 = normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
+  for (const peer of trustedPeers) {
+    if (peer.includes("/")) {
+      if (ipv4CidrContains(peer, ipv4)) {
+        return true;
+      }
+    } else if (normalizeHost(peer) === normalized || normalizeHost(peer) === ipv4) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function parsePeerList(value: string | null | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((peer) => peer.trim())
+    .filter((peer) => peer !== "");
+}
+
+function ipv4CidrContains(cidr: string, address: string): boolean {
+  const [base, bitsRaw] = cidr.split("/");
+  const bits = Number.parseInt(bitsRaw ?? "", 10);
+  const baseInt = ipv4ToInt(base ?? "");
+  const addressInt = ipv4ToInt(address);
+  if (baseInt == null || addressInt == null || bits < 0 || bits > 32) {
+    return false;
+  }
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return (baseInt & mask) === (addressInt & mask);
+}
+
+function ipv4ToInt(address: string): number | null {
+  const parts = address.split(".");
+  if (parts.length !== 4) {
+    return null;
+  }
+  const octets = parts.map((part) => Number.parseInt(part, 10));
+  if (
+    !octets.every((octet, index) => String(octet) === parts[index] && octet >= 0 && octet <= 255)
+  ) {
+    return null;
+  }
+  return (
+    (((octets[0] ?? 0) << 24) |
+      ((octets[1] ?? 0) << 16) |
+      ((octets[2] ?? 0) << 8) |
+      (octets[3] ?? 0)) >>>
+    0
+  );
+}
+
+function normalizeHost(hostname: string): string {
+  const normalized = hostname.trim().toLowerCase();
+  return normalized.startsWith("[") && normalized.endsWith("]")
+    ? normalized.slice(1, -1)
+    : normalized;
+}
+
+function isIpv4Loopback(hostname: string): boolean {
+  const parts = hostname.split(".");
+  if (parts.length !== 4) {
+    return false;
+  }
+  const octets = parts.map((part) => Number.parseInt(part, 10));
+  return (
+    octets.every((octet, index) => String(octet) === parts[index] && octet >= 0 && octet <= 255) &&
+    octets[0] === 127
+  );
 }
 
 function requireJsonRequest(request: Request): Response | null {
@@ -527,6 +704,8 @@ function parseOperation(value: string | null): Operation | null | false {
 function isUiPath(pathname: string): boolean {
   return (
     pathname === "/" ||
+    pathname === "/projects" ||
+    pathname === "/sessions" ||
     pathname === "/search" ||
     pathname === "/analytics" ||
     pathname === "/insights" ||

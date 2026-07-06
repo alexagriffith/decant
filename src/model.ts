@@ -82,6 +82,12 @@ export interface NormalizedSession {
   startedAt: string | null;
   endedAt: string | null;
   isArchived: boolean;
+  isSubagent: boolean;
+  rootSourceSessionId: string | null;
+  spawnToolUseId: string | null;
+  agentId: string | null;
+  agentType: string | null;
+  spawnDepth: number | null;
   rawMeta: Json;
   /** Session-level token totals (Codex sets these directly; Claude sums per-message). */
   totals: TokenUsage;

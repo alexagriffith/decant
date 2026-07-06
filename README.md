@@ -29,11 +29,12 @@ transcripts never leave your machine.
 Use source during the pre-release TypeScript migration:
 
 ```bash
-bun install --frozen-lockfile
-bun src/cli.ts sync
-bun src/cli.ts ls
-bun src/cli.ts serve
+bun run dev
 ```
+
+Requires Bun 1.3+. `bun run dev` installs dependencies with the lockfile
+frozen, starts `decant serve`, runs the startup sync, and keeps watching your
+source logs. The UI runs at `http://127.0.0.1:3000`.
 
 After the first Release workflow publishes packages, install from npm without
 installing Bun:
@@ -49,7 +50,7 @@ After the first Release workflow publishes an image, run the GHCR image:
 
 ```bash
 docker run --rm \
-  -p 127.0.0.1:4577:4577 \
+  -p 127.0.0.1:3000:3000 \
   -v decant-data:/var/lib/decant \
   -v "$HOME/.claude/projects:/sources/claude:ro" \
   -v "$HOME/.codex:/sources/codex:ro" \
@@ -57,11 +58,11 @@ docker run --rm \
 ```
 
 Keep the `127.0.0.1:` host prefix on the Docker port publish. Publishing as
-`-p 4577:4577` exposes the archive port on every host interface. The container
+`-p 3000:3000` exposes the archive port on every host interface. The container
 binds `0.0.0.0` only inside its own network namespace so Docker's host loopback
-publish can reach it.
-
-The UI runs at `http://127.0.0.1:4577`.
+publish can reach it. The image trusts Docker bridge peers by default via
+`DECANT_TRUSTED_PEERS=172.16.0.0/12`; use a narrower value if your local Docker
+network is different.
 
 ## CLI
 
@@ -92,12 +93,15 @@ All read commands support `--json`. Use `--db /path/to/decant.db` or
   `~/.claude/projects`.
 - `DECANT_CODEX_DIR`: Codex home directory, default `~/.codex`.
 - `DECANT_CONFIG_DIR`: settings directory, default `~/.config/decant`.
+- `DECANT_TRUSTED_PEERS`: comma-separated peer IPs or IPv4 CIDRs allowed through
+  the local API guard when `serve` is bound to a non-loopback host.
 
-`decant serve` binds `127.0.0.1:4577` by default. Override with
+`decant serve` binds `127.0.0.1:3000` by default. Override with
 `--host`/`--port`.
 
-Archives older than schema v8 are rebuild-only. Delete the archive and re-run
-`decant sync`; source logs remain the source of truth.
+Archives older than schema v8 are rebuild-only. v8 archives migrate to v9 on
+open; older archives should be deleted and rebuilt with `decant sync`. Source
+logs remain the source of truth.
 
 ## How It Works
 
@@ -122,6 +126,14 @@ Release automation is configured to publish npm packages and the GHCR image from
 the `Release` workflow once a version is dispatched.
 
 ## Development
+
+Run the local UI and watcher:
+
+```bash
+bun run dev
+```
+
+Run quality gates:
 
 ```bash
 bun test

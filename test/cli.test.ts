@@ -79,7 +79,7 @@ describe("runCli", () => {
     expect(dbInfo.code).toBe(0);
     expect(JSON.parse(dbInfo.stdout)).toMatchObject({
       path: dbPath,
-      schema_version: 8,
+      schema_version: 9,
       sessions: 7,
     });
 
@@ -97,6 +97,12 @@ describe("runCli", () => {
       { key: "claude-opus-4-7", sessions: 4 },
       { key: "gpt-5.4", sessions: 3 },
     ]);
+
+    const tokens = await runCli([...base, "tokens"]);
+    expect(tokens.code).toBe(0);
+    expect(JSON.parse(tokens.stdout)).toMatchObject({
+      buckets: expect.arrayContaining([expect.objectContaining({ bucket: "context" })]),
+    });
 
     const search = await runCli([...base, "search", "auth", "--limit", "5"]);
     expect(search.code).toBe(0);
@@ -252,6 +258,7 @@ describe("runCli", () => {
     expect(bash.stdout).toContain("complete -F _decant_complete decant");
     expect(bash.stdout).toContain("watch");
     expect(bash.stdout).toContain("serve");
+    expect(bash.stdout).toContain("tokens");
     expect(bash.stdout).toContain("distill");
     expect(bash.stdout).toContain("recommendations");
 
@@ -272,5 +279,6 @@ describe("runCli", () => {
     expect(serve.stdout).toContain("in-process web UI");
     expect(serve.stdout).toContain("--host");
     expect(serve.stdout).toContain("--port");
+    expect(serve.stdout).toContain("(default: 3000)");
   });
 });

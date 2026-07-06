@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { Command, InvalidArgumentError } from "commander";
 import { type Config, type ConfigOverrides, resolveConfig } from "./config.ts";
 import { openDb } from "./db.ts";
+import { refreshDerivedMetadata } from "./derived.ts";
 import {
   DECANT_VERSION,
   defaultScriptOpts,
@@ -25,7 +26,13 @@ import {
   markImplemented,
   parseStatusFilter,
 } from "./recommendations.ts";
-import { publishServerEvent, serve as serveApp } from "./server.ts";
+import {
+  DEFAULT_SERVE_HOST,
+  DEFAULT_SERVE_PORT,
+  parsePeerList,
+  publishServerEvent,
+  serve as serveApp,
+} from "./server.ts";
 import {
   byDimension,
   fileHotspots,
@@ -35,6 +42,7 @@ import {
   toolUsage,
   totals,
 } from "./stats.ts";
+import { tokenEconomics } from "./token-economics.ts";
 import {
   DEFAULT_DEBOUNCE_MS,
   DEFAULT_SYNC_INTERVAL_MS,
@@ -228,6 +236,12 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .description("watch session directories and keep the archive current")
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
+    .option(
+      "--trusted-peer <peer>",
+      "allow API requests from this peer IP/CIDR when bound broadly (repeatable or comma-separated)",
+      collectOption,
+      [] as string[],
+    )
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -243,6 +257,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
+        trustedPeer?: string[];
       }) =>
         runAsync(async () => {
           const config = resolve({
@@ -265,8 +280,8 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   program
     .command("serve")
     .description("serve the in-process web UI and keep the archive current")
-    .option("--host <host>", "host to bind", "127.0.0.1")
-    .option("--port <n>", "port to bind", parseInteger, 4577)
+    .option("--host <host>", "host to bind", DEFAULT_SERVE_HOST)
+    .option("--port <n>", "port to bind", parseInteger, DEFAULT_SERVE_PORT)
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
@@ -286,6 +301,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
+        trustedPeer?: string[];
       }) =>
         runAsync(async () => {
           const config = resolve({
@@ -294,8 +310,9 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           });
           const server = serveApp({
             config,
-            hostname: commandOptions.host ?? "127.0.0.1",
-            port: commandOptions.port ?? 4577,
+            hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
+            port: commandOptions.port ?? DEFAULT_SERVE_PORT,
+            trustedPeers: trustedPeers(commandOptions.trustedPeer),
           });
           const handle = startWatch({
             config,
@@ -305,7 +322,9 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             onEvent: emitWatchEvent,
           });
           if (!isJson(globals()) && !globals().quiet) {
-            io.writeErr(`serving http://${commandOptions.host ?? "127.0.0.1"}:${server.port}\n`);
+            io.writeErr(
+              `serving http://${commandOptions.host ?? DEFAULT_SERVE_HOST}:${server.port}\n`,
+            );
           }
           try {
             await waitForProcessSignal();
@@ -320,24 +339,37 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     command
       .description("list sessions")
       .option("--tool <tool>", "only this tool")
+      .option("--model <model>", "only this model")
+      .option("--project <path>", "only this project path")
+      .option("--include-subagents", "include nested subagent sessions")
       .option("--limit <n>", "max rows", parseInteger, 50)
-      .action((commandOptions: { tool?: string; limit?: number }) =>
-        run(() => {
-          const archive = readArchive();
-          try {
-            const rows = listSessions(archive.db, {
-              tool: commandOptions.tool,
-              limit: commandOptions.limit,
-            });
-            output(rows, () =>
-              globals().quiet
-                ? `${rows.map((row) => row.id).join("\n")}${rows.length > 0 ? "\n" : ""}`
-                : `${rows.map((row) => `${row.id}\t${row.tool}\t${row.title ?? ""}`).join("\n")}\n`,
-            );
-          } finally {
-            archive.db.close();
-          }
-        }),
+      .action(
+        (commandOptions: {
+          tool?: string;
+          model?: string;
+          project?: string;
+          includeSubagents?: boolean;
+          limit?: number;
+        }) =>
+          run(() => {
+            const archive = readArchive();
+            try {
+              const rows = listSessions(archive.db, {
+                tool: commandOptions.tool,
+                model: commandOptions.model,
+                project: commandOptions.project,
+                includeSubagents: commandOptions.includeSubagents === true,
+                limit: commandOptions.limit,
+              });
+              output(rows, () =>
+                globals().quiet
+                  ? `${rows.map((row) => row.id).join("\n")}${rows.length > 0 ? "\n" : ""}`
+                  : `${rows.map((row) => `${row.id}\t${row.tool}\t${row.title ?? ""}`).join("\n")}\n`,
+              );
+            } finally {
+              archive.db.close();
+            }
+          }),
       );
   };
 
@@ -381,7 +413,8 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             rows
               .map(
                 (row) =>
-                  `${row.id}\t${row.path}\t${row.sessions}\t` +
+                  `${row.id}\t${row.is_worktree ? "worktree" : "project"}\t${row.path}\t` +
+                  `${row.worktree_tool ?? row.session_tools.join(",")}\t${row.sessions}\t` +
                   `${row.estimated_cost_usd.toFixed(2)}\t${row.last_seen_at ?? ""}`,
               )
               .join("\n")
@@ -750,6 +783,32 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     );
 
   program
+    .command("tokens")
+    .alias("economics")
+    .description("break token and cost usage into planning, communicating, context, and code")
+    .action(() =>
+      run(() => {
+        const archive = readArchive();
+        try {
+          const row = tokenEconomics(archive.db);
+          output(row, () =>
+            row.buckets
+              .map(
+                (bucket) =>
+                  `${bucket.bucket}\t${formatNumber(bucket.generation_tokens)}\t` +
+                  `${formatNumber(bucket.context_window_tokens)}\t` +
+                  `${bucket.estimated_cost_usd.toFixed(4)}`,
+              )
+              .join("\n")
+              .concat(row.buckets.length > 0 ? "\n" : ""),
+          );
+        } finally {
+          archive.db.close();
+        }
+      }),
+    );
+
+  program
     .command("files")
     .description("file hotspots")
     .option("--group <group>", "path | ext", "path")
@@ -911,7 +970,9 @@ function commanderExitCode(error: { exitCode: number; code?: string }): number {
 
 function openArchive(config: Config): Archive {
   mkdirSync(dirname(config.dbPath), { recursive: true });
-  return { db: openDb(config.dbPath), config };
+  const db = openDb(config.dbPath);
+  refreshDerivedMetadata(db, { ignoreReadonly: true });
+  return { db, config };
 }
 
 function isJson(options: GlobalOptions): boolean {
@@ -950,6 +1011,18 @@ function parseNumber(value: string): number {
 
 function optionalInteger(value: string | undefined): number | undefined {
   return value == null ? undefined : parseInteger(value);
+}
+
+function collectOption(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+function trustedPeers(values: string[] | undefined): string[] {
+  return (values ?? []).flatMap((value) => parsePeerList(value));
+}
+
+function formatNumber(value: number): string {
+  return String(Math.round(value));
 }
 
 function parseOperation(value: string): Operation | null {
@@ -1043,6 +1116,8 @@ const completionWords = [
   "mark",
   "search",
   "stats",
+  "tokens",
+  "economics",
   "files",
   "tool",
   "mcp",

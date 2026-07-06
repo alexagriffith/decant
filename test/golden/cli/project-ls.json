@@ -4,6 +4,16 @@
     "name": "proj",
     "sessions": 7,
     "estimated_cost_usd": 0.10869999999999999,
-    "last_seen_at": "2026-05-06T09:00:10.000Z"
+    "last_seen_at": "2026-05-06T09:00:10.000Z",
+    "is_worktree": false,
+    "root_path": "/Users/dev/proj",
+    "worktree_label": null,
+    "worktree_tool": null,
+    "root_source": "self",
+    "worktree_count": 0,
+    "session_tools": [
+      "claude_code",
+      "codex"
+    ]
   }
 ]

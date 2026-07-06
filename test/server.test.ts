@@ -77,7 +77,7 @@ async function route(
   if (init.body != null && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
-  const request = new Request(`http://127.0.0.1:4577${path}`, { ...init, headers });
+  const request = new Request(`http://127.0.0.1:3000${path}`, { ...init, headers });
   const response = await handleRequest(request, config);
   const contentType = response.headers.get("content-type");
   const body = contentType?.startsWith("application/json")
@@ -126,7 +126,7 @@ describe("server routes", () => {
 
   test("events route streams hello and published updates", async () => {
     const config = freshConfig();
-    const response = await handleRequest(new Request("http://127.0.0.1:4577/api/events"), config);
+    const response = await handleRequest(new Request("http://127.0.0.1:3000/api/events"), config);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/event-stream; charset=utf-8");
 
@@ -153,11 +153,64 @@ describe("server routes", () => {
     expect(await response.json()).toEqual({ error: "forbidden host" });
   });
 
+  test("rejects protected routes from non-loopback peers on broad binds", async () => {
+    const config = freshConfig();
+
+    const spoofedHost = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/config"),
+      config,
+      { boundHostname: "0.0.0.0", remoteAddress: "192.168.1.20" },
+    );
+    expect(spoofedHost.status).toBe(403);
+    expect(await spoofedHost.json()).toEqual({ error: "forbidden remote" });
+
+    const loopbackRead = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/config"),
+      config,
+      { boundHostname: "0.0.0.0", remoteAddress: "::ffff:127.0.0.1" },
+    );
+    expect(loopbackRead.status).toBe(200);
+
+    const trustedDockerPeer = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/config"),
+      config,
+      {
+        boundHostname: "0.0.0.0",
+        remoteAddress: "172.17.0.1",
+        trustedPeers: ["172.16.0.0/12"],
+      },
+    );
+    expect(trustedDockerPeer.status).toBe(200);
+
+    const bareLocalWrite = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+      config,
+      { boundHostname: "0.0.0.0", remoteAddress: "127.0.0.1" },
+    );
+    expect(bareLocalWrite.status).toBe(403);
+    expect(await bareLocalWrite.json()).toEqual({ error: "cross-origin writes are forbidden" });
+
+    const browserLocalWrite = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+        body: "{}",
+      }),
+      config,
+      { boundHostname: "0.0.0.0", remoteAddress: "127.0.0.1" },
+    );
+    expect(browserLocalWrite.status).toBe(200);
+  });
+
   test("rejects cross-origin and non-json mutating requests", async () => {
     const config = freshConfig();
 
     const crossSite = await handleRequest(
-      new Request("http://127.0.0.1:4577/api/launch/agent", {
+      new Request("http://127.0.0.1:3000/api/launch/agent", {
         method: "POST",
         headers: {
           "content-type": "text/plain",
@@ -172,7 +225,7 @@ describe("server routes", () => {
     expect(await crossSite.json()).toEqual({ error: "cross-origin writes are forbidden" });
 
     const textPlain = await handleRequest(
-      new Request("http://127.0.0.1:4577/api/search", {
+      new Request("http://127.0.0.1:3000/api/search", {
         method: "POST",
         headers: { "content-type": "text/plain" },
         body: JSON.stringify({ query: "auth" }),
@@ -181,6 +234,15 @@ describe("server routes", () => {
     );
     expect(textPlain.status).toBe(415);
     expect(await textPlain.json()).toEqual({ error: "content-type must be application/json" });
+
+    const syncWithoutJson = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/sync", { method: "POST" }),
+      config,
+    );
+    expect(syncWithoutJson.status).toBe(415);
+    expect(await syncWithoutJson.json()).toEqual({
+      error: "content-type must be application/json",
+    });
   });
 
   test("settings routes read options and persist sanitized choices", async () => {
@@ -267,6 +329,18 @@ describe("server routes", () => {
       expect.objectContaining({ source_session_id: "sess-codex-enr" }),
     ]);
 
+    const projects = await route(config, "/api/projects");
+    expect(projects.status).toBe(200);
+    expect(projects.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "/Users/dev/proj",
+          is_worktree: false,
+          session_tools: expect.arrayContaining(["claude_code", "codex"]),
+        }),
+      ]),
+    );
+
     const byTool = await route(config, "/api/stats/by-dimension?dim=tool");
     expect(byTool.status).toBe(200);
     expect(byTool.body).toEqual(
@@ -320,6 +394,22 @@ describe("server routes", () => {
     expect(sparks.status).toBe(200);
     expect(sparks.body).toMatchObject({ days: expect.any(Array), models: expect.any(Object) });
 
+    const economics = await route(config, "/api/analytics/token-economics");
+    expect(economics.status).toBe(200);
+    expect(economics.body).toMatchObject({
+      buckets: expect.arrayContaining([expect.objectContaining({ bucket: "context" })]),
+      totals: expect.objectContaining({ estimated_cost_usd: expect.any(Number) }),
+    });
+
+    const sessions = await route(config, "/api/sessions?limit=1");
+    const sessionId = (sessions.body as { id: number }[])[0]?.id;
+    const sessionEconomics = await route(config, `/api/sessions/${sessionId}/token-economics`);
+    expect(sessionEconomics.status).toBe(200);
+    expect(sessionEconomics.body).toMatchObject({
+      buckets: expect.arrayContaining([expect.objectContaining({ bucket: "context" })]),
+      totals: expect.objectContaining({ estimated_cost_usd: expect.any(Number) }),
+    });
+
     const now = await route(config, "/api/analytics/now");
     expect(now.status).toBe(200);
     expect(now.body).toMatchObject({
@@ -369,7 +459,7 @@ describe("server routes", () => {
   test("sync route ingests configured source directories", async () => {
     const config = freshConfig();
 
-    const result = await route(config, "/api/sync", { method: "POST" });
+    const result = await route(config, "/api/sync", { method: "POST", body: "{}" });
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       scanned: 0,

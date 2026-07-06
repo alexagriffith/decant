@@ -67,6 +67,16 @@ describe("worktree pure classifiers", () => {
     });
   });
 
+  test("intree codex worktree recovers root and label", () => {
+    const result = classifyIntree("/Users/dev/src/decant/.codex-worktrees/feature-token-ui");
+    expect(result).toMatchObject({
+      rootPath: "/Users/dev/src/decant",
+      worktreeLabel: "feature-token-ui",
+      worktreeTool: "codex",
+      source: "intree",
+    });
+  });
+
   test("plain path is not intree", () => {
     expect(classifyIntree("/Users/dev/src/decant")).toBeNull();
   });
@@ -94,6 +104,18 @@ describe("worktree pure classifiers", () => {
     });
     expect(externalContainer("/Users/dev/.warp/worktrees/skymap")).toBeNull();
     expect(externalContainer("/Users/dev/src/worktrees/decant")).toBeNull();
+  });
+
+  test("external container detects Codex worktree layouts", () => {
+    expect(externalContainer("/Users/dev/.codex-worktrees/decant-token-ui")).toEqual({
+      tool: "codex",
+      leaf: "decant-token-ui",
+    });
+    expect(externalContainer("/Users/dev/.codex/worktrees/decant/token-ui")).toEqual({
+      tool: "codex",
+      leaf: "decant-token-ui",
+    });
+    expect(externalContainer("/Users/dev/.codex/worktrees/decant")).toBeNull();
   });
 
   test("nested warp leaf name-matches known root", () => {
@@ -294,6 +316,8 @@ describe("git worktree pointer resolution", () => {
   test("infer tool defaults and recognizes segments", () => {
     expect(inferTool("/u/.warp-worktrees/dosu-x")).toBe("warp");
     expect(inferTool("/u/repo/.claude-worktrees/x")).toBe("claude");
+    expect(inferTool("/u/repo/.codex-worktrees/x")).toBe("codex");
+    expect(inferTool("/u/.codex/worktrees/dosu/x")).toBe("codex");
     expect(inferTool("/u/repo/plain")).toBe("git");
   });
 });
