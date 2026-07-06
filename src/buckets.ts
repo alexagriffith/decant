@@ -3,22 +3,23 @@ import type { Json } from "./model.ts";
 export const ACTIVITY_BUCKETS = ["planning", "communicating", "context", "code"] as const;
 export type ActivityBucket = (typeof ACTIVITY_BUCKETS)[number];
 
+const SHELL_TOOLS = new Set(["bash", "exec_command", "local_shell", "shell"]);
 const CONTEXT_TOOLS = new Set([
-  "Read",
-  "Grep",
-  "Glob",
-  "LS",
-  "NotebookRead",
-  "WebFetch",
-  "WebSearch",
-  "Task",
-  "ToolSearch",
-  "BashOutput",
-  "ListMcpResourcesTool",
-  "ReadMcpResourceTool",
+  "read",
+  "grep",
+  "glob",
+  "ls",
+  "notebookread",
+  "webfetch",
+  "websearch",
+  "task",
+  "toolsearch",
+  "bashoutput",
+  "listmcpresourcestool",
+  "readmcpresourcetool",
 ]);
-const CODE_TOOLS = new Set(["Edit", "Write", "NotebookEdit", "MultiEdit"]);
-const PLANNING_TOOLS = new Set(["TodoWrite", "ExitPlanMode", "EnterPlanMode"]);
+const CODE_TOOLS = new Set(["apply_patch", "edit", "write", "notebookedit", "multiedit"]);
+const PLANNING_TOOLS = new Set(["enterplanmode", "exitplanmode", "todowrite", "update_plan"]);
 const READONLY_BASH = new Set([
   "ls",
   "cat",
@@ -46,16 +47,18 @@ export function toolBucket(
   input?: string | Json,
 ): ActivityBucket {
   const name = toolName ?? "";
-  if (name === "Bash") {
+  const baseName = localToolName(name);
+  const normalized = baseName.toLowerCase();
+  if (SHELL_TOOLS.has(normalized)) {
     return bashBucket(commandFromInput(input));
   }
-  if (PLANNING_TOOLS.has(name)) {
+  if (PLANNING_TOOLS.has(normalized)) {
     return "planning";
   }
-  if (CODE_TOOLS.has(name)) {
+  if (CODE_TOOLS.has(normalized)) {
     return "code";
   }
-  if (CONTEXT_TOOLS.has(name) || name.startsWith("mcp__")) {
+  if (CONTEXT_TOOLS.has(normalized) || name.startsWith("mcp__")) {
     return "context";
   }
   return "context";
@@ -90,13 +93,24 @@ function commandFromInput(input: string | Json | undefined): string | null {
   if (input == null) {
     return null;
   }
-  const value = typeof input === "string" ? parseJson(input) : input;
+  let value = typeof input === "string" ? parseJson(input) : input;
+  if (typeof value === "string") {
+    const nested = parseJson(value);
+    if (nested !== value) {
+      value = nested;
+    }
+  }
   if (typeof value === "string") {
     return value;
   }
   if (typeof value === "object" && value !== null && !Array.isArray(value)) {
     const command = value.command ?? value.cmd;
-    return typeof command === "string" ? command : null;
+    if (typeof command === "string") {
+      return command;
+    }
+    if (Array.isArray(command)) {
+      return command.filter((part): part is string => typeof part === "string").join(" ");
+    }
   }
   return null;
 }
@@ -133,4 +147,8 @@ function splitCommand(command: string | null): string[] {
 function basename(value: string): string {
   const clean = value.replace(/^['"]|['"]$/g, "");
   return clean.split("/").filter(Boolean).at(-1) ?? clean;
+}
+
+function localToolName(name: string): string {
+  return name.split(".").filter(Boolean).at(-1) ?? name;
 }

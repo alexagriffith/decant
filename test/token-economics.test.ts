@@ -65,6 +65,134 @@ describe("token economics", () => {
     db.close();
   });
 
+  test("classifies Codex patch edits as code and read-only shell as context", () => {
+    const db = freshDb();
+    const sessionId = upsertSession(
+      db,
+      parseCodexSession("sess-enr-codex", fixture("codex", "enriched.jsonl"), new Map()),
+      "/x/codex.jsonl",
+      1,
+      2,
+      "codex",
+    );
+
+    const aggregate = tokenEconomics(db);
+    expect(aggregate.buckets.find((row) => row.bucket === "code")).toMatchObject({
+      tool_calls: 1,
+      sessions: 1,
+    });
+    expect(
+      aggregate.buckets.find((row) => row.bucket === "code")?.generation_tokens,
+    ).toBeGreaterThan(0);
+    expect(aggregate.buckets.find((row) => row.bucket === "context")).toMatchObject({
+      tool_calls: 1,
+      sessions: 1,
+    });
+
+    const scoped = tokenEconomicsForSession(db, sessionId);
+    expect(scoped?.buckets.find((row) => row.bucket === "code")).toMatchObject({
+      tool_calls: 1,
+      sessions: 1,
+    });
+    expect(scoped?.buckets.find((row) => row.bucket === "context")).toMatchObject({
+      tool_calls: 1,
+      sessions: 1,
+    });
+    db.close();
+  });
+
+  test("classifies Codex shell build commands as code in aggregate and session economics", () => {
+    const db = freshDb();
+    const content = [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-05-05T09:00:00.000Z",
+        payload: { id: "sess-codex-shell", cwd: "/Users/dev/proj" },
+      }),
+      JSON.stringify({
+        type: "turn_context",
+        timestamp: "2026-05-05T09:00:01.000Z",
+        payload: { cwd: "/Users/dev/proj", model: "gpt-5.4" },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-05-05T09:00:02.000Z",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Run tests" }],
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-05-05T09:00:03.000Z",
+        payload: {
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "Run validation." }],
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-05-05T09:00:04.000Z",
+        payload: {
+          type: "function_call",
+          name: "shell",
+          call_id: "call_shell",
+          arguments: JSON.stringify({ cmd: "bun test", workdir: "/Users/dev/proj" }),
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-05-05T09:00:05.000Z",
+        payload: { type: "function_call_output", call_id: "call_shell", output: "231 pass" },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-05-05T09:00:06.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 800,
+              cached_input_tokens: 100,
+              output_tokens: 80,
+              reasoning_output_tokens: 20,
+              total_tokens: 880,
+            },
+          },
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-05-05T09:00:07.000Z",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Tests pass." }],
+        },
+      }),
+    ].join("\n");
+    const sessionId = upsertSession(
+      db,
+      parseCodexSession("sess-codex-shell", `${content}\n`, new Map()),
+      "/x/codex-shell.jsonl",
+      1,
+      2,
+      "codex-shell",
+    );
+
+    const aggregateCode = tokenEconomics(db).buckets.find((row) => row.bucket === "code");
+    expect(aggregateCode).toMatchObject({ tool_calls: 1, sessions: 1 });
+    expect(aggregateCode?.generation_tokens).toBeGreaterThan(0);
+
+    const scopedCode = tokenEconomicsForSession(db, sessionId)?.buckets.find(
+      (row) => row.bucket === "code",
+    );
+    expect(scopedCode).toMatchObject({ tool_calls: 1, sessions: 1 });
+    expect(scopedCode?.generation_tokens).toBeGreaterThan(0);
+    db.close();
+  });
+
   test("date filters scope the economics rollup", () => {
     const db = freshDb();
     upsertSession(
