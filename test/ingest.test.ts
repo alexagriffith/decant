@@ -284,6 +284,34 @@ describe("sync", () => {
     ]);
   });
 
+  test("discovers only explicitly requested source paths when sourcePaths is set", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      sourcePaths: [join(dir, "selected"), join(dir, "selected", "claude", "one.jsonl")],
+    };
+    write(join(config.claudeDir, "ignored.jsonl"), "");
+    write(join(config.codexDir, "sessions", "rollout-ignored.jsonl"), "");
+    write(join(dir, "selected", "claude", "one.jsonl"), "");
+    write(join(dir, "selected", "codex", "sessions", "rollout-one.jsonl"), "");
+    write(join(dir, "selected", "codex", "archived_sessions", "rollout-old.jsonl"), "");
+    write(join(dir, "selected", "codex", "session_index.jsonl"), "");
+    write(join(dir, "selected", "notes.txt"), "");
+
+    expect(
+      discover(config).map((file) => ({
+        tool: file.tool,
+        name: basename(file.path),
+        archived: file.archived,
+      })),
+    ).toEqual([
+      { tool: "claude_code", name: "one.jsonl", archived: false },
+      { tool: "codex", name: "rollout-old.jsonl", archived: true },
+      { tool: "codex", name: "rollout-one.jsonl", archived: false },
+    ]);
+  });
+
   test("is idempotent, records parse issues, and refreshes issues on reingest", () => {
     const dir = freshCase();
     const config: IngestConfig = {

@@ -63,6 +63,49 @@ describe("parseClaudeSession", () => {
     expect(session.totals.output).toBe(500);
   });
 
+  test("stream-json result totals are used for raw Claude streams", () => {
+    const content = [
+      '{"type":"system","subtype":"init","session_id":"stream-1","cwd":"/repo","git_branch":"main","model":"claude-opus-4-7","timestamp":"2026-05-01T10:00:00.000Z"}',
+      '{"type":"user","session_id":"stream-1","message":{"role":"user","content":"Price this streaming run"}}',
+      '{"type":"assistant","session_id":"stream-1","message":{"id":"msg-1","role":"assistant","content":[{"type":"text","text":"Done"}]}}',
+      '{"type":"result","subtype":"success","session_id":"stream-1","usage":{"input_tokens":123,"output_tokens":45,"cache_read_input_tokens":6,"cache_creation_input_tokens":7},"total_cost_usd":0.01}',
+    ].join("\n");
+    const session = parseClaudeSession("stream-file", `${content}\n`).session;
+    expect(session.rootSourceSessionId).toBe("stream-1");
+    expect(session.rawMeta).toMatchObject({ sessionId: "stream-1" });
+    expect(session.title).toBe("Price this streaming run");
+    expect(session.cwd).toBe("/repo");
+    expect(session.gitBranch).toBe("main");
+    expect(session.model).toBe("claude-opus-4-7");
+    expect(session.totals).toMatchObject({
+      input: 123,
+      output: 45,
+      cacheRead: 6,
+      cacheCreation: 7,
+    });
+    expect(session.messages.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+    ]);
+    expect(session.messages[2]?.sourceUuid).toBe("msg-1");
+    expect(session.messages[2]?.usage).toBeNull();
+  });
+
+  test("snake case streaming request ids de-dupe cumulative assistant usage", () => {
+    const content = [
+      '{"type":"assistant","request_id":"req-1","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":100,"output_tokens":200,"cache_read_input_tokens":10,"cache_creation_input_tokens":5},"content":[{"type":"thinking","thinking":"","signature":"sig"}]}}',
+      '{"type":"assistant","request_id":"req-1","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":100,"output_tokens":400,"cache_read_input_tokens":10,"cache_creation_input_tokens":5},"content":[{"type":"text","text":"done"}]}}',
+    ].join("\n");
+    const session = parseClaudeSession("s", `${content}\n`).session;
+    expect(session.totals.input).toBe(100);
+    expect(session.totals.output).toBe(400);
+    expect(session.totals.cacheRead).toBe(10);
+    expect(session.totals.cacheCreation).toBe(5);
+    expect(session.messages[0]?.usage).toBeNull();
+    expect(session.messages[1]?.usage?.output).toBe(400);
+  });
+
   test("reasoning is estimated by subtraction on thinking turns", () => {
     const content = [
       '{"type":"assistant","requestId":"req-e","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":50,"output_tokens":300,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"content":[{"type":"thinking","thinking":"","signature":"sig"}]}}',

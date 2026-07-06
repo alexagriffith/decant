@@ -186,12 +186,25 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     return archive;
   };
 
-  const runSync = (commandOptions: { claudeDir?: string; codexDir?: string }): number => {
+  const runSync = (commandOptions: {
+    claudeDir?: string;
+    codexDir?: string;
+    path?: string[];
+  }): number => {
+    const missingPath = commandOptions.path?.find((path) => !existsSync(path));
+    if (missingPath != null) {
+      io.writeErr(`error: --path does not exist: ${missingPath}\n`);
+      return 2;
+    }
+
     const archive = openArchive(
       resolve({ claudeDir: commandOptions.claudeDir, codexDir: commandOptions.codexDir }),
     );
     try {
-      const report = ingestSync(archive.db, archive.config);
+      const report = ingestSync(archive.db, {
+        ...archive.config,
+        sourcePaths: commandOptions.path,
+      });
       const jsonReport = {
         scanned: report.scanned,
         ingested: report.ingested,
@@ -218,7 +231,13 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .description("scan session directories and upsert new or changed sessions")
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
-    .action((commandOptions: { claudeDir?: string; codexDir?: string }) =>
+    .option(
+      "--path <path>",
+      "ingest only this source file or directory (repeatable)",
+      collectOption,
+      [] as string[],
+    )
+    .action((commandOptions: { claudeDir?: string; codexDir?: string; path?: string[] }) =>
       run(() => runSync(commandOptions)),
     );
 
