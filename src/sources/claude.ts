@@ -56,6 +56,8 @@ export function parseClaudeSession(
   let cwd: string | null = null;
   let gitBranch: string | null = null;
   let cliVersion: string | null = null;
+  let sessionModel: string | null = null;
+  let resultTotals: TokenUsage | null = null;
   let startedAt: string | null = null;
   let endedAt: string | null = null;
   let title: string | null = null;
@@ -78,22 +80,23 @@ export function parseClaudeSession(
       continue;
     }
 
-    const typ = asString(get(value, "type")) ?? "";
-    rootSourceSessionId ??= asString(get(value, "sessionId"));
+    const typ = stringAt(value, "type") ?? "";
+    rootSourceSessionId ??= stringAt(value, "sessionId", "session_id");
     if (asBoolean(get(value, "isSidechain")) === true) {
       sawSidechainRecord = true;
     } else if (typ === "user" || typ === "assistant" || typ === "system") {
       sawMainRecord = true;
     }
-    agentId ??= asString(get(value, "agentId"));
-    const timestamp = asString(get(value, "timestamp"));
+    agentId ??= stringAt(value, "agentId", "agent_id");
+    const timestamp = stringAt(value, "timestamp");
     if (timestamp != null) {
       startedAt ??= timestamp;
       endedAt = timestamp;
     }
-    cwd ??= asString(get(value, "cwd"));
-    gitBranch ??= asString(get(value, "gitBranch"));
-    cliVersion ??= asString(get(value, "version"));
+    cwd ??= stringAt(value, "cwd");
+    gitBranch ??= stringAt(value, "gitBranch", "git_branch");
+    cliVersion ??= stringAt(value, "version", "cli_version");
+    sessionModel ??= stringAt(get(value, "message"), "model") ?? stringAt(value, "model");
 
     if (typ === "user") {
       const message = parseUser(value, seq);
@@ -107,7 +110,7 @@ export function parseClaudeSession(
       seq += 1;
     } else if (typ === "assistant") {
       const message = parseAssistant(value, seq);
-      const requestId = asString(get(value, "requestId"));
+      const requestId = stringAt(value, "requestId", "request_id");
       const key = requestId ?? `\0seq${seq}`;
       const [output, visible, hasThinking] = lineReasoningInputs(message);
       const acc = turns.get(key) ?? { output: 0, visible: 0, hasThinking: false };
@@ -120,9 +123,11 @@ export function parseClaudeSession(
     } else if (typ === "system") {
       messages.push(simpleMessage(value, "system", seq));
       seq += 1;
+    } else if (typ === "result") {
+      resultTotals = parseUsage(get(value, "usage")) ?? resultTotals;
     } else if (KNOWN_META.has(typ)) {
       if (title == null) {
-        const metaTitle = asString(get(value, "summary")) ?? asString(get(value, "title"));
+        const metaTitle = stringAt(value, "summary", "title");
         if (metaTitle != null) {
           title = truncate(metaTitle, 120);
         }
@@ -133,17 +138,18 @@ export function parseClaudeSession(
     }
   }
 
-  const totals = emptyUsage();
+  const messageTotals = emptyUsage();
   for (const message of messages) {
     if (message.usage == null) {
       continue;
     }
-    totals.input += message.usage.input;
-    totals.output += message.usage.output;
-    totals.cacheRead += message.usage.cacheRead;
-    totals.cacheCreation += message.usage.cacheCreation;
-    totals.reasoning += message.usage.reasoning;
+    messageTotals.input += message.usage.input;
+    messageTotals.output += message.usage.output;
+    messageTotals.cacheRead += message.usage.cacheRead;
+    messageTotals.cacheCreation += message.usage.cacheCreation;
+    messageTotals.reasoning += message.usage.reasoning;
   }
+  const totals = resultTotals ?? messageTotals;
 
   let estReasoningTokens = 0;
   let anyThinking = false;
@@ -154,8 +160,11 @@ export function parseClaudeSession(
     anyThinking = true;
     estReasoningTokens += Math.max(0, turn.output - Math.trunc(turn.visible / CHARS_PER_TOKEN));
   }
+  if (resultTotals != null) {
+    estReasoningTokens = Math.min(estReasoningTokens, resultTotals.output);
+  }
 
-  const model = primaryModel(messages);
+  const model = primaryModel(messages) ?? sessionModel;
   const meta = isObject(options.sidecarMeta) ? options.sidecarMeta : {};
   const spawnToolUseId = asString(meta.toolUseId);
   const agentType =
@@ -261,12 +270,12 @@ function compareModelCandidate(
 function simpleMessage(value: Json, role: Role, seq: number): NormalizedMessage {
   return {
     seq,
-    sourceUuid: asString(get(value, "uuid")),
-    parentSourceUuid: asString(get(value, "parentUuid")),
+    sourceUuid: sourceUuid(value),
+    parentSourceUuid: stringAt(value, "parentUuid", "parent_uuid"),
     role,
     model: null,
     stopReason: null,
-    timestamp: asString(get(value, "timestamp")),
+    timestamp: stringAt(value, "timestamp"),
     usage: null,
     raw: value,
     blocks: [],
@@ -308,12 +317,12 @@ function parseUser(value: Json, seq: number): NormalizedMessage {
 
   return {
     seq,
-    sourceUuid: asString(get(value, "uuid")),
-    parentSourceUuid: asString(get(value, "parentUuid")),
+    sourceUuid: sourceUuid(value),
+    parentSourceUuid: stringAt(value, "parentUuid", "parent_uuid"),
     role: hasToolResult && !hasText ? "tool" : "user",
     model: null,
     stopReason: null,
-    timestamp: asString(get(value, "timestamp")),
+    timestamp: stringAt(value, "timestamp"),
     usage: null,
     raw: value,
     blocks,
@@ -359,12 +368,12 @@ function parseAssistant(value: Json, seq: number): NormalizedMessage {
 
   return {
     seq,
-    sourceUuid: asString(get(value, "uuid")),
-    parentSourceUuid: asString(get(value, "parentUuid")),
+    sourceUuid: sourceUuid(value),
+    parentSourceUuid: stringAt(value, "parentUuid", "parent_uuid"),
     role: "assistant",
     model: asString(get(message, "model")),
     stopReason: asString(get(message, "stop_reason")),
-    timestamp: asString(get(value, "timestamp")),
+    timestamp: stringAt(value, "timestamp"),
     usage: parseUsage(get(message, "usage")),
     raw: value,
     blocks,
@@ -382,6 +391,10 @@ function parseUsage(value: Json | undefined): TokenUsage | null {
     cacheCreation: asInteger(value.cache_creation_input_tokens) ?? 0,
     reasoning: 0,
   };
+}
+
+function sourceUuid(value: Json): string | null {
+  return stringAt(value, "uuid") ?? stringAt(get(value, "message"), "id");
 }
 
 function billAssistant(
@@ -468,6 +481,16 @@ function get(value: Json | undefined, key: string): Json | undefined {
     return undefined;
   }
   return value[key];
+}
+
+function stringAt(value: Json | undefined, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const got = asString(get(value, key));
+    if (got != null) {
+      return got;
+    }
+  }
+  return null;
 }
 
 function hasKey(value: Json, key: string): boolean {

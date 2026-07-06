@@ -85,8 +85,8 @@ decant completion zsh
 
 All read commands support `--json`. Use `--db /path/to/decant.db` or
 `DECANT_DB` for an alternate archive. Use `decant sync --path /path/to/log-or-dir`
-to ingest only specific source files or a temporary source tree; pass `--path`
-more than once to ingest multiple paths.
+to ingest only specific source files or a temporary source tree, including raw
+Claude `stream-json` logs; pass `--path` more than once to ingest multiple paths.
 
 ## Configuration
 
