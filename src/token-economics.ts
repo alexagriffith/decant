@@ -41,6 +41,7 @@ interface SessionRow {
 interface FastToolRow {
   session_id: number;
   tool_name: string | null;
+  input: string | null;
   calls: number;
   output_bytes: number | null;
 }
@@ -203,11 +204,10 @@ function fastTokenEconomicsForSession(db: Database, sessionId: number): TokenEco
   const toolRows = db
     .query(
       `${scopeCte}
-       SELECT t.session_id, t.tool_name, COUNT(*) AS calls,
-              SUM(COALESCE(t.output_bytes, 0)) AS output_bytes
+       SELECT t.session_id, t.tool_name, t.input, 1 AS calls,
+              COALESCE(t.output_bytes, 0) AS output_bytes
        FROM tool_call t
-       JOIN scoped_session fs ON fs.id = t.session_id
-       GROUP BY t.session_id, t.tool_name`,
+       JOIN scoped_session fs ON fs.id = t.session_id`,
     )
     .all(sessionId) as FastToolRow[];
 
@@ -243,7 +243,7 @@ function fastTokenEconomicsForSession(db: Database, sessionId: number): TokenEco
   }
 
   for (const row of toolRows) {
-    const bucket = toolBucket(row.tool_name, null);
+    const bucket = toolBucket(row.tool_name, row.input);
     const entry = buckets.get(bucket);
     if (entry == null) {
       continue;
