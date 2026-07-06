@@ -56,7 +56,8 @@ export function basename(path: string): string {
 export function classifyIntree(path: string): Resolution | null {
   const { absolute, parts } = segments(path);
   const index = parts.findIndex(
-    (segment) => segment === ".worktrees" || segment === ".claude-worktrees",
+    (segment) =>
+      segment === ".worktrees" || segment === ".claude-worktrees" || segment === ".codex-worktrees",
   );
   if (index === -1 || index === 0 || index + 1 >= parts.length) {
     return null;
@@ -65,7 +66,12 @@ export function classifyIntree(path: string): Resolution | null {
     isWorktree: true,
     rootPath: joinSegments(absolute, parts.slice(0, index)),
     worktreeLabel: parts.slice(index + 1).join("/"),
-    worktreeTool: parts[index] === ".claude-worktrees" ? "claude" : "git",
+    worktreeTool:
+      parts[index] === ".claude-worktrees"
+        ? "claude"
+        : parts[index] === ".codex-worktrees"
+          ? "codex"
+          : "git",
     source: "intree",
   };
 }
@@ -78,11 +84,15 @@ export function externalContainer(path: string): ExternalContainer | null {
         ? "warp"
         : segment === ".t3-worktrees"
           ? "t3"
-          : segment === "workspaces" && index > 0 && parts[index - 1] === "conductor"
-            ? "conductor"
-            : segment === "worktrees" && index > 0 && parts[index - 1] === ".warp"
-              ? "warp"
-              : null;
+          : segment === ".codex-worktrees"
+            ? "codex"
+            : segment === "workspaces" && index > 0 && parts[index - 1] === "conductor"
+              ? "conductor"
+              : segment === "worktrees" && index > 0 && parts[index - 1] === ".warp"
+                ? "warp"
+                : segment === "worktrees" && index > 0 && parts[index - 1] === ".codex"
+                  ? "codex"
+                  : null;
     if (tool == null) {
       continue;
     }
@@ -217,7 +227,13 @@ export function inferTool(path: string): string {
     return external.tool;
   }
   const { parts } = segments(path);
-  return parts.includes(".claude-worktrees") ? "claude" : "git";
+  if (parts.includes(".claude-worktrees")) {
+    return "claude";
+  }
+  if (parts.includes(".codex-worktrees")) {
+    return "codex";
+  }
+  return "git";
 }
 
 export function resolveWorktreeRoots(db: Database): void {

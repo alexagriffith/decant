@@ -16,21 +16,39 @@ import {
   FlaskConical,
   Folder,
   Inbox,
+  Info,
   Lightbulb,
   Menu,
   MessageSquare,
+  Minus,
   Monitor,
   Moon,
+  Plus,
+  RefreshCw,
   Rows3,
   Search,
   Settings,
+  ShieldCheck,
   Sun,
   Upload,
   Wrench,
   X,
   Zap,
 } from "lucide-react";
-import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type MouseEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -55,6 +73,15 @@ type SessionSummary = {
   total_input_tokens: number;
   total_output_tokens: number;
   estimated_cost_usd: number;
+  is_subagent: boolean;
+  parent_session_id: number | null;
+  spawn_tool_use_id: string | null;
+  agent_id: string | null;
+  agent_type: string | null;
+  spawn_depth: number | null;
+  subagent_count: number;
+  subagent_estimated_cost_usd: number;
+  subagents?: SessionSummary[];
 };
 
 type SearchHit = {
@@ -89,6 +116,27 @@ type NowView = {
   sync_in_progress: boolean;
 };
 
+type ActivityBucket = "planning" | "communicating" | "context" | "code";
+
+type TokenEconomics = {
+  buckets: {
+    bucket: ActivityBucket;
+    generation_tokens: number;
+    context_window_tokens: number;
+    estimated_cost_usd: number;
+    tool_calls: number;
+    sessions: number;
+    cost_share: number;
+  }[];
+  totals: {
+    generation_tokens: number;
+    context_window_tokens: number;
+    estimated_cost_usd: number;
+    input_cost_usd: number;
+    output_cost_usd: number;
+  };
+};
+
 type DimensionRow = {
   key: string;
   sessions: number;
@@ -97,6 +145,22 @@ type DimensionRow = {
   reasoning_tokens: number;
   est_reasoning_tokens: number;
   estimated_cost_usd: number;
+};
+
+type ProjectSummary = {
+  id: number;
+  path: string;
+  name: string | null;
+  sessions: number;
+  estimated_cost_usd: number;
+  last_seen_at: string | null;
+  is_worktree: boolean;
+  root_path: string | null;
+  worktree_label: string | null;
+  worktree_tool: string | null;
+  root_source: string | null;
+  worktree_count: number;
+  session_tools: string[];
 };
 
 type ToolRow = {
@@ -179,6 +243,7 @@ type DashboardData = {
   byModel: DimensionRow[];
   byProject: DimensionRow[];
   byDay: DimensionRow[];
+  projects: ProjectSummary[];
   tools: ToolRow[];
   mcp: McpRow[];
   files: FileRow[];
@@ -187,6 +252,7 @@ type DashboardData = {
   settings: SettingsInfo | null;
   activity: Activity | null;
   modelSparklines: ModelSparklines | null;
+  tokenEconomics: TokenEconomics | null;
   now: NowView | null;
   dateBounds: DateBounds | null;
 };
@@ -198,6 +264,7 @@ const emptyData: DashboardData = {
   byModel: [],
   byProject: [],
   byDay: [],
+  projects: [],
   tools: [],
   mcp: [],
   files: [],
@@ -206,6 +273,7 @@ const emptyData: DashboardData = {
   settings: null,
   activity: null,
   modelSparklines: null,
+  tokenEconomics: null,
   now: null,
   dateBounds: null,
 };
@@ -218,7 +286,8 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
-  { key: "sessions", href: "/", label: "Sessions", icon: "sessions" },
+  { key: "sessions", href: "/sessions", label: "Sessions", icon: "sessions" },
+  { key: "projects", href: "/projects", label: "Projects", icon: "folder" },
   { key: "search", href: "/search", label: "Search", icon: "search" },
   { key: "analytics", href: "/analytics", label: "Analytics", icon: "chart" },
   { key: "insights", href: "/insights", label: "Insights", icon: "lightbulb" },
@@ -234,6 +303,11 @@ const ANTHROPIC_ICON_PATH =
   "M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z";
 
 const SESSION_PAGE_SIZE = 100;
+const SESSION_DETAIL_MESSAGE_LIMIT = 160;
+const SESSION_TABLE_SKELETON_KEYS = Array.from(
+  { length: 10 },
+  (_, index) => `session-row-skeleton-${index}`,
+);
 type ThemeChoice = "system" | "light" | "dark";
 type RangePreset = "7d" | "30d" | "90d" | "all" | "custom";
 type DateRangeSelection = {
@@ -252,13 +326,11 @@ const ALL_DATE_RANGE: DateRangeSelection = { preset: "all", from: null, to: null
 function App() {
   const [path, setPath] = useState(locationPath);
   const [data, setData] = useState<DashboardData>(emptyData);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [sessionLimit, setSessionLimit] = useState(SESSION_PAGE_SIZE);
   const [dateRangeSelection, setDateRangeSelection] = useState<DateRangeSelection>(ALL_DATE_RANGE);
   const [menuOpen, setMenuOpen] = useState(false);
-  const loadedOnceRef = useRef(false);
   const dateQuery = dateRangeQuery(dateRangeSelection);
   const [theme, setTheme] = useState<ThemeChoice>(() => {
     const stored = localStorage.getItem("decant-theme");
@@ -283,18 +355,22 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
+    const resetKey = `${dateQuery}:${reloadKey}`;
+    void resetKey;
+    setData((current) => ({ ...current, sessions: [] }));
+    setSessionLimit(SESSION_PAGE_SIZE);
+  }, [dateQuery, reloadKey]);
+
+  useEffect(() => {
     void reloadKey;
     let cancelled = false;
-    setLoading(!loadedOnceRef.current);
     Promise.all([
       getJson<Summary>(withDateQuery("/api/stats/summary", dateQuery)),
-      getJson<SessionSummary[]>(
-        withDateQuery(`/api/sessions?limit=${sessionLimit}&offset=0`, dateQuery),
-      ),
       getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=tool", dateQuery)),
       getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=model", dateQuery)),
       getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=project", dateQuery)),
       getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=day", dateQuery)),
+      getJson<ProjectSummary[]>("/api/projects"),
       getJson<ToolRow[]>(withDateQuery("/api/tools/usage?limit=100", dateQuery)),
       getJson<McpRow[]>(withDateQuery("/api/tools/mcp-usage?limit=100", dateQuery)),
       getJson<FileRow[]>(withDateQuery("/api/files?group=path&limit=100", dateQuery)),
@@ -303,17 +379,18 @@ function App() {
       getJson<SettingsInfo>("/api/settings"),
       getJson<Activity>(withDateQuery("/api/analytics/activity", dateQuery)),
       getJson<ModelSparklines>(withDateQuery("/api/analytics/model-sparklines", dateQuery)),
+      getJson<TokenEconomics>(withDateQuery("/api/analytics/token-economics", dateQuery)),
       getJson<NowView>("/api/analytics/now"),
       getJson<DateBounds>("/api/date-bounds"),
     ])
       .then(
         ([
           summary,
-          sessions,
           byTool,
           byModel,
           byProject,
           byDay,
+          projects,
           tools,
           mcp,
           files,
@@ -322,19 +399,21 @@ function App() {
           settings,
           activity,
           modelSparklines,
+          tokenEconomics,
           now,
           dateBounds,
         ]) => {
           if (cancelled) {
             return;
           }
-          setData({
+          setData((current) => ({
             summary,
-            sessions,
+            sessions: current.sessions,
             byTool,
             byModel,
             byProject,
             byDay,
+            projects,
             tools,
             mcp,
             files,
@@ -343,10 +422,10 @@ function App() {
             settings,
             activity,
             modelSparklines,
+            tokenEconomics,
             now,
             dateBounds,
-          });
-          loadedOnceRef.current = true;
+          }));
           setError(null);
         },
       )
@@ -354,16 +433,41 @@ function App() {
         if (!cancelled) {
           setError(errorMessage(err));
         }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dateQuery, reloadKey]);
+
+  useEffect(() => {
+    void reloadKey;
+    let cancelled = false;
+    const offset = data.sessions.length;
+    const limit = Math.max(0, sessionLimit - offset);
+    if (limit <= 0) {
+      return;
+    }
+    void getJson<SessionSummary[]>(
+      withDateQuery(`/api/sessions?limit=${limit}&offset=${offset}&with_subagents=true`, dateQuery),
+    )
+      .then((sessions) => {
+        if (cancelled) {
+          return;
+        }
+        setData((current) => ({
+          ...current,
+          sessions: offset === 0 ? sessions : [...current.sessions, ...sessions],
+        }));
       })
-      .finally(() => {
+      .catch((err: unknown) => {
         if (!cancelled) {
-          setLoading(false);
+          setError(errorMessage(err));
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [dateQuery, reloadKey, sessionLimit]);
+  }, [data.sessions.length, dateQuery, reloadKey, sessionLimit]);
 
   useEffect(() => {
     const events = new EventSource("/api/events");
@@ -381,7 +485,11 @@ function App() {
   const activeKey = activeRouteKey(path);
   const metrics = data.summary;
   const lastActivity = latestSessionDay(data.sessions);
+  const syncInProgress = data.now?.sync_in_progress === true;
   const runSync = () => {
+    if (syncInProgress) {
+      return;
+    }
     setError(null);
     void getJson<unknown>("/api/sync", { method: "POST", body: "{}" })
       .then(() => setReloadKey((key) => key + 1))
@@ -471,9 +579,15 @@ function App() {
             <span>Search...</span>
             <kbd>/</kbd>
           </a>
-          <button className="secondary-button" onClick={runSync} type="button">
-            <Icon name="upload" />
-            Sync
+          <button
+            aria-busy={syncInProgress}
+            className={`secondary-button sync-button${syncInProgress ? " is-syncing" : ""}`}
+            disabled={syncInProgress}
+            onClick={runSync}
+            type="button"
+          >
+            <Icon name="refresh" />
+            {syncInProgress ? "Syncing" : "Sync"}
           </button>
           <a
             aria-label="Settings"
@@ -504,20 +618,16 @@ function App() {
         <main className="content">
           <div className="content-wrap">
             {error != null ? <div className="notice danger">{error}</div> : null}
-            {loading ? (
-              <div className="notice">Preparing archive data...</div>
-            ) : (
-              renderView(active, path, data, {
-                dateRange: dateRangeSelection,
-                onDateRangeChange: (next) => {
-                  setSessionLimit(SESSION_PAGE_SIZE);
-                  setDateRangeSelection(next);
-                },
-                refresh: () => setReloadKey((key) => key + 1),
-                sessionLimit,
-                setSessionLimit,
-              })
-            )}
+            {renderView(active, path, data, {
+              dateRange: dateRangeSelection,
+              onDateRangeChange: (next) => {
+                setSessionLimit(SESSION_PAGE_SIZE);
+                setDateRangeSelection(next);
+              },
+              refresh: () => setReloadKey((key) => key + 1),
+              sessionLimit,
+              setSessionLimit,
+            })}
           </div>
         </main>
       </div>
@@ -552,6 +662,8 @@ function renderView(
           onLimitChange={actions.setSessionLimit}
         />
       );
+    case "Projects":
+      return <ProjectsView projects={data.projects} />;
     case "Search":
       return <SearchView path={path} />;
     case "Analytics":
@@ -616,10 +728,12 @@ function SessionsView({
   onLimitChange: (limit: number) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [expandedSessions, setExpandedSessions] = useState<Set<number>>(() => new Set());
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const total = data.summary?.sessions ?? data.sessions.length;
   const filtered = filterSessions(data.sessions, query);
   const hasMore = data.sessions.length < total;
+  const waitingForSessions = data.sessions.length === 0 && total > 0 && query.trim() === "";
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -637,6 +751,37 @@ function SessionsView({
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [hasMore, limit, onLimitChange, total]);
+
+  const toggleSession = (id: number) => {
+    setExpandedSessions((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const renderRows = (session: SessionSummary, depth = 0): ReactNode[] => {
+    const expanded = expandedSessions.has(session.id);
+    const rows: ReactNode[] = [
+      <SessionTableRow
+        depth={depth}
+        expanded={expanded}
+        key={session.id}
+        onToggle={toggleSession}
+        session={session}
+      />,
+    ];
+    if (expanded) {
+      for (const subagent of session.subagents ?? []) {
+        rows.push(...renderRows(subagent, depth + 1));
+      }
+    }
+    return rows;
+  };
 
   return (
     <div className="view-stack">
@@ -683,41 +828,39 @@ function SessionsView({
           />
         </div>
         <div className="table-scroll">
-          <table>
+          <table className="data-table sessions-table">
+            <colgroup>
+              <col className="col-session-tool" />
+              <col className="col-session-title" />
+              <col className="col-session-model" />
+              <col className="col-session-subagents" />
+              <col className="col-session-count" />
+              <col className="col-session-cost" />
+              <col className="col-session-started" />
+            </colgroup>
             <thead>
               <tr>
                 <th>Tool</th>
                 <th>Title</th>
                 <th>Model</th>
+                <th className="numeric">Subagents</th>
                 <th className="numeric">Msgs</th>
                 <th className="numeric">Cost</th>
                 <th className="numeric">Started</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 ? (
+              {waitingForSessions ? <SessionTableSkeletonRows /> : null}
+              {!waitingForSessions && filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={6}>No sessions ingested yet.</td>
+                  <td colSpan={7}>
+                    {query.trim() === ""
+                      ? "No sessions ingested yet."
+                      : "No sessions match that filter."}
+                  </td>
                 </tr>
               ) : null}
-              {filtered.map((session) => (
-                <tr key={session.id}>
-                  <td>
-                    <ToolBadge tool={session.tool} />
-                  </td>
-                  <td className="truncate-cell">
-                    <a href={`/sessions/${session.id}`}>
-                      {session.title ?? session.source_session_id ?? "(untitled)"}
-                    </a>
-                  </td>
-                  <td>
-                    <ModelBadge model={session.model} />
-                  </td>
-                  <td className="numeric muted">{formatInt(session.message_count)}</td>
-                  <td className="numeric">{money(session.estimated_cost_usd)}</td>
-                  <td className="numeric muted">{relativeTime(session.started_at)}</td>
-                </tr>
-              ))}
+              {!waitingForSessions ? filtered.flatMap((session) => renderRows(session)) : null}
             </tbody>
           </table>
         </div>
@@ -730,15 +873,247 @@ function SessionsView({
   );
 }
 
+function SessionTableSkeletonRows() {
+  return SESSION_TABLE_SKELETON_KEYS.map((key) => (
+    <tr className="session-row-skeleton" key={key}>
+      <td>
+        <span className="skeleton-line table-skeleton-line tool" />
+      </td>
+      <td>
+        <span className="skeleton-line table-skeleton-line title" />
+      </td>
+      <td>
+        <span className="skeleton-line table-skeleton-line model" />
+      </td>
+      <td className="numeric">
+        <span className="skeleton-line table-skeleton-line number" />
+      </td>
+      <td className="numeric">
+        <span className="skeleton-line table-skeleton-line number" />
+      </td>
+      <td className="numeric">
+        <span className="skeleton-line table-skeleton-line cost" />
+      </td>
+      <td className="numeric">
+        <span className="skeleton-line table-skeleton-line started" />
+      </td>
+    </tr>
+  ));
+}
+
+function ProjectsView({ projects }: { projects: ProjectSummary[] }) {
+  const sorted = projects
+    .slice()
+    .sort(
+      (left, right) =>
+        Number(left.is_worktree) - Number(right.is_worktree) ||
+        right.sessions - left.sessions ||
+        right.estimated_cost_usd - left.estimated_cost_usd ||
+        left.path.localeCompare(right.path),
+    );
+  const worktrees = projects.filter((project) => project.is_worktree);
+  const activitySources = new Set(projects.flatMap((project) => project.session_tools));
+
+  return (
+    <div className="view-stack">
+      <header className="page-heading">
+        <h1>Projects</h1>
+        <p>Project roots, worktrees, source tools, and local session activity.</p>
+      </header>
+
+      <div className="stat-grid projects-stat-grid">
+        <StatCard
+          icon="folder"
+          label="Projects"
+          tone="accent"
+          value={formatInt(projects.filter((project) => !project.is_worktree).length)}
+        />
+        <StatCard icon="folder" label="Worktrees" tone="info" value={formatInt(worktrees.length)} />
+        <StatCard
+          icon="tools"
+          label="Activity sources"
+          tone="success"
+          value={formatInt(activitySources.size)}
+        />
+      </div>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Projects and worktrees</h2>
+            <p>Worktree source comes from Git pointers, known layouts, or root name matching.</p>
+          </div>
+        </div>
+        {sorted.length === 0 ? (
+          <EmptyState
+            icon="folder"
+            message="Projects appear after sessions are synced."
+            title="No projects"
+          />
+        ) : (
+          <div className="table-scroll">
+            <table className="data-table projects-table">
+              <colgroup>
+                <col className="col-project-path" />
+                <col className="col-project-kind" />
+                <col className="col-project-source" />
+                <col className="col-project-root" />
+                <col className="col-number" />
+                <col className="col-number" />
+                <col className="col-project-date" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Project</th>
+                  <th>Type</th>
+                  <th>Source</th>
+                  <th>Root</th>
+                  <th className="numeric">Sessions</th>
+                  <th className="numeric">Cost</th>
+                  <th className="numeric">Last seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((project) => (
+                  <tr key={project.id}>
+                    <td className="truncate-cell" title={project.path}>
+                      <span className="path-stack">
+                        <strong>{projectName(project)}</strong>
+                        <small>{project.path}</small>
+                      </span>
+                    </td>
+                    <td>
+                      <ProjectKind project={project} />
+                    </td>
+                    <td>
+                      <ProjectSource project={project} />
+                    </td>
+                    <td className="truncate-cell" title={project.root_path ?? project.path}>
+                      {project.is_worktree ? (
+                        <span className="path-stack is-compact">
+                          <strong>{basename(project.root_path)}</strong>
+                          <small>{project.root_path ?? "-"}</small>
+                        </span>
+                      ) : project.worktree_count > 0 ? (
+                        <span className="worktree-count">
+                          {formatInt(project.worktree_count)}{" "}
+                          {project.worktree_count === 1 ? "worktree" : "worktrees"}
+                        </span>
+                      ) : (
+                        <span className="faint">-</span>
+                      )}
+                    </td>
+                    <td className="numeric muted">{formatInt(project.sessions)}</td>
+                    <td className="numeric">{money(project.estimated_cost_usd)}</td>
+                    <td className="numeric muted">{relativeTime(project.last_seen_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ProjectKind({ project }: { project: ProjectSummary }) {
+  if (project.is_worktree) {
+    return <Badge tone="info">worktree</Badge>;
+  }
+  return <Badge tone="neutral">project</Badge>;
+}
+
+function ProjectSource({ project }: { project: ProjectSummary }) {
+  if (project.is_worktree) {
+    return (
+      <span className="source-stack">
+        <Badge tone="accent">{worktreeToolLabel(project.worktree_tool)}</Badge>
+        <small>{rootSourceLabel(project.root_source)}</small>
+      </span>
+    );
+  }
+  if (project.session_tools.length === 0) {
+    return <span className="faint">-</span>;
+  }
+  return (
+    <span className="source-badges">
+      {project.session_tools.map((tool) => (
+        <ToolBadge key={tool} tool={tool} />
+      ))}
+    </span>
+  );
+}
+
+function projectName(project: ProjectSummary): string {
+  if (!project.is_worktree) {
+    return project.name ?? basename(project.path);
+  }
+  const label = project.worktree_label ?? basename(project.path);
+  return label === "wt" ? "worktree" : label;
+}
+
+function worktreeToolLabel(value: string | null): string {
+  switch (value) {
+    case "claude":
+      return "Claude Code";
+    case "codex":
+      return "Codex";
+    case "conductor":
+      return "Conductor";
+    case "git":
+      return "Git";
+    case "t3":
+      return "T3";
+    case "warp":
+      return "Warp";
+    case null:
+      return "Worktree";
+    default:
+      return capitalize(value);
+  }
+}
+
+function rootSourceLabel(value: string | null): string {
+  switch (value) {
+    case "git":
+      return "Git worktree pointer";
+    case "intree":
+      return "In-project worktrees folder";
+    case "namematch":
+      return "Matched to project root";
+    case "self":
+      return "Project root";
+    case "synthetic":
+      return "Inferred root";
+    case null:
+      return "Unknown source";
+    default:
+      return capitalize(value);
+  }
+}
+
 function filterSessions(sessions: SessionSummary[], query: string): SessionSummary[] {
   const needle = query.trim().toLowerCase();
   if (needle === "") {
     return sessions;
   }
-  return sessions.filter((session) =>
-    [session.title, session.model, session.tool, session.project_path]
+  return sessions.filter((session) => sessionMatchesQuery(session, needle));
+}
+
+function sessionMatchesQuery(session: SessionSummary, needle: string): boolean {
+  return (
+    [
+      sessionDisplayTitle(session),
+      displayModelLabel(session.model),
+      session.tool,
+      session.project_path,
+      session.agent_type,
+      session.agent_id,
+    ]
       .filter((value): value is string => value != null)
-      .some((value) => value.toLowerCase().includes(needle)),
+      .some((value) => value.toLowerCase().includes(needle)) ||
+    (session.subagents ?? []).some((subagent) => sessionMatchesQuery(subagent, needle))
   );
 }
 
@@ -747,6 +1122,167 @@ function sessionsCaption(query: string, visible: number, loaded: number, total: 
     return `Showing ${formatInt(visible)} matching ${visible === 1 ? "row" : "rows"} from ${formatInt(loaded)} available sessions`;
   }
   return `Showing ${formatInt(loaded)} of ${formatInt(total)} sessions`;
+}
+
+function SessionTableRow({
+  depth,
+  expanded,
+  onToggle,
+  session,
+}: {
+  depth: number;
+  expanded: boolean;
+  onToggle: (id: number) => void;
+  session: SessionSummary;
+}) {
+  const isSubagent = depth > 0;
+  const title = sessionDisplayTitle(session);
+  const childCount = Math.max(session.subagent_count, session.subagents?.length ?? 0);
+  const hasChildren = childCount > 0;
+  const indentStyle = { "--depth": Math.max(0, Math.min(depth - 1, 5)) } as CSSProperties;
+  return (
+    <tr className={`session-row${isSubagent ? " is-subagent" : ""}`}>
+      <td>
+        <span className="session-tool-cell">
+          {hasChildren ? (
+            <button
+              aria-expanded={expanded}
+              aria-label={`${expanded ? "Collapse" : "Expand"} subagents for ${title}`}
+              className="subagent-disclosure"
+              onClick={() => onToggle(session.id)}
+              type="button"
+            >
+              <Icon name={expanded ? "minus" : "plus"} />
+            </button>
+          ) : (
+            <span className="subagent-disclosure-placeholder" />
+          )}
+          {isSubagent ? (
+            <span className="subagent-source">
+              <Icon name="cpu" />
+              Subagent
+            </span>
+          ) : (
+            <ToolBadge tool={session.tool} />
+          )}
+        </span>
+      </td>
+      <td className="truncate-cell">
+        <span className="session-title-stack" style={indentStyle}>
+          <a href={`/sessions/${session.id}`}>{title}</a>
+          {isSubagent ? <small>{subagentDescriptor(session)}</small> : null}
+        </span>
+      </td>
+      <td>
+        <ModelBadge model={session.model} />
+      </td>
+      <td className="numeric">
+        <SubagentRollup session={session} />
+      </td>
+      <td className="numeric muted">{formatInt(session.message_count)}</td>
+      <td className="numeric">{money(threadCost(session))}</td>
+      <td className="numeric muted">{relativeTime(session.started_at)}</td>
+    </tr>
+  );
+}
+
+function SubagentRollup({ session }: { session: SessionSummary }) {
+  const count = Math.max(session.subagent_count, session.subagents?.length ?? 0);
+  if (count <= 0) {
+    return <span className="faint">-</span>;
+  }
+  return (
+    <span className="subagent-rollup" title={`${formatInt(count)} subagents`}>
+      <span>{formatInt(count)}</span>
+      {session.subagent_estimated_cost_usd > 0 ? (
+        <small>+{money(session.subagent_estimated_cost_usd)}</small>
+      ) : null}
+    </span>
+  );
+}
+
+function sessionDisplayTitle(session: SessionSummary): string {
+  return cleanSessionTitle(session.title) ?? session.source_session_id ?? "(untitled)";
+}
+
+function cleanSessionTitle(value: string | null | undefined): string | null {
+  if (value == null || value.trim() === "") {
+    return null;
+  }
+  const text = stripAnsi(value).trim();
+  if (isPermissionsText(text)) {
+    return "Execution permissions";
+  }
+  if (/^<local-command-caveat>/i.test(text)) {
+    return "Command context";
+  }
+  if (/^<local-command-std(?:out|err)>/i.test(text) || /^<local-command-output>/i.test(text)) {
+    return "Command output";
+  }
+  if (/^<command-name>/i.test(text)) {
+    return "Command context";
+  }
+  if (/^<teammate-message\b/i.test(text)) {
+    return tagAttribute(text, "summary") ?? "Subagent request";
+  }
+  if (/^<environment_context>/i.test(text)) {
+    return "Environment context";
+  }
+  const withoutMarkup = stripMarkupTags(text);
+  if (withoutMarkup !== text && withoutMarkup !== "") {
+    return firstLine(withoutMarkup.replace(/^Caveat:\s*/i, ""), 96);
+  }
+  const tag = text.match(/^<([a-z][a-z0-9_-]*)\b[^>]*>/i);
+  if (tag == null) {
+    return text;
+  }
+  const remainder = text.slice(tag[0].length).trim();
+  if (remainder !== "" && !remainder.startsWith("<")) {
+    return firstLine(remainder.replace(/^Caveat:\s*/i, ""), 96);
+  }
+  return readableTagLabel(tag[1] ?? "");
+}
+
+function stripMarkupTags(value: string): string {
+  return value
+    .replace(/<\/?[a-z][a-z0-9_-]*\b[^>]*>/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripAnsi(value: string): string {
+  const pattern = `${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`;
+  return value.replace(new RegExp(pattern, "g"), "");
+}
+
+function isPermissionsText(value: string): boolean {
+  return (
+    /^<permissions instructions>/i.test(value) || value.includes("Filesystem sandboxing defines")
+  );
+}
+
+function tagAttribute(value: string, name: string): string | null {
+  const pattern = new RegExp(`${name}=(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i");
+  const match = value.match(pattern);
+  return match == null ? null : (match[1] ?? match[2] ?? match[3] ?? null);
+}
+
+function readableTagLabel(tag: string): string {
+  switch (tag.toLowerCase()) {
+    case "environment_context":
+      return "Environment context";
+    case "permissions":
+    case "permissions-instructions":
+    case "permissions_instructions":
+      return "Execution permissions";
+    default:
+      return "Agent context";
+  }
+}
+
+function subagentDescriptor(session: SessionSummary): string {
+  const kind = session.agent_type ?? "subagent";
+  return session.agent_id != null ? `${kind} · ${session.agent_id}` : kind;
 }
 
 function SearchView({ path }: { path: string }) {
@@ -1081,6 +1617,8 @@ function AnalyticsView({
         />
       </div>
 
+      <TokenEconomicsPanel economics={data.tokenEconomics} />
+
       <div className="split">
         <DailyPanel rows={byDay} metric="sessions" title="Sessions per day" />
         <DailyPanel rows={byDay} metric="cost" title="Cost per day" />
@@ -1264,6 +1802,283 @@ function ActivityPanel({ activity }: { activity: Activity | null }) {
         />
       </div>
     </section>
+  );
+}
+
+function TokenEconomicsPanel({
+  compact: isCompact = false,
+  description = "Estimated tokens and cost by planning, communicating, context, and code",
+  economics,
+  title = "Activity breakdown",
+}: {
+  compact?: boolean;
+  description?: string;
+  economics: TokenEconomics | null;
+  title?: string;
+}) {
+  const buckets = (economics?.buckets ?? [])
+    .slice()
+    .sort((left, right) => right.estimated_cost_usd - left.estimated_cost_usd);
+  const totalCost = economics?.totals.estimated_cost_usd ?? 0;
+  return (
+    <section className={`panel token-economics-panel${isCompact ? " is-compact" : ""}`}>
+      <div className="panel-heading">
+        <div>
+          <h2>{title}</h2>
+          <p>{description}</p>
+        </div>
+        {economics != null ? (
+          <div className="activity-summary">
+            <span>
+              <strong>{money(totalCost)}</strong>
+              total
+            </span>
+            <span>
+              <strong>{compact(economics.totals.context_window_tokens)}</strong>
+              window
+            </span>
+          </div>
+        ) : null}
+      </div>
+      {buckets.length === 0 ? (
+        <div className="panel-body">
+          <EmptyState
+            icon="chart"
+            message="Sync sessions to populate the breakdown."
+            title="No token data"
+          />
+        </div>
+      ) : (
+        <div className="activity-table-wrap">
+          <table className="activity-table" aria-label="Activity token economics">
+            <colgroup>
+              <col className="col-activity" />
+              <col className="col-share" />
+              <col className="col-activity-number" />
+              <col className="col-activity-number" />
+              <col className="col-activity-number" />
+              <col className="col-activity-number" />
+            </colgroup>
+            <thead>
+              <tr className="activity-table-head">
+                <th scope="col">Activity</th>
+                <th scope="col">Cost share</th>
+                <th className="numeric activity-number" scope="col">
+                  Cost
+                </th>
+                <th className="numeric activity-number" scope="col">
+                  Generated
+                </th>
+                <th className="numeric activity-number" scope="col">
+                  Window
+                </th>
+                <th className="numeric activity-number" scope="col">
+                  Sessions
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {buckets.map((bucket) => {
+                const tone = activityTone(bucket.bucket);
+                const share = Math.max(0, Math.min(1, bucket.cost_share));
+                return (
+                  <Tooltip content={activityDescription(bucket.bucket)} key={bucket.bucket}>
+                    {(tooltipProps) => (
+                      <tr className="activity-table-row" {...tooltipProps}>
+                        <td className="activity-name">
+                          <span className="activity-name-inner">
+                            <span className={`activity-swatch tone-${tone}`} />
+                            <span className="activity-label-text">
+                              {activityLabel(bucket.bucket)}
+                              <span aria-hidden="true" className="info-tooltip">
+                                <Icon name="info" />
+                              </span>
+                            </span>
+                          </span>
+                        </td>
+                        <td className="activity-share">
+                          <span className="activity-share-inner">
+                            <span className="activity-bar">
+                              <span
+                                className={`tone-${tone}`}
+                                style={{ width: `${share * 100}%` }}
+                              />
+                            </span>
+                            <small>{Math.round(share * 100)}%</small>
+                          </span>
+                        </td>
+                        <td className="numeric activity-number">
+                          {money(bucket.estimated_cost_usd)}
+                        </td>
+                        <td className="numeric muted activity-number">
+                          {compact(bucket.generation_tokens)}
+                        </td>
+                        <td className="numeric muted activity-number">
+                          {compact(bucket.context_window_tokens)}
+                        </td>
+                        <td className="numeric muted activity-number">
+                          {formatInt(bucket.sessions)}
+                        </td>
+                      </tr>
+                    )}
+                  </Tooltip>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+type TooltipTriggerProps = {
+  ref: (node: HTMLElement | null) => void;
+  onBlur: () => void;
+  onFocus: () => void;
+  onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => void;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+  tabIndex: number;
+  "aria-describedby"?: string;
+};
+
+function Tooltip({
+  children,
+  content,
+}: {
+  children: (props: TooltipTriggerProps) => ReactNode;
+  content: ReactNode;
+}) {
+  const id = useId();
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const closeTimer = useRef<number | null>(null);
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+
+  const clearCloseTimer = useCallback(() => {
+    if (closeTimer.current != null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  }, []);
+
+  const openTooltip = () => {
+    clearCloseTimer();
+    setOpen(true);
+  };
+
+  const closeTooltip = () => {
+    clearCloseTimer();
+    closeTimer.current = window.setTimeout(() => setOpen(false), 80);
+  };
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (trigger == null) {
+      return;
+    }
+    const triggerRect = trigger.getBoundingClientRect();
+    const tooltipRect = tooltipRef.current?.getBoundingClientRect();
+    const width = tooltipRect?.width ?? 320;
+    const height = tooltipRect?.height ?? 44;
+    const padding = 12;
+    const maxLeft = Math.max(padding, window.innerWidth - width - padding);
+    const left = clampNumber(
+      triggerRect.left + triggerRect.width / 2 - width / 2,
+      padding,
+      maxLeft,
+    );
+    let top = triggerRect.top - height - 8;
+    if (top < padding) {
+      top = triggerRect.bottom + 8;
+    }
+    top = clampNumber(top, padding, Math.max(padding, window.innerHeight - height - padding));
+    setPosition((current) =>
+      current != null && current.left === left && current.top === top ? current : { left, top },
+    );
+  }, []);
+
+  useLayoutEffect(() => {
+    if (open) {
+      updatePosition();
+    }
+  });
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onScrollOrResize = () => updatePosition();
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (triggerRef.current?.contains(target) === true || tooltipRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
+    window.addEventListener("resize", onScrollOrResize);
+    window.addEventListener("scroll", onScrollOrResize, true);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      window.removeEventListener("resize", onScrollOrResize);
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [open, updatePosition]);
+
+  useEffect(
+    () => () => {
+      clearCloseTimer();
+    },
+    [clearCloseTimer],
+  );
+
+  const triggerProps: TooltipTriggerProps = {
+    ref: (node) => {
+      triggerRef.current = node;
+    },
+    onBlur: closeTooltip,
+    onFocus: openTooltip,
+    onKeyDown: (event) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    },
+    onMouseEnter: openTooltip,
+    onMouseLeave: closeTooltip,
+    tabIndex: 0,
+    "aria-describedby": open ? id : undefined,
+  };
+
+  return (
+    <>
+      {children(triggerProps)}
+      {open
+        ? createPortal(
+            <div
+              className="floating-tooltip"
+              id={id}
+              onMouseEnter={openTooltip}
+              onMouseLeave={closeTooltip}
+              ref={tooltipRef}
+              role="tooltip"
+              style={
+                position == null
+                  ? { left: 0, top: 0, visibility: "hidden" }
+                  : { left: position.left, top: position.top }
+              }
+            >
+              {content}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
   );
 }
 
@@ -1521,6 +2336,45 @@ function chartValue(value: number, metric: AnalyticsChartMetric): string {
   return metric === "money" ? `$${formatted}` : formatted;
 }
 
+function activityLabel(bucket: ActivityBucket): string {
+  switch (bucket) {
+    case "planning":
+      return "Planning";
+    case "communicating":
+      return "Communicating";
+    case "context":
+      return "Context";
+    case "code":
+      return "Code";
+  }
+}
+
+function activityDescription(bucket: ActivityBucket): string {
+  switch (bucket) {
+    case "planning":
+      return "Thinking, plan-mode events, and todo/planning tool use.";
+    case "communicating":
+      return "Assistant prose written for the user outside tool calls.";
+    case "context":
+      return "Reads, searches, MCP calls, read-only shell commands, and their returned context.";
+    case "code":
+      return "Edits, writes, installs, tests, builds, and other mutating commands.";
+  }
+}
+
+function activityTone(bucket: ActivityBucket): BadgeTone {
+  switch (bucket) {
+    case "planning":
+      return "warning";
+    case "communicating":
+      return "accent";
+    case "context":
+      return "info";
+    case "code":
+      return "success";
+  }
+}
+
 function compactAxis(value: number): string {
   const abs = Math.abs(value);
   if (abs >= 1_000_000) {
@@ -1534,6 +2388,10 @@ function compactAxis(value: number): string {
 
 function trimNumber(value: number): string {
   return Number.isInteger(value) ? formatInt(value) : value.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 type BadgeTone =
@@ -1564,15 +2422,20 @@ type IconName =
   | "download"
   | "file"
   | "folder"
+  | "info"
   | "inbox"
   | "lightbulb"
   | "menu"
   | "messages"
+  | "minus"
   | "money"
   | "moon"
+  | "plus"
+  | "refresh"
   | "search"
   | "sessions"
   | "settings"
+  | "shield"
   | "sun"
   | "tools"
   | "upload"
@@ -1643,17 +2506,34 @@ function ToolBadge({ tool }: { tool: string | null | undefined }) {
 }
 
 function ModelBadge({ model }: { model: string | null | undefined }) {
-  if (model == null || model === "") {
+  const label = displayModelLabel(model);
+  if (label == null) {
     return <span className="faint">-</span>;
   }
-  const tone = brandTone(model);
-  const icon = modelBrandIcon(model, tone);
+  const tone = brandTone(label);
+  const icon = modelBrandIcon(label, tone);
   return (
     <Badge mono tone={tone}>
       {icon == null ? null : <BrandMark name={icon} />}
-      {model}
+      {label}
     </Badge>
   );
+}
+
+function displayModelLabel(model: string | null | undefined): string | null {
+  if (model == null) {
+    return null;
+  }
+  const trimmed = model.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  const tagOnly = trimmed.match(/^<([a-z][a-z0-9_-]*)>$/i);
+  if (tagOnly != null) {
+    return capitalize((tagOnly[1] ?? "").replace(/[-_]+/g, " "));
+  }
+  const stripped = stripMarkupTags(trimmed);
+  return stripped === "" ? null : stripped;
 }
 
 function EmptyState({ icon, message, title }: { icon: IconName; message: string; title: string }) {
@@ -2002,6 +2882,8 @@ function iconComponent(name: IconName): LucideIcon {
       return FileText;
     case "folder":
       return Folder;
+    case "info":
+      return Info;
     case "inbox":
       return Inbox;
     case "lightbulb":
@@ -2010,16 +2892,24 @@ function iconComponent(name: IconName): LucideIcon {
       return Menu;
     case "messages":
       return MessageSquare;
+    case "minus":
+      return Minus;
     case "money":
       return CircleDollarSign;
     case "moon":
       return Moon;
+    case "plus":
+      return Plus;
+    case "refresh":
+      return RefreshCw;
     case "search":
       return Search;
     case "sessions":
       return Rows3;
     case "settings":
       return Settings;
+    case "shield":
+      return ShieldCheck;
     case "sun":
       return Sun;
     case "tools":
@@ -2144,6 +3034,16 @@ function toneName(tone: string | null | undefined): BadgeTone {
 
 function fileTotal(row: FileRow): number {
   return row.reads + row.edits + row.writes + row.deletes;
+}
+
+function threadCost(session: SessionSummary): number {
+  if ((session.subagents?.length ?? 0) > 0) {
+    return (
+      session.estimated_cost_usd +
+      (session.subagents ?? []).reduce((sum, subagent) => sum + threadCost(subagent), 0)
+    );
+  }
+  return session.estimated_cost_usd + session.subagent_estimated_cost_usd;
 }
 
 function isPresent(value: string | null | undefined): value is string {
@@ -2766,7 +3666,7 @@ function FilesView({
                   />
                   <SortableHeader
                     align="right"
-                    label="Last touched"
+                    label="Modified"
                     onSort={(key) => setFileSort((sort) => nextSort(sort, key))}
                     sort={fileSort}
                     sortKey="last_touched_at"
@@ -2921,20 +3821,28 @@ function SettingSelect({
 
 function SessionDetailView({ id }: { id: number }) {
   const [detail, setDetail] = useState<SessionDetailData | null>(null);
+  const [economics, setEconomics] = useState<TokenEconomics | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setDetail(null);
+    setEconomics(null);
     setError(null);
     if (!Number.isFinite(id)) {
       setError("Invalid session id.");
       return;
     }
-    void getJson<SessionDetailData>(`/api/sessions/${id}`)
-      .then((next) => {
+    void Promise.all([
+      getJson<SessionDetailData>(
+        `/api/sessions/${id}?message_limit=${SESSION_DETAIL_MESSAGE_LIMIT}`,
+      ),
+      getJson<TokenEconomics>(`/api/sessions/${id}/token-economics`),
+    ])
+      .then(([nextDetail, nextEconomics]) => {
         if (!cancelled) {
-          setDetail(next);
+          setDetail(nextDetail);
+          setEconomics(nextEconomics);
         }
       })
       .catch((err: unknown) => {
@@ -2952,18 +3860,19 @@ function SessionDetailView({ id }: { id: number }) {
   }
 
   if (detail == null) {
-    return <div className="notice">Preparing session...</div>;
+    return <SessionDetailSkeleton />;
   }
 
   const messages = renderableMessages(detail.messages);
   const toc = threadToc(messages);
   const stats = threadStats(detail.summary, messages, toc);
+  const subagentsByToolUse = subagentMap(detail.subagents);
 
   return (
     <div className="session-detail">
       <header className="thread-header">
         <div className="thread-header-inner">
-          <h1>{detail.summary.title ?? "Untitled session"}</h1>
+          <h1>{sessionDisplayTitle(detail.summary)}</h1>
           <div className="thread-badges">
             <ToolBadge tool={detail.summary.tool} />
             <ModelBadge model={detail.summary.model} />
@@ -2994,10 +3903,19 @@ function SessionDetailView({ id }: { id: number }) {
         </div>
       </header>
 
-      <a className="back-link" href="/" onClick={(event) => navigate(event, "/")}>
+      <a className="back-link" href="/sessions" onClick={(event) => navigate(event, "/sessions")}>
         <Icon name="arrowLeft" />
         Sessions
       </a>
+
+      {economics != null ? (
+        <TokenEconomicsPanel
+          compact
+          description="Estimated activity inside this session, including nested subagents."
+          economics={economics}
+          title="Activity breakdown"
+        />
+      ) : null}
 
       <div className="transcript-layout">
         <aside className="toc">
@@ -3006,7 +3924,9 @@ function SessionDetailView({ id }: { id: number }) {
             {toc.length === 0 ? <p>No prompts to list</p> : null}
             {toc.map((item) => (
               <a href={`#turn-${item.index}`} key={item.index}>
-                <span />
+                <span className="toc-icon">
+                  <Icon name={item.icon} />
+                </span>
                 <span>{item.label}</span>
                 {item.tools > 0 ? <b>{item.tools}</b> : null}
               </a>
@@ -3016,17 +3936,31 @@ function SessionDetailView({ id }: { id: number }) {
 
         <div className="transcript-column">
           {messages.map((message, index) => (
-            <article className="turn" id={`turn-${index}`} key={messageKey(message)}>
+            <article className="turn" id={`turn-${index}`} key={messageKey(message, index)}>
               <Badge mono tone={roleTone(message.role)}>
-                {message.role}
+                {roleLabel(message.role, detail.summary.tool)}
               </Badge>
+              <div className="turn-meta">
+                {message.model != null ? <ModelBadge model={message.model} /> : null}
+                {message.timestamp != null ? <span>{relativeTime(message.timestamp)}</span> : null}
+              </div>
               <div className="turn-body">
-                {message.blocks.map((block) => (
-                  <TranscriptBlock block={block} key={`${block.ordinal}-${block.block_type}`} />
+                {message.blocks.map((block, blockIndex) => (
+                  <TranscriptBlock
+                    block={block}
+                    key={blockKey(block, blockIndex)}
+                    subagents={subagentsByToolUse.get(block.tool_use_id ?? "") ?? []}
+                  />
                 ))}
               </div>
             </article>
           ))}
+          {detail.has_more_messages === true ? (
+            <div className="transcript-slice-note">
+              Showing the first {formatInt(detail.messages.length)} of{" "}
+              {formatInt(detail.summary.message_count)} messages for fast loading.
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
@@ -3041,6 +3975,17 @@ type SessionDetailData = {
     model: string | null;
     blocks: TranscriptBlockData[];
   }[];
+  subagents: SubagentDetailData[];
+  message_offset?: number;
+  message_limit?: number | null;
+  has_more_messages?: boolean;
+};
+
+type SubagentDetailData = SessionDetailData & {
+  spawn_tool_use_id: string | null;
+  agent_id: string | null;
+  agent_type: string | null;
+  spawn_depth: number | null;
 };
 
 type TranscriptBlockData = {
@@ -3048,11 +3993,18 @@ type TranscriptBlockData = {
   block_type: string;
   text: string | null;
   tool_name: string | null;
+  tool_use_id: string | null;
   tool_input: string | null;
   tool_result: string | null;
 };
 
-function TranscriptBlock({ block }: { block: TranscriptBlockData }) {
+function TranscriptBlock({
+  block,
+  subagents = [],
+}: {
+  block: TranscriptBlockData;
+  subagents?: SubagentDetailData[];
+}) {
   if (block.block_type === "tool_use") {
     return (
       <div className="tool-call">
@@ -3067,6 +4019,9 @@ function TranscriptBlock({ block }: { block: TranscriptBlockData }) {
             <pre>{prettyJson(block.tool_input)}</pre>
           </details>
         ) : null}
+        {subagents.map((subagent) => (
+          <SubagentCard key={subagent.summary.id} subagent={subagent} />
+        ))}
       </div>
     );
   }
@@ -3095,7 +4050,277 @@ function TranscriptBlock({ block }: { block: TranscriptBlockData }) {
   if (!isPresent(block.text)) {
     return null;
   }
+  const special = specialTranscriptBlock(block.text);
+  if (special != null) {
+    return <SpecialTranscriptBlock block={special} />;
+  }
   return <p className="text-block">{block.text}</p>;
+}
+
+function SessionDetailSkeleton() {
+  return (
+    <div
+      className="session-detail session-detail-skeleton"
+      aria-label="Loading session"
+      role="status"
+    >
+      <header className="thread-header">
+        <div className="thread-header-inner">
+          <span className="skeleton-line skeleton-title" />
+          <span className="skeleton-line skeleton-badges" />
+          <span className="skeleton-line skeleton-stats" />
+        </div>
+      </header>
+      <span className="skeleton-line skeleton-back" />
+      <section className="panel token-economics-panel is-compact skeleton-panel">
+        <div className="panel-heading">
+          <div>
+            <span className="skeleton-line skeleton-heading" />
+            <span className="skeleton-line skeleton-subheading" />
+          </div>
+          <span className="skeleton-line skeleton-summary" />
+        </div>
+        <div className="activity-table-wrap">
+          <div className="skeleton-table">
+            {["context", "planning", "communicating", "code"].map((key) => (
+              <span className="skeleton-line" key={key} />
+            ))}
+          </div>
+        </div>
+      </section>
+      <div className="transcript-layout">
+        <aside className="toc">
+          <div className="toc-inner">
+            <span className="skeleton-line skeleton-toc-title" />
+            {["one", "two", "three", "four", "five", "six", "seven"].map((key) => (
+              <span className="skeleton-line skeleton-toc-row" key={key} />
+            ))}
+          </div>
+        </aside>
+        <div className="transcript-column">
+          {["prompt", "reply", "tool", "followup", "summary"].map((key) => (
+            <article className="turn skeleton-turn" key={key}>
+              <span className="skeleton-line skeleton-meta" />
+              <span className="skeleton-line skeleton-copy" />
+              <span className="skeleton-line skeleton-copy short" />
+            </article>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type SpecialTranscriptBlockData = {
+  title: string;
+  description: string;
+  tooltip: string;
+  icon: IconName;
+  chips: string[];
+};
+
+function specialTranscriptBlock(text: string): SpecialTranscriptBlockData | null {
+  const trimmed = text.trimStart();
+  if (isPermissionsText(text)) {
+    const sandbox = matchText(text, /`sandbox_mode`\s+is\s+`([^`]+)`/);
+    const approval = matchText(text, /Approval policy is currently ([^.]+)\./);
+    const network = matchText(text, /Network access is ([^.]+)\./);
+    return {
+      title: "Execution permissions",
+      description: "Agent runtime limits for filesystem, network, and approval behavior.",
+      tooltip:
+        "Defines what the coding agent can read or write, whether it may request elevated commands, and whether network access is available.",
+      icon: "shield",
+      chips: [
+        sandbox == null ? null : `sandbox ${sandbox}`,
+        approval == null ? null : `approvals ${approval}`,
+        network == null ? null : `network ${network}`,
+      ].filter((value): value is string => value != null),
+    };
+  }
+  if (/^<local-command-caveat>/i.test(trimmed)) {
+    return {
+      title: "Command context",
+      description: "Runtime notice for local command output in this session.",
+      tooltip:
+        "Explains how local command output should be interpreted by the coding agent without exposing the raw system tag in the transcript.",
+      icon: "shield",
+      chips: ["agent runtime"],
+    };
+  }
+  if (/^<command-name>/i.test(trimmed)) {
+    const command = matchText(trimmed, /<command-name>([^<]+)<\/command-name>/);
+    return {
+      title: "Command context",
+      description:
+        command == null ? "Local slash command context." : `Local slash command: ${command}.`,
+      tooltip:
+        "Represents local slash-command metadata. The raw command wrapper is hidden so the transcript stays readable.",
+      icon: "tools",
+      chips: [command ?? "slash command"],
+    };
+  }
+  if (/^The following is the Codex agent history/i.test(trimmed)) {
+    return {
+      title: "Agent history",
+      description: "Prior agent transcript supplied as context.",
+      tooltip: "Shows prior Codex activity that was included for review or continuation context.",
+      icon: "file",
+      chips: ["history"],
+    };
+  }
+  if (/^Use prior reviews as context/i.test(trimmed)) {
+    return {
+      title: "Review context",
+      description: "Instruction to treat previous reviews as context, not binding precedent.",
+      tooltip: "Marks review-guidance context included before the current task request.",
+      icon: "file",
+      chips: ["review"],
+    };
+  }
+  if (/^<teammate-message\b/i.test(trimmed)) {
+    const summary = tagAttribute(trimmed, "summary");
+    const teammate = tagAttribute(trimmed, "teammate_id");
+    return {
+      title: "Subagent request",
+      description: summary ?? "Delegated work request supplied to a subagent.",
+      tooltip:
+        "Represents a structured subagent handoff. The raw message tag is hidden so the transcript stays readable.",
+      icon: "cpu",
+      chips: [teammate == null ? null : teammate].filter((value): value is string => value != null),
+    };
+  }
+  if (text.includes("<environment_context>")) {
+    const cwd = matchText(text, /<cwd>([^<]+)<\/cwd>/);
+    const mode = matchText(text, /<shell>([^<]+)<\/shell>/);
+    return {
+      title: "Environment context",
+      description: "Local workspace and shell context supplied to the agent.",
+      tooltip:
+        "Shows where the agent is running and which local environment details were provided for the session.",
+      icon: "desktop",
+      chips: [cwd == null ? null : shortPath(cwd), mode == null ? null : mode].filter(
+        (value): value is string => value != null,
+      ),
+    };
+  }
+  if (trimmed.startsWith("# AGENTS.md instructions") || text.includes("<INSTRUCTIONS>")) {
+    return {
+      title: "Repository instructions",
+      description: "Repo-specific agent guidance, invariants, and definition of done.",
+      tooltip:
+        "Summarizes the local AGENTS.md instructions that shape how the agent should edit, test, and verify work in this repository.",
+      icon: "file",
+      chips: ["AGENTS.md", `${formatInt(text.split(/\r?\n/).length)} lines`],
+    };
+  }
+  return null;
+}
+
+function SpecialTranscriptBlock({ block }: { block: SpecialTranscriptBlockData }) {
+  return (
+    <Tooltip content={block.tooltip}>
+      {(tooltipProps) => (
+        <div className="special-block" {...tooltipProps}>
+          <span className="special-icon">
+            <Icon name={block.icon} />
+          </span>
+          <div>
+            <div className="special-heading">
+              <strong>{block.title}</strong>
+              <span aria-hidden="true" className="info-tooltip">
+                <Icon name="info" />
+              </span>
+            </div>
+            <p>{block.description}</p>
+            {block.chips.length > 0 ? (
+              <div className="special-chips">
+                {block.chips.map((chip) => (
+                  <span key={chip}>{chip}</span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+    </Tooltip>
+  );
+}
+
+function matchText(value: string, pattern: RegExp): string | null {
+  return value.match(pattern)?.[1]?.trim() ?? null;
+}
+
+function shortPath(value: string): string {
+  const parts = value.split("/").filter((part) => part !== "");
+  return parts.length <= 2 ? value : `.../${parts.slice(-2).join("/")}`;
+}
+
+function SubagentCard({ subagent }: { subagent: SubagentDetailData }) {
+  const messages = renderableMessages(subagent.messages);
+  const nested = subagentMap(subagent.subagents);
+  return (
+    <details className="subagent-card">
+      <summary>
+        <span>
+          <Icon name="cpu" />
+          subagent
+        </span>
+        <span>
+          {subagent.agent_type ??
+            cleanSessionTitle(subagent.summary.title) ??
+            subagent.agent_id ??
+            "agent"}
+        </span>
+        <small>
+          {formatInt(subagent.summary.message_count)} msgs ·{" "}
+          {money(subagent.summary.estimated_cost_usd)}
+        </small>
+      </summary>
+      {messages.length === 0 ? (
+        <div className="subagent-summary">
+          <span>{formatInt(subagent.summary.message_count)} messages</span>
+          <span>{formatInt(subagent.summary.subagent_count)} nested</span>
+          <a href={`/sessions/${subagent.summary.id}`}>Open session</a>
+        </div>
+      ) : (
+        <div className="subagent-transcript">
+          {messages.map((message, index) => (
+            <article className="turn is-subagent" key={messageKey(message, index)}>
+              <Badge mono tone={roleTone(message.role)}>
+                {roleLabel(message.role, subagent.summary.tool)}
+              </Badge>
+              <div className="turn-body">
+                {message.blocks.map((block, blockIndex) => (
+                  <TranscriptBlock
+                    block={block}
+                    key={blockKey(block, blockIndex)}
+                    subagents={nested.get(block.tool_use_id ?? "") ?? []}
+                  />
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </details>
+  );
+}
+
+function subagentMap(subagents: SubagentDetailData[]): Map<string, SubagentDetailData[]> {
+  const map = new Map<string, SubagentDetailData[]>();
+  for (const subagent of subagents) {
+    if (subagent.spawn_tool_use_id == null) {
+      continue;
+    }
+    const bucket = map.get(subagent.spawn_tool_use_id);
+    if (bucket == null) {
+      map.set(subagent.spawn_tool_use_id, [subagent]);
+    } else {
+      bucket.push(subagent);
+    }
+  }
+  return map;
 }
 
 function renderableMessages(
@@ -3111,9 +4336,7 @@ function renderableMessages(
   );
 }
 
-function threadToc(
-  messages: SessionDetailData["messages"],
-): { index: number; label: string; tools: number }[] {
+function threadToc(messages: SessionDetailData["messages"]): ThreadTocItem[] {
   return messages.flatMap((message, index) => {
     if (message.role !== "user") {
       return [];
@@ -3127,17 +4350,32 @@ function threadToc(
     return [
       {
         index,
-        label: firstLine(label, 70),
+        ...tocPresentation(label),
         tools: message.blocks.filter((block) => block.block_type === "tool_use").length,
       },
     ];
   });
 }
 
+type ThreadTocItem = {
+  index: number;
+  label: string;
+  tools: number;
+  icon: IconName;
+};
+
+function tocPresentation(text: string): { label: string; icon: IconName } {
+  const special = specialTranscriptBlock(text);
+  if (special != null) {
+    return { label: firstLine(special.title, 70), icon: special.icon };
+  }
+  return { label: firstLine(cleanSessionTitle(text) ?? text, 70), icon: "messages" };
+}
+
 function threadStats(
   summary: SessionSummary,
   messages: SessionDetailData["messages"],
-  toc: { index: number; label: string; tools: number }[],
+  toc: ThreadTocItem[],
 ) {
   return {
     turns: toc.length,
@@ -3151,8 +4389,9 @@ function threadStats(
   };
 }
 
-function messageKey(message: SessionDetailData["messages"][number]): string {
+function messageKey(message: SessionDetailData["messages"][number], index: number): string {
   return [
+    index,
     message.role,
     message.timestamp ?? "no-time",
     message.model ?? "no-model",
@@ -3160,8 +4399,34 @@ function messageKey(message: SessionDetailData["messages"][number]): string {
   ].join("|");
 }
 
+function blockKey(block: TranscriptBlockData, index: number): string {
+  return [
+    index,
+    block.ordinal,
+    block.block_type,
+    block.tool_use_id ?? "no-tool",
+    block.tool_name ?? "no-name",
+  ].join("|");
+}
+
 function roleTone(role: string): BadgeTone {
   return role === "assistant" ? "accent" : role === "tool" ? "info" : "neutral";
+}
+
+function roleLabel(role: string, tool: string): string {
+  if (role === "user") {
+    return "You";
+  }
+  if (role === "assistant") {
+    return tool === "codex" ? "Codex" : "Claude";
+  }
+  if (role === "tool") {
+    return "Tool";
+  }
+  if (role === "system") {
+    return "System";
+  }
+  return role;
 }
 
 async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -3275,7 +4540,7 @@ function errorMessage(error: unknown): string {
 
 function activeRoute(path: string): string {
   const pathname = pathOnly(path);
-  if (pathname.startsWith("/sessions/")) {
+  if (pathname === "/" || pathname === "/sessions" || pathname.startsWith("/sessions/")) {
     return "Sessions";
   }
   if (pathname === "/settings") {
@@ -3287,7 +4552,7 @@ function activeRoute(path: string): string {
 
 function activeRouteKey(path: string): string {
   const pathname = pathOnly(path);
-  if (pathname.startsWith("/sessions/")) {
+  if (pathname === "/" || pathname === "/sessions" || pathname.startsWith("/sessions/")) {
     return "sessions";
   }
   if (pathname === "/settings") {

@@ -54,15 +54,59 @@ describe("estimateCost", () => {
     );
   });
 
+  test("current claude version-specific prices are represented", () => {
+    const pricing = defaultPricing();
+    const u = usage1m();
+    expect(estimateCost("claude-opus-4-1", u, pricing)).toBeCloseTo(90.0, 6);
+    expect(estimateCost("claude-opus-4", u, pricing)).toBeCloseTo(90.0, 6);
+    expect(estimateCost("claude-sonnet-5", u, pricing)).toBeCloseTo(12.0, 6);
+    expect(estimateCost("claude-sonnet-4-6", u, pricing)).toBeCloseTo(18.0, 6);
+    expect(estimateCost("claude-haiku-3-5", u, pricing)).toBeCloseTo(4.8, 6);
+    expect(estimateCost("claude-haiku-4-5", u, pricing)).toBeCloseTo(6.0, 6);
+  });
+
   test("gpt family is priced", () => {
     const pricing = defaultPricing();
     const u = usage1m();
     expect(estimateCost("gpt-5", u, pricing)).toBeCloseTo(11.25, 6);
-    expect(estimateCost("gpt-5.1", u, pricing)).toBeCloseTo(11.25, 6); // shares gpt-5
+    expect(estimateCost("gpt-5.1", u, pricing)).toBeCloseTo(11.25, 6);
+    expect(estimateCost("gpt-5-mini", u, pricing)).toBeCloseTo(2.25, 6);
+    expect(estimateCost("gpt-5-nano", u, pricing)).toBeCloseTo(0.45, 6);
+    expect(estimateCost("gpt-5-pro", u, pricing)).toBeCloseTo(135.0, 6);
     expect(estimateCost("gpt-5.4", u, pricing)).toBeCloseTo(17.5, 6);
     expect(estimateCost("gpt-5.4-mini", u, pricing)).toBeCloseTo(5.25, 6);
     expect(estimateCost("gpt-5.4-nano", u, pricing)).toBeCloseTo(1.45, 6);
+    expect(estimateCost("gpt-5.4-pro", u, pricing)).toBeCloseTo(210.0, 6);
     expect(estimateCost("gpt-5.5", u, pricing)).toBeCloseTo(35.0, 6);
+    expect(estimateCost("gpt-5.5-pro", u, pricing)).toBeCloseTo(210.0, 6);
+  });
+
+  test("published openai legacy and reasoning models are priced", () => {
+    const pricing = defaultPricing();
+    const u = usage1m();
+    expect(estimateCost("gpt-4.1", u, pricing)).toBeCloseTo(10.0, 6);
+    expect(estimateCost("gpt-4.1-mini", u, pricing)).toBeCloseTo(2.0, 6);
+    expect(estimateCost("gpt-4.1-nano", u, pricing)).toBeCloseTo(0.5, 6);
+    expect(estimateCost("gpt-4o", u, pricing)).toBeCloseTo(12.5, 6);
+    expect(estimateCost("gpt-4o-2024-05-13", u, pricing)).toBeCloseTo(20.0, 6);
+    expect(estimateCost("gpt-4o-mini", u, pricing)).toBeCloseTo(0.75, 6);
+    expect(estimateCost("o1", u, pricing)).toBeCloseTo(75.0, 6);
+    expect(estimateCost("o1-pro", u, pricing)).toBeCloseTo(750.0, 6);
+    expect(estimateCost("o3", u, pricing)).toBeCloseTo(10.0, 6);
+    expect(estimateCost("o3-pro", u, pricing)).toBeCloseTo(100.0, 6);
+    expect(estimateCost("o4-mini", u, pricing)).toBeCloseTo(5.5, 6);
+    expect(estimateCost("o3-mini", u, pricing)).toBeCloseTo(5.5, 6);
+    expect(estimateCost("o1-mini", u, pricing)).toBeCloseTo(5.5, 6);
+    expect(estimateCost("gpt-4-turbo-2024-04-09", u, pricing)).toBeCloseTo(40.0, 6);
+    expect(estimateCost("gpt-4-0125-preview", u, pricing)).toBeCloseTo(40.0, 6);
+    expect(estimateCost("gpt-4-1106-preview", u, pricing)).toBeCloseTo(40.0, 6);
+    expect(estimateCost("gpt-4-0613", u, pricing)).toBeCloseTo(90.0, 6);
+    expect(estimateCost("gpt-4-32k", u, pricing)).toBeCloseTo(180.0, 6);
+    expect(estimateCost("gpt-3.5-turbo", u, pricing)).toBeCloseTo(2.0, 6);
+    expect(estimateCost("gpt-3.5-turbo-1106", u, pricing)).toBeCloseTo(3.0, 6);
+    expect(estimateCost("gpt-3.5-turbo-16k-0613", u, pricing)).toBeCloseTo(7.0, 6);
+    expect(estimateCost("davinci-002", u, pricing)).toBeCloseTo(4.0, 6);
+    expect(estimateCost("babbage-002", u, pricing)).toBeCloseTo(0.8, 6);
   });
 
   test("codex models are priced", () => {
@@ -71,6 +115,11 @@ describe("estimateCost", () => {
     expect(estimateCost("gpt-5.3-codex", u, pricing)).toBeCloseTo(15.75, 6);
     expect(estimateCost("gpt-5.2", u, pricing)).toBeCloseTo(15.75, 6);
     expect(estimateCost("codex-auto-review", u, pricing)).toBeCloseTo(15.75, 6);
+  });
+
+  test("openai models without a cached-input discount do not make cache reads free", () => {
+    const usage: TokenUsage = { ...emptyUsage(), cacheRead: 1_000_000, cacheCreation: 1_000_000 };
+    expect(estimateCost("gpt-5-pro", usage, defaultPricing())).toBeCloseTo(30.0, 6);
   });
 
   test("fable canonical model forms", () => {
@@ -116,6 +165,8 @@ describe("isPriceable", () => {
   test("distinguishes known from unknown", () => {
     expect(isPriceable("claude-haiku-4-5")).toBe(true);
     expect(isPriceable("gpt-5.4-mini")).toBe(true);
+    expect(isPriceable("gpt-4o-mini")).toBe(true);
+    expect(isPriceable("o3-pro")).toBe(true);
     expect(isPriceable("opus")).toBe(true);
     expect(isPriceable("<synthetic>")).toBe(false);
     expect(isPriceable("exa-research-pro")).toBe(false);

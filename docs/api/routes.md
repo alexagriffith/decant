@@ -7,6 +7,7 @@ contract. By default, the server listens on `http://127.0.0.1:3000`.
 ## UI
 
 - `GET /`
+- `GET /projects`
 - `GET /sessions/:id`
 - `GET /search`
 - `GET /analytics`
@@ -26,11 +27,14 @@ contract. By default, the server listens on `http://127.0.0.1:3000`.
 - `POST /api/sync`
 - `GET /api/sessions?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /api/sessions/:id`
+- `GET /api/sessions/:id/token-economics`
+- `GET /api/projects`
 - `POST /api/search`
 - `GET /api/stats/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /api/stats/by-dimension?dim=tool|model|project|day&from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /api/analytics/activity?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /api/analytics/model-sparklines?from=YYYY-MM-DD&to=YYYY-MM-DD`
+- `GET /api/analytics/token-economics?from=YYYY-MM-DD&to=YYYY-MM-DD`
 - `GET /api/analytics/now`
 - `GET /api/date-bounds`
 - `GET /api/metadata/date-bounds`

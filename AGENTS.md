@@ -21,7 +21,7 @@ The pre-cutover tree is preserved in the signed `pre-typescript` tag.
 | Path | Responsibility |
 |---|---|
 | `src/cli.ts` | Commander CLI entrypoint and all stdout/stderr/exit-code policy. |
-| `src/db.ts`, `src/schema.sql` | SQLite opener and frozen v8 baseline schema. |
+| `src/db.ts`, `src/schema.sql` | SQLite opener and frozen v9 baseline schema. |
 | `src/sources/` | Per-tool parsers: `claude.ts`, `codex.ts`. |
 | `src/ingest.ts` | Idempotent sync from source logs into the archive. |
 | `src/query.ts`, `src/stats.ts`, `src/export.ts` | Read/query/render surfaces. |
@@ -111,9 +111,10 @@ A change is ready when:
 4. **Costs are computed at ingest** with `cost::estimateCost` and stored on the
    session row. Editing pricing does not rewrite historical rows; rebuild the
    archive to recompute.
-5. **The schema baseline is v8.** Pre-v8 archives are intentionally rebuild-only:
+5. **The schema baseline is v9.** Pre-v8 archives are intentionally rebuild-only:
    delete the archive and re-ingest from the source directories. Do not add
-   forward migrations unless that product decision changes.
+   broad forward migrations unless that product decision changes; the narrow
+   v8-to-v9 migration preserves existing TypeScript-cutover archives.
 6. **Parsers are the extension point.** A new source tool means
    `src/sources/<tool>.ts`, synthetic fixtures, parser tests, ingest/query tests,
    and golden updates.

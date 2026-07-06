@@ -171,6 +171,17 @@ describe("server routes", () => {
     );
     expect(loopbackRead.status).toBe(200);
 
+    const trustedDockerPeer = await handleRequest(
+      new Request("http://127.0.0.1:3000/api/config"),
+      config,
+      {
+        boundHostname: "0.0.0.0",
+        remoteAddress: "172.17.0.1",
+        trustedPeers: ["172.16.0.0/12"],
+      },
+    );
+    expect(trustedDockerPeer.status).toBe(200);
+
     const bareLocalWrite = await handleRequest(
       new Request("http://127.0.0.1:3000/api/sync", {
         method: "POST",
@@ -318,6 +329,18 @@ describe("server routes", () => {
       expect.objectContaining({ source_session_id: "sess-codex-enr" }),
     ]);
 
+    const projects = await route(config, "/api/projects");
+    expect(projects.status).toBe(200);
+    expect(projects.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "/Users/dev/proj",
+          is_worktree: false,
+          session_tools: expect.arrayContaining(["claude_code", "codex"]),
+        }),
+      ]),
+    );
+
     const byTool = await route(config, "/api/stats/by-dimension?dim=tool");
     expect(byTool.status).toBe(200);
     expect(byTool.body).toEqual(
@@ -370,6 +393,22 @@ describe("server routes", () => {
     const sparks = await route(config, "/api/analytics/model-sparklines");
     expect(sparks.status).toBe(200);
     expect(sparks.body).toMatchObject({ days: expect.any(Array), models: expect.any(Object) });
+
+    const economics = await route(config, "/api/analytics/token-economics");
+    expect(economics.status).toBe(200);
+    expect(economics.body).toMatchObject({
+      buckets: expect.arrayContaining([expect.objectContaining({ bucket: "context" })]),
+      totals: expect.objectContaining({ estimated_cost_usd: expect.any(Number) }),
+    });
+
+    const sessions = await route(config, "/api/sessions?limit=1");
+    const sessionId = (sessions.body as { id: number }[])[0]?.id;
+    const sessionEconomics = await route(config, `/api/sessions/${sessionId}/token-economics`);
+    expect(sessionEconomics.status).toBe(200);
+    expect(sessionEconomics.body).toMatchObject({
+      buckets: expect.arrayContaining([expect.objectContaining({ bucket: "context" })]),
+      totals: expect.objectContaining({ estimated_cost_usd: expect.any(Number) }),
+    });
 
     const now = await route(config, "/api/analytics/now");
     expect(now.status).toBe(200);

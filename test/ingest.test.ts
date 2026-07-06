@@ -4,7 +4,14 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { openDb } from "../src/db.ts";
-import { discover, type IngestConfig, sync, upsertSession } from "../src/ingest.ts";
+import {
+  discover,
+  type IngestConfig,
+  resolveSubagentParents,
+  sync,
+  upsertSession,
+} from "../src/ingest.ts";
+import { getSession, listSessions } from "../src/query.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 
 const repoRoot = join(import.meta.dir, "..");
@@ -398,6 +405,273 @@ describe("sync", () => {
       root_path: "/Users/dev/proj",
       root_source: "self",
     });
+    db.close();
+  });
+
+  test("links Claude subagent sidechain files under their spawning session", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    write(
+      join(config.claudeDir, "proj", "root.jsonl"),
+      [
+        {
+          type: "user",
+          uuid: "u1",
+          parentUuid: null,
+          sessionId: "root-session",
+          timestamp: "2026-05-01T10:00:00.000Z",
+          cwd: "/Users/dev/proj",
+          message: { role: "user", content: "check auth" },
+        },
+        {
+          type: "assistant",
+          uuid: "a1",
+          parentUuid: "u1",
+          sessionId: "root-session",
+          timestamp: "2026-05-01T10:00:01.000Z",
+          cwd: "/Users/dev/proj",
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-7",
+            usage: { input_tokens: 1, output_tokens: 1 },
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_agent",
+                name: "Task",
+                input: { prompt: "inspect auth" },
+              },
+            ],
+          },
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n"),
+    );
+    write(
+      join(config.claudeDir, "proj", "subagents", "agent-alpha.jsonl"),
+      [
+        {
+          type: "user",
+          uuid: "su1",
+          parentUuid: null,
+          sessionId: "root-session",
+          isSidechain: true,
+          agentId: "alpha",
+          timestamp: "2026-05-01T10:00:02.000Z",
+          cwd: "/Users/dev/proj",
+          message: { role: "user", content: "inspect auth" },
+        },
+        {
+          type: "assistant",
+          uuid: "sa1",
+          parentUuid: "su1",
+          sessionId: "root-session",
+          isSidechain: true,
+          agentId: "alpha",
+          timestamp: "2026-05-01T10:00:03.000Z",
+          cwd: "/Users/dev/proj",
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-7",
+            usage: { input_tokens: 1, output_tokens: 1 },
+            content: [{ type: "text", text: "auth is fine" }],
+          },
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n"),
+    );
+    write(
+      join(config.claudeDir, "proj", "subagents", "agent-alpha.meta.json"),
+      JSON.stringify({ toolUseId: "toolu_agent", agentType: "explorer", spawnDepth: 1 }),
+    );
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2, failed: 0 });
+    const rootRows = listSessions(db);
+    expect(rootRows.map((row) => row.source_session_id)).toEqual(["root"]);
+    expect(rootRows[0]?.subagent_count).toBe(1);
+    expect(rootRows[0]?.subagent_estimated_cost_usd).toBeGreaterThan(0);
+    expect(listSessions(db, { includeNestedSubagents: true })[0]?.subagents?.[0]?.agent_type).toBe(
+      "explorer",
+    );
+    expect(listSessions(db, { includeSubagents: true, limit: 10 })).toHaveLength(2);
+    const child = db
+      .query(
+        `SELECT c.agent_id, c.agent_type, c.spawn_depth, c.spawn_tool_use_id,
+                p.source_session_id AS parent_key
+         FROM session c LEFT JOIN session p ON p.id = c.parent_session_id
+         WHERE c.is_subagent = 1`,
+      )
+      .get() as {
+      agent_id: string;
+      agent_type: string;
+      spawn_depth: number;
+      spawn_tool_use_id: string;
+      parent_key: string;
+    };
+    expect(child).toEqual({
+      agent_id: "alpha",
+      agent_type: "explorer",
+      spawn_depth: 1,
+      spawn_tool_use_id: "toolu_agent",
+      parent_key: "root",
+    });
+    const rootId = (
+      db.query("SELECT id FROM session WHERE source_session_id = 'root'").get() as { id: number }
+    ).id;
+    expect(getSession(db, rootId)?.subagents[0]?.agent_type).toBe("explorer");
+    db.close();
+  });
+
+  test("links Codex subagent rollout files under their parent session", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    write(
+      join(config.codexDir, "sessions", "2026", "05", "01", "rollout-root.jsonl"),
+      [
+        {
+          type: "session_meta",
+          timestamp: "2026-05-01T10:00:00.000Z",
+          payload: {
+            id: "root-thread",
+            cwd: "/Users/dev/proj",
+            cli_version: "0.121.0",
+            source: "cli",
+          },
+        },
+        {
+          type: "turn_context",
+          timestamp: "2026-05-01T10:00:00.500Z",
+          payload: { model: "gpt-5.5", cwd: "/Users/dev/proj" },
+        },
+        {
+          type: "response_item",
+          timestamp: "2026-05-01T10:00:01.000Z",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Investigate auth failures" }],
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: "2026-05-01T10:00:02.000Z",
+          payload: {
+            type: "function_call",
+            name: "spawn_agent",
+            call_id: "call_spawn",
+            arguments: JSON.stringify({ agent_type: "explorer", message: "audit auth" }),
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: "2026-05-01T10:00:03.000Z",
+          payload: {
+            type: "function_call_output",
+            call_id: "call_spawn",
+            output: { agent_id: "child-thread", nickname: "Ada" },
+          },
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n"),
+    );
+    write(
+      join(config.codexDir, "sessions", "2026", "05", "01", "rollout-child.jsonl"),
+      [
+        {
+          type: "session_meta",
+          timestamp: "2026-05-01T10:00:04.000Z",
+          payload: {
+            id: "child-thread",
+            cwd: "/Users/dev/proj",
+            parent_thread_id: "root-thread",
+            agent_nickname: "Ada",
+            agent_role: "explorer",
+            source: {
+              subagent: {
+                thread_spawn: {
+                  parent_thread_id: "root-thread",
+                  depth: 1,
+                  agent_nickname: "Ada",
+                  agent_role: "explorer",
+                },
+              },
+            },
+          },
+        },
+        {
+          type: "turn_context",
+          timestamp: "2026-05-01T10:00:04.500Z",
+          payload: { model: "codex-auto-review", cwd: "/Users/dev/proj" },
+        },
+        {
+          type: "response_item",
+          timestamp: "2026-05-01T10:00:05.000Z",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "audit auth" }],
+          },
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n"),
+    );
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2, failed: 0 });
+    const rootRows = listSessions(db);
+    expect(rootRows.map((row) => row.source_session_id)).toEqual(["root-thread"]);
+    expect(rootRows[0]?.subagent_count).toBe(1);
+    const nested = listSessions(db, { includeNestedSubagents: true })[0]?.subagents?.[0];
+    expect(nested?.source_session_id).toBe("child-thread");
+    expect(nested?.agent_id).toBe("Ada");
+    expect(nested?.agent_type).toBe("explorer");
+    expect(nested?.spawn_tool_use_id).toBe("call_spawn");
+    expect(listSessions(db, { includeSubagents: true, limit: 10 })).toHaveLength(2);
+    const rootId = (
+      db.query("SELECT id FROM session WHERE source_session_id = 'root-thread'").get() as {
+        id: number;
+      }
+    ).id;
+    expect(getSession(db, rootId)?.subagents[0]?.spawn_tool_use_id).toBe("call_spawn");
+    db.close();
+  });
+
+  test("backfills legacy Claude subagent rows from source path and message raw", () => {
+    const dir = freshCase();
+    const db = openFreshDb(dir);
+    db.exec(`
+      INSERT INTO project(path, name) VALUES ('/Users/dev/proj', 'proj');
+      INSERT INTO session(tool, source_session_id, project_id, title, started_at, ended_at, message_count, source_path)
+      VALUES ('claude_code', 'root', 1, 'root', '2026-05-01T10:00:00.000Z', '2026-05-01T10:00:01.000Z', 1, '/Users/dev/.claude/projects/proj/root.jsonl');
+      INSERT INTO session(tool, source_session_id, project_id, title, started_at, ended_at, message_count, source_path)
+      VALUES ('claude_code', 'agent-alpha', 1, 'alpha', '2026-05-01T10:00:02.000Z', '2026-05-01T10:00:03.000Z', 1, '/Users/dev/.claude/projects/proj/subagents/agent-alpha.jsonl');
+      INSERT INTO message(session_id, seq, role, timestamp, raw)
+      VALUES (1, 0, 'user', '2026-05-01T10:00:00.000Z', '{"sessionId":"root-session"}');
+      INSERT INTO message(session_id, seq, role, timestamp, raw)
+      VALUES (2, 0, 'user', '2026-05-01T10:00:02.000Z', '{"sessionId":"root-session","isSidechain":true,"agentId":"alpha"}');
+    `);
+
+    resolveSubagentParents(db);
+
+    const child = db
+      .query(
+        `SELECT c.is_subagent, c.agent_id, p.source_session_id AS parent_key
+         FROM session c LEFT JOIN session p ON p.id = c.parent_session_id
+         WHERE c.source_session_id = 'agent-alpha'`,
+      )
+      .get() as { is_subagent: number; agent_id: string; parent_key: string };
+    expect(child).toEqual({ is_subagent: 1, agent_id: "alpha", parent_key: "root" });
     db.close();
   });
 

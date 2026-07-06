@@ -1,4 +1,4 @@
--- decant:schema_version=8
+-- decant:schema_version=9
 -- Effective decant schema (migrations 1..8 applied), frozen at the
 -- pre-typescript cutover. Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
@@ -39,6 +39,12 @@ CREATE TABLE session (
   reasoning_source TEXT,
   estimated_cost_usd REAL NOT NULL DEFAULT 0,
   is_archived INTEGER NOT NULL DEFAULT 0,
+  is_subagent INTEGER NOT NULL DEFAULT 0,
+  parent_session_id INTEGER REFERENCES session(id),
+  spawn_tool_use_id TEXT,
+  agent_id TEXT,
+  agent_type TEXT,
+  spawn_depth INTEGER,
   source_path TEXT,
   raw_meta TEXT,
   ingested_at TEXT,
@@ -171,6 +177,8 @@ CREATE INDEX idx_session_project ON session(project_id);
 CREATE INDEX idx_session_tool ON session(tool);
 CREATE INDEX idx_session_started ON session(started_at);
 CREATE INDEX idx_session_model ON session(model);
+CREATE INDEX idx_session_parent ON session(parent_session_id);
+CREATE INDEX idx_session_spawn_tooluse ON session(spawn_tool_use_id);
 CREATE INDEX idx_message_session ON message(session_id, seq);
 CREATE INDEX idx_block_session ON block(session_id);
 CREATE INDEX idx_block_message ON block(message_id, ordinal);

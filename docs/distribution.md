@@ -80,7 +80,10 @@ Release workflow publishes `ghcr.io/dosu-ai/decant:latest`.
 The container binds `0.0.0.0` inside the network namespace so Docker port
 publishing can reach it. Publish to `127.0.0.1` on the host, as shown above.
 Do not use `-p 3000:3000` unless you intentionally want to expose the archive
-port on every host interface.
+port on every host interface. The image sets
+`DECANT_TRUSTED_PEERS=172.16.0.0/12` so requests forwarded from Docker bridge
+peers can pass the local-only API guard; override it with a narrower peer or
+CIDR if your Docker network uses a different gateway.
 
 ## Source
 
