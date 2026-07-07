@@ -118,6 +118,40 @@ describe("watch mode", () => {
     expect(events.at(-1)?.type).toBe("stopped");
   });
 
+  test("startWatch delegates syncs to an injected runner", async () => {
+    const config = freshConfig();
+    const events: WatchEvent[] = [];
+    const runnerCalls: string[] = [];
+    const handle = startWatch({
+      config,
+      enableWatch: false,
+      intervalMs: 0,
+      syncOnStart: false,
+      onEvent: (event) => events.push(event),
+      runner: (runnerConfig, status) => {
+        runnerCalls.push(runnerConfig.dbPath);
+        status.start();
+        const report = {
+          scanned: 3,
+          ingested: 2,
+          skipped: 1,
+          issues: 0,
+          failed: 0,
+          cancelled: false,
+        };
+        status.finishOk(report);
+        return Promise.resolve(report);
+      },
+    });
+
+    handle.trigger("manual");
+    const event = await onceSync(events);
+    expect(runnerCalls).toEqual([config.dbPath]);
+    expect(event.report.ingested).toBe(2);
+    expect(event.status.last_report).toContain("ingested 2");
+    await handle.stop();
+  });
+
   test("periodic sweep is enough to ingest when native watch is disabled", async () => {
     const config = freshConfig();
     seedClaude(config);

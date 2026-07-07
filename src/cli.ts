@@ -332,13 +332,12 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
             port: commandOptions.port ?? DEFAULT_SERVE_PORT,
             trustedPeers: trustedPeers(commandOptions.trustedPeer),
-          });
-          const handle = startWatch({
-            config,
-            intervalMs: commandOptions.intervalMs,
-            debounceMs: commandOptions.debounceMs,
-            enableWatch: commandOptions.fsWatch !== false,
-            onEvent: emitWatchEvent,
+            watch: {
+              intervalMs: commandOptions.intervalMs,
+              debounceMs: commandOptions.debounceMs,
+              enableWatch: commandOptions.fsWatch !== false,
+              onEvent: emitWatchEvent,
+            },
           });
           if (!isJson(globals()) && !globals().quiet) {
             io.writeErr(
@@ -348,8 +347,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           try {
             await waitForProcessSignal();
           } finally {
-            server.stop();
-            await handle.stop();
+            await server.stop();
           }
         }),
     );

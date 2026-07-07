@@ -18,6 +18,9 @@ export function openDb(path: string): Database {
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec("PRAGMA synchronous = NORMAL;");
   db.exec("PRAGMA journal_mode = WAL;");
+  // Memory-map reads: archives grow to multiple GB and large scans (FTS, block
+  // aggregation) measure 2-7x faster via mmap than via pread on such files.
+  db.exec("PRAGMA mmap_size = 1073741824;");
   try {
     ensureSchema(db);
   } catch (error) {

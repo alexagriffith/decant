@@ -4,6 +4,7 @@ import type { Config } from "./config.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
 import { openDb } from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
+import { EconomicsCache } from "./economics-cache.ts";
 import type { Operation } from "./enrich.ts";
 import type { sync as ingestSync } from "./ingest.ts";
 import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
@@ -36,21 +37,34 @@ import {
 } from "./stats.ts";
 import { tokenEconomics, tokenEconomicsForSession } from "./token-economics.ts";
 import uiBundle from "./ui/index.html";
+import { type SyncStatusStore, startWatch, type WatchEvent, type WatchHandle } from "./watch.ts";
 
 export const DEFAULT_SERVE_HOST = "127.0.0.1";
 export const DEFAULT_SERVE_PORT = 3000;
+
+export interface ServeWatchOptions {
+  intervalMs?: number;
+  debounceMs?: number;
+  enableWatch?: boolean;
+  onEvent?: (event: WatchEvent) => void;
+}
 
 export interface ServeOptions {
   config: Config;
   port?: number;
   hostname?: string;
   trustedPeers?: string[];
+  /** When set, serve() runs the source watcher itself with a worker-backed
+   * sync runner so ingests never block the request event loop, and republishes
+   * watcher events to SSE clients. */
+  watch?: ServeWatchOptions;
 }
 
 type Db = ReturnType<typeof openDb>;
 type ServerEvent = { type: string };
 interface RequestContext {
   db?: Db;
+  economics?: EconomicsCache;
   boundHostname?: string;
   remoteAddress?: string | null;
   trustedPeers?: string[];
@@ -158,7 +172,7 @@ export async function handleRequest(
       if (contentTypeFailure != null) {
         return contentTypeFailure;
       }
-      return await syncNow(config);
+      return await syncNow(config, context.economics);
     }
     if (request.method === "GET" && url.pathname === "/api/sessions") {
       return withDb(config, context, (db) =>
@@ -234,6 +248,9 @@ export async function handleRequest(
       return withDb(config, context, (db) => json(modelSparklines(db, dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/token-economics") {
+      if (context.economics != null) {
+        return json(await context.economics.get(dateFilter));
+      }
       return withDb(config, context, (db) => json(tokenEconomics(db, dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/now") {
@@ -324,7 +341,7 @@ function settingsResponse(settings = getSettings()): Record<string, unknown> {
   };
 }
 
-async function syncNow(config: Config): Promise<Response> {
+async function syncNow(config: Config, economics?: EconomicsCache): Promise<Response> {
   syncStatus.in_progress = true;
   syncStatus.last_error = null;
   try {
@@ -337,6 +354,7 @@ async function syncNow(config: Config): Promise<Response> {
     syncStatus.ingested_count = report.ingested;
     publishServerEvent({ type: "sync", reason: "manual", report, status: { ...syncStatus } });
     if (report.ingested > 0) {
+      economics?.invalidate();
       publishServerEvent({
         type: "archive_updated",
         ingested: report.ingested,
@@ -435,6 +453,32 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   mkdirSync(dirname(options.config.dbPath), { recursive: true });
   const db = openDb(options.config.dbPath);
   ensureDerivedMetadata(db);
+  const economics = new EconomicsCache({
+    dbPath: options.config.dbPath,
+    db,
+    onRebuilt: () =>
+      publishServerEvent({
+        type: "archive_updated",
+        reason: "stats",
+        last_sync_at: syncStatus.last_sync_at,
+      }),
+  });
+  economics.prewarm();
+  let watchHandle: WatchHandle | null = null;
+  if (options.watch != null) {
+    const onEvent = options.watch.onEvent;
+    watchHandle = startWatch({
+      config: options.config,
+      intervalMs: options.watch.intervalMs,
+      debounceMs: options.watch.debounceMs,
+      enableWatch: options.watch.enableWatch,
+      runner: workerSyncRunner,
+      onEvent: (event) => {
+        applyWatchEvent(event, economics);
+        onEvent?.(event);
+      },
+    });
+  }
   const server = Bun.serve({
     hostname,
     port,
@@ -453,6 +497,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
     fetch: (request, bunServer) =>
       handleRequest(request, options.config, {
         db,
+        economics,
         boundHostname: hostname,
         remoteAddress: bunServer.requestIP(request)?.address ?? null,
         trustedPeers,
@@ -462,15 +507,53 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   let closed = false;
   server.stop = async (closeActiveConnections?: boolean): Promise<void> => {
     try {
+      await watchHandle?.stop();
       await stop(closeActiveConnections);
     } finally {
       if (!closed) {
         closed = true;
+        economics.dispose();
         db.close();
       }
     }
   };
   return server;
+}
+
+/** Runs one watcher-triggered sync in a worker thread, keeping request
+ * handling responsive while multi-second ingests run. */
+async function workerSyncRunner(
+  config: Config,
+  status: SyncStatusStore,
+): Promise<ReturnType<typeof ingestSync>> {
+  status.start();
+  try {
+    const report = await runSyncWorker(config);
+    status.finishOk(report);
+    return report;
+  } catch (error) {
+    status.finishErr(error instanceof Error ? error.message : String(error));
+    throw error;
+  }
+}
+
+function applyWatchEvent(event: WatchEvent, economics: EconomicsCache): void {
+  if ("status" in event && event.status != null) {
+    syncStatus.last_sync_at = event.status.last_sync_at;
+    syncStatus.in_progress = event.status.in_progress;
+    syncStatus.last_report = event.status.last_report;
+    syncStatus.last_error = event.status.last_error;
+    syncStatus.ingested_count = event.status.ingested_count;
+  }
+  publishServerEvent(event);
+  if (event.type === "sync" && event.report.ingested > 0) {
+    economics.invalidate();
+    publishServerEvent({
+      type: "archive_updated",
+      ingested: event.report.ingested,
+      last_sync_at: syncStatus.last_sync_at,
+    });
+  }
 }
 
 function withDb(config: Config, context: RequestContext, callback: (db: Db) => Response): Response {

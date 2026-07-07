@@ -240,7 +240,6 @@ type SettingsInfo = {
 type DashboardData = {
   summary: Summary | null;
   sessions: SessionSummary[];
-  byTool: DimensionRow[];
   byModel: DimensionRow[];
   byProject: DimensionRow[];
   byDay: DimensionRow[];
@@ -261,7 +260,6 @@ type DashboardData = {
 const emptyData: DashboardData = {
   summary: null,
   sessions: [],
-  byTool: [],
   byModel: [],
   byProject: [],
   byDay: [],
@@ -277,6 +275,124 @@ const emptyData: DashboardData = {
   tokenEconomics: null,
   now: null,
   dateBounds: null,
+};
+
+type DataSlice = Exclude<keyof DashboardData, "sessions">;
+
+// Each page fetches only the slices it renders; fetching everything for every
+// page made first paint wait on the slowest analytics endpoint. Slices are
+// cached per (date filter, reload generation), so navigating back is free and
+// SSE-triggered refreshes only refetch what the active page shows.
+const SLICE_LOADERS: Record<
+  DataSlice,
+  { dateScoped: boolean; load: (dateQuery: string) => Promise<Partial<DashboardData>> }
+> = {
+  summary: {
+    dateScoped: true,
+    load: async (q) => ({
+      summary: await getJson<Summary>(withDateQuery("/api/stats/summary", q)),
+    }),
+  },
+  byModel: {
+    dateScoped: true,
+    load: async (q) => ({
+      byModel: await getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=model", q)),
+    }),
+  },
+  byProject: {
+    dateScoped: true,
+    load: async (q) => ({
+      byProject: await getJson<DimensionRow[]>(
+        withDateQuery("/api/stats/by-dimension?dim=project", q),
+      ),
+    }),
+  },
+  byDay: {
+    dateScoped: true,
+    load: async (q) => ({
+      byDay: await getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=day", q)),
+    }),
+  },
+  projects: {
+    dateScoped: false,
+    load: async () => ({ projects: await getJson<ProjectSummary[]>("/api/projects") }),
+  },
+  tools: {
+    dateScoped: true,
+    load: async (q) => ({
+      tools: await getJson<ToolRow[]>(withDateQuery("/api/tools/usage?limit=100", q)),
+    }),
+  },
+  mcp: {
+    dateScoped: true,
+    load: async (q) => ({
+      mcp: await getJson<McpRow[]>(withDateQuery("/api/tools/mcp-usage?limit=100", q)),
+    }),
+  },
+  files: {
+    dateScoped: true,
+    load: async (q) => ({
+      files: await getJson<FileRow[]>(withDateQuery("/api/files?group=path&limit=100", q)),
+    }),
+  },
+  recommendations: {
+    dateScoped: false,
+    load: async () => ({
+      recommendations: await getJson<Recommendation[]>("/api/recommendations?status=all"),
+    }),
+  },
+  config: {
+    dateScoped: false,
+    load: async () => ({ config: await getJson<ConfigView>("/api/config") }),
+  },
+  settings: {
+    dateScoped: false,
+    load: async () => ({ settings: await getJson<SettingsInfo>("/api/settings") }),
+  },
+  activity: {
+    dateScoped: true,
+    load: async (q) => ({
+      activity: await getJson<Activity>(withDateQuery("/api/analytics/activity", q)),
+    }),
+  },
+  modelSparklines: {
+    dateScoped: true,
+    load: async (q) => ({
+      modelSparklines: await getJson<ModelSparklines>(
+        withDateQuery("/api/analytics/model-sparklines", q),
+      ),
+    }),
+  },
+  tokenEconomics: {
+    dateScoped: true,
+    load: async (q) => ({
+      tokenEconomics: await getJson<TokenEconomics>(
+        withDateQuery("/api/analytics/token-economics", q),
+      ),
+    }),
+  },
+  now: {
+    dateScoped: false,
+    load: async () => ({ now: await getJson<NowView>("/api/analytics/now") }),
+  },
+  dateBounds: {
+    dateScoped: false,
+    load: async () => ({ dateBounds: await getJson<DateBounds>("/api/date-bounds") }),
+  },
+};
+
+// Slices the app shell itself renders (sidebar stats, sync button, pickers).
+const SHELL_SLICES: DataSlice[] = ["summary", "now", "dateBounds"];
+
+const ROUTE_SLICES: Record<string, DataSlice[]> = {
+  Sessions: [],
+  Projects: ["projects"],
+  Search: [],
+  Analytics: ["byDay", "byModel", "byProject", "activity", "modelSparklines", "tokenEconomics"],
+  Insights: ["recommendations", "settings"],
+  "Tools & MCP": ["tools", "mcp"],
+  Files: ["files"],
+  Settings: ["config", "settings"],
 };
 
 type NavItem = {
@@ -303,7 +419,7 @@ const OPENAI_ICON_PATH =
 const ANTHROPIC_ICON_PATH =
   "M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z";
 
-const SESSION_PAGE_SIZE = 100;
+const SESSION_PAGE_SIZE = 50;
 const SESSION_DETAIL_MESSAGE_LIMIT = 160;
 const SESSION_TABLE_SKELETON_KEYS = Array.from(
   { length: 10 },
@@ -337,6 +453,9 @@ function App() {
   const dateQuery = dateRangeQuery(dateRangeSelection);
   const sessionLoadKey = `${dateQuery}:${reloadKey}`;
   const refreshTimerRef = useRef<number | null>(null);
+  const loadedSlicesRef = useRef(new Map<DataSlice, string>());
+  const activeView = activeRoute(path);
+  const showsSessions = activeView === "Sessions";
   const [theme, setTheme] = useState<ThemeChoice>(() => {
     const stored = localStorage.getItem("decant-theme");
     return stored === "light" || stored === "dark" ? stored : "system";
@@ -386,73 +505,28 @@ function App() {
   }, [dateQuery]);
 
   useEffect(() => {
-    void reloadKey;
+    const sliceKey = (slice: DataSlice): string =>
+      SLICE_LOADERS[slice].dateScoped ? `${dateQuery}|${reloadKey}` : `${reloadKey}`;
+    const needed = [...new Set([...SHELL_SLICES, ...(ROUTE_SLICES[activeView] ?? [])])];
+    const missing = needed.filter(
+      (slice) => loadedSlicesRef.current.get(slice) !== sliceKey(slice),
+    );
+    if (missing.length === 0) {
+      return;
+    }
     let cancelled = false;
-    Promise.all([
-      getJson<Summary>(withDateQuery("/api/stats/summary", dateQuery)),
-      getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=tool", dateQuery)),
-      getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=model", dateQuery)),
-      getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=project", dateQuery)),
-      getJson<DimensionRow[]>(withDateQuery("/api/stats/by-dimension?dim=day", dateQuery)),
-      getJson<ProjectSummary[]>("/api/projects"),
-      getJson<ToolRow[]>(withDateQuery("/api/tools/usage?limit=100", dateQuery)),
-      getJson<McpRow[]>(withDateQuery("/api/tools/mcp-usage?limit=100", dateQuery)),
-      getJson<FileRow[]>(withDateQuery("/api/files?group=path&limit=100", dateQuery)),
-      getJson<Recommendation[]>("/api/recommendations?status=all"),
-      getJson<ConfigView>("/api/config"),
-      getJson<SettingsInfo>("/api/settings"),
-      getJson<Activity>(withDateQuery("/api/analytics/activity", dateQuery)),
-      getJson<ModelSparklines>(withDateQuery("/api/analytics/model-sparklines", dateQuery)),
-      getJson<TokenEconomics>(withDateQuery("/api/analytics/token-economics", dateQuery)),
-      getJson<NowView>("/api/analytics/now"),
-      getJson<DateBounds>("/api/date-bounds"),
-    ])
-      .then(
-        ([
-          summary,
-          byTool,
-          byModel,
-          byProject,
-          byDay,
-          projects,
-          tools,
-          mcp,
-          files,
-          recommendations,
-          config,
-          settings,
-          activity,
-          modelSparklines,
-          tokenEconomics,
-          now,
-          dateBounds,
-        ]) => {
-          if (cancelled) {
-            return;
-          }
-          setData((current) => ({
-            summary,
-            sessions: current.sessions,
-            byTool,
-            byModel,
-            byProject,
-            byDay,
-            projects,
-            tools,
-            mcp,
-            files,
-            recommendations,
-            config,
-            settings,
-            activity,
-            modelSparklines,
-            tokenEconomics,
-            now,
-            dateBounds,
-          }));
-          setError(null);
-        },
-      )
+    Promise.all(missing.map((slice) => SLICE_LOADERS[slice].load(dateQuery)))
+      .then((parts) => {
+        if (cancelled) {
+          return;
+        }
+        const merged = Object.assign({}, ...parts) as Partial<DashboardData>;
+        setData((current) => ({ ...current, ...merged }));
+        for (const slice of missing) {
+          loadedSlicesRef.current.set(slice, sliceKey(slice));
+        }
+        setError(null);
+      })
       .catch((err: unknown) => {
         if (!cancelled) {
           setError(errorMessage(err));
@@ -461,9 +535,12 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [dateQuery, reloadKey]);
+  }, [activeView, dateQuery, reloadKey]);
 
   useEffect(() => {
+    if (!showsSessions) {
+      return;
+    }
     let cancelled = false;
     const plan = planSessionLoad({
       loadedRequestKey: loadedSessionKey,
@@ -506,7 +583,14 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [data.sessions.length, dateQuery, loadedSessionKey, sessionLimit, sessionLoadKey]);
+  }, [
+    data.sessions.length,
+    dateQuery,
+    loadedSessionKey,
+    sessionLimit,
+    sessionLoadKey,
+    showsSessions,
+  ]);
 
   useEffect(() => {
     const events = new EventSource("/api/events");
@@ -519,10 +603,10 @@ function App() {
     };
   }, [requestRefresh]);
 
-  const active = activeRoute(path);
+  const active = activeView;
   const activeKey = activeRouteKey(path);
   const metrics = data.summary;
-  const lastActivity = latestSessionDay(data.sessions);
+  const lastActivity = data.dateBounds?.max ?? latestSessionDay(data.sessions);
   const syncInProgress = data.now?.sync_in_progress === true;
   const runSync = () => {
     if (syncInProgress) {
