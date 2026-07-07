@@ -606,7 +606,10 @@ function App() {
   const active = activeView;
   const activeKey = activeRouteKey(path);
   const metrics = data.summary;
-  const lastActivity = data.dateBounds?.max ?? latestSessionDay(data.sessions);
+  // Prefer the loaded (date-filtered) session list, matching the sidebar's
+  // other stats; dateBounds is archive-wide and only a fallback for routes
+  // that never load session rows, so it must never win over an in-range value.
+  const lastActivity = latestSessionDay(data.sessions) ?? formatDay(data.dateBounds?.max ?? null);
   const syncInProgress = data.now?.sync_in_progress === true;
   const runSync = () => {
     if (syncInProgress) {
@@ -3254,12 +3257,16 @@ function capitalize(value: string): string {
 
 function latestSessionDay(sessions: SessionSummary[]): string | null {
   const latest = sessions.find((session) => session.started_at != null)?.started_at;
-  if (latest == null) {
+  return latest == null ? null : formatDay(latest);
+}
+
+function formatDay(value: string | null): string | null {
+  if (value == null) {
     return null;
   }
-  const date = new Date(latest);
+  const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return latest;
+    return value;
   }
   return date.toLocaleDateString(undefined, { month: "short", day: "2-digit" });
 }

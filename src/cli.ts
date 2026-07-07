@@ -30,7 +30,6 @@ import {
   DEFAULT_SERVE_HOST,
   DEFAULT_SERVE_PORT,
   parsePeerList,
-  publishServerEvent,
   serve as serveApp,
 } from "./server.ts";
 import {
@@ -241,8 +240,11 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       run(() => runSync(commandOptions)),
     );
 
+  // Terminal rendering only. Under `serve`, server.ts's applyWatchEvent already
+  // publishes each event to SSE clients exactly once; publishing again here
+  // would double every /api/events frame. Under `watch`, there is no HTTP
+  // server or SSE client to publish to at all.
   const emitWatchEvent = (event: WatchEvent): void => {
-    publishServerEvent(event);
     if (isJson(globals())) {
       io.writeOut(`${JSON.stringify(event)}\n`);
     } else if (!globals().quiet) {
@@ -311,6 +313,12 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       DEFAULT_DEBOUNCE_MS,
     )
     .option("--no-fs-watch", "disable native filesystem watching and rely on sweeps")
+    .option(
+      "--trusted-peer <peer>",
+      "allow API requests from this peer IP/CIDR when bound broadly (repeatable or comma-separated)",
+      collectOption,
+      [] as string[],
+    )
     .action(
       (commandOptions: {
         host?: string;
@@ -331,7 +339,13 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             config,
             hostname: commandOptions.host ?? DEFAULT_SERVE_HOST,
             port: commandOptions.port ?? DEFAULT_SERVE_PORT,
-            trustedPeers: trustedPeers(commandOptions.trustedPeer),
+            // Omit entirely (rather than passing []) when no --trusted-peer was
+            // given, so serve()'s `options.trustedPeers ?? parsePeerList(env)`
+            // can still fall through to DECANT_TRUSTED_PEERS.
+            trustedPeers:
+              commandOptions.trustedPeer != null && commandOptions.trustedPeer.length > 0
+                ? trustedPeers(commandOptions.trustedPeer)
+                : undefined,
             watch: {
               intervalMs: commandOptions.intervalMs,
               debounceMs: commandOptions.debounceMs,
@@ -347,7 +361,12 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           try {
             await waitForProcessSignal();
           } finally {
-            await server.stop();
+            // Force-close: a graceful stop() never resolves while a browser
+            // tab's /api/events SSE connection is open (Bun waits for active
+            // connections to end on their own), which would hang shutdown
+            // indefinitely on Ctrl-C. This is a local dev server being
+            // intentionally torn down, so dropping open connections is fine.
+            await server.stop(true);
           }
         }),
     );

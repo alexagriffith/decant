@@ -4,7 +4,7 @@ import type { Config } from "./config.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
 import { openDb } from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
-import { EconomicsCache } from "./economics-cache.ts";
+import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
 import type { Operation } from "./enrich.ts";
 import type { sync as ingestSync } from "./ingest.ts";
 import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
@@ -58,6 +58,9 @@ export interface ServeOptions {
    * sync runner so ingests never block the request event loop, and republishes
    * watcher events to SSE clients. */
   watch?: ServeWatchOptions;
+  /** Test seam: override how the economics cache computes vectors, e.g. to
+   * simulate a rebuild that is still in flight when the server is stopped. */
+  economicsComputeVectors?: EconomicsCacheOptions["computeVectors"];
 }
 
 type Db = ReturnType<typeof openDb>;
@@ -370,14 +373,25 @@ async function syncNow(config: Config, economics?: EconomicsCache): Promise<Resp
   }
 }
 
-function runSyncWorker(config: Config): Promise<ReturnType<typeof ingestSync>> {
+function runSyncWorker(
+  config: Config,
+  cancel?: { aborted: boolean },
+): Promise<ReturnType<typeof ingestSync>> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./sync-worker.ts", import.meta.url), { type: "module" });
+    let cancelPoll: Timer | null = null;
+    const settle = (): void => {
+      if (cancelPoll != null) {
+        clearInterval(cancelPoll);
+        cancelPoll = null;
+      }
+      worker.terminate();
+    };
     worker.addEventListener("message", (event) => {
       const data = event.data as
         | { ok: true; report: ReturnType<typeof ingestSync> }
         | { ok: false; error: string };
-      worker.terminate();
+      settle();
       if (data.ok) {
         resolve(data.report);
       } else {
@@ -385,9 +399,20 @@ function runSyncWorker(config: Config): Promise<ReturnType<typeof ingestSync>> {
       }
     });
     worker.addEventListener("error", (event) => {
-      worker.terminate();
+      settle();
       reject(event.error instanceof Error ? event.error : new Error(String(event.error)));
     });
+    if (cancel != null) {
+      // The in-process runner aborts between files; a worker cannot observe the
+      // flag, so poll it and terminate, resolving with the same cancelled-report
+      // shape so shutdown stays prompt instead of waiting out a long ingest.
+      cancelPoll = setInterval(() => {
+        if (cancel.aborted) {
+          settle();
+          resolve({ scanned: 0, ingested: 0, skipped: 0, issues: 0, failed: 0, cancelled: true });
+        }
+      }, 150);
+    }
     worker.postMessage(config);
   });
 }
@@ -456,6 +481,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   const economics = new EconomicsCache({
     dbPath: options.config.dbPath,
     db,
+    computeVectors: options.economicsComputeVectors,
     onRebuilt: () =>
       publishServerEvent({
         type: "archive_updated",
@@ -508,12 +534,20 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   server.stop = async (closeActiveConnections?: boolean): Promise<void> => {
     try {
       await watchHandle?.stop();
-      await stop(closeActiveConnections);
     } finally {
-      if (!closed) {
-        closed = true;
-        economics.dispose();
-        db.close();
+      // Abort any in-flight economics rebuild BEFORE awaiting the native
+      // stop(): forcing TCP connections closed doesn't make an in-flight
+      // request handler's own awaited Promise settle, so a request still
+      // awaiting a multi-second rebuild would otherwise block native stop()
+      // from ever resolving, even with closeActiveConnections=true.
+      economics.dispose();
+      try {
+        await stop(closeActiveConnections);
+      } finally {
+        if (!closed) {
+          closed = true;
+          db.close();
+        }
       }
     }
   };
@@ -525,10 +559,11 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
 async function workerSyncRunner(
   config: Config,
   status: SyncStatusStore,
+  cancel: { aborted: boolean },
 ): Promise<ReturnType<typeof ingestSync>> {
   status.start();
   try {
-    const report = await runSyncWorker(config);
+    const report = await runSyncWorker(config, cancel);
     status.finishOk(report);
     return report;
   } catch (error) {

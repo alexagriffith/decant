@@ -35,23 +35,33 @@ function fixture(tool: "claude" | "codex", name: string): string {
   return readFileSync(join(import.meta.dir, "..", "fixtures", tool, name), "utf8");
 }
 
+function inProcessComputeVectors(path: string) {
+  const worker = new Database(path, { readonly: true, strict: true });
+  try {
+    return computeSessionEconomicsVectors(worker);
+  } finally {
+    worker.close();
+  }
+}
+
+/** A computeVectors fake that counts calls and computes in-process (no real
+ * Worker), for tests that only care about cache orchestration. */
+function countingComputeVectors(counter: { calls: number }) {
+  return (path: string) => {
+    counter.calls += 1;
+    return Promise.resolve(inProcessComputeVectors(path));
+  };
+}
+
 describe("economics cache", () => {
   test("serves tokenEconomics-identical answers from one computation", async () => {
     const dbPath = seededDbPath();
     const db = openDb(dbPath);
-    let computeCalls = 0;
+    const counter = { calls: 0 };
     const cache = new EconomicsCache({
       dbPath,
       db,
-      computeVectors: (path) => {
-        computeCalls += 1;
-        const worker = new Database(path, { readonly: true, strict: true });
-        try {
-          return Promise.resolve(computeSessionEconomicsVectors(worker));
-        } finally {
-          worker.close();
-        }
-      },
+      computeVectors: countingComputeVectors(counter),
     });
 
     expect(await cache.get()).toEqual(tokenEconomics(db));
@@ -61,7 +71,7 @@ describe("economics cache", () => {
     expect(await cache.get({ from: "2030-01-01", to: null })).toEqual(
       tokenEconomics(db, { from: "2030-01-01" }),
     );
-    expect(computeCalls).toBe(1);
+    expect(counter.calls).toBe(1);
     cache.dispose();
     db.close();
   });
@@ -69,7 +79,7 @@ describe("economics cache", () => {
   test("detects external writes, serves stale, then rebuilds and notifies", async () => {
     const dbPath = seededDbPath();
     const db = openDb(dbPath);
-    let computeCalls = 0;
+    const counter = { calls: 0 };
     let rebuilt = 0;
     const cache = new EconomicsCache({
       dbPath,
@@ -77,19 +87,11 @@ describe("economics cache", () => {
       onRebuilt: () => {
         rebuilt += 1;
       },
-      computeVectors: (path) => {
-        computeCalls += 1;
-        const worker = new Database(path, { readonly: true, strict: true });
-        try {
-          return Promise.resolve(computeSessionEconomicsVectors(worker));
-        } finally {
-          worker.close();
-        }
-      },
+      computeVectors: countingComputeVectors(counter),
     });
 
     const first = await cache.get();
-    expect(computeCalls).toBe(1);
+    expect(counter.calls).toBe(1);
     expect(rebuilt).toBe(0);
 
     // Simulate a sync worker: another connection ingests a session.
@@ -110,7 +112,7 @@ describe("economics cache", () => {
     const stale = await cache.get();
     expect(stale).toEqual(first);
     await cache.settled();
-    expect(computeCalls).toBe(2);
+    expect(counter.calls).toBe(2);
     expect(rebuilt).toBe(1);
     expect(await cache.get()).toEqual(tokenEconomics(db));
     cache.dispose();
@@ -120,26 +122,89 @@ describe("economics cache", () => {
   test("invalidate() kicks a rebuild without a request", async () => {
     const dbPath = seededDbPath();
     const db = openDb(dbPath);
-    let computeCalls = 0;
+    const counter = { calls: 0 };
     const cache = new EconomicsCache({
       dbPath,
       db,
-      computeVectors: (path) => {
-        computeCalls += 1;
-        const worker = new Database(path, { readonly: true, strict: true });
-        try {
-          return Promise.resolve(computeSessionEconomicsVectors(worker));
-        } finally {
-          worker.close();
-        }
-      },
+      computeVectors: countingComputeVectors(counter),
     });
     cache.invalidate();
     await cache.settled();
-    expect(computeCalls).toBe(1);
+    expect(counter.calls).toBe(1);
     expect(await cache.get()).toEqual(tokenEconomics(db));
-    expect(computeCalls).toBe(1);
+    expect(counter.calls).toBe(1);
     cache.dispose();
+    db.close();
+  });
+
+  test("invalidate() during an in-flight rebuild schedules an immediate follow-up", async () => {
+    const dbPath = seededDbPath();
+    const db = openDb(dbPath);
+    const counter = { calls: 0 };
+    let rebuilt = 0;
+    // Captured before the ingest below, standing in for a worker whose read
+    // already happened by the time invalidate() fires mid-build — the case
+    // where naive coalescing would leave the cache pinned to a stale answer.
+    const preIngestVectors = inProcessComputeVectors(dbPath);
+    const gate = Promise.withResolvers<void>();
+    const cache = new EconomicsCache({
+      dbPath,
+      db,
+      onRebuilt: () => {
+        rebuilt += 1;
+      },
+      computeVectors: async (path) => {
+        counter.calls += 1;
+        if (counter.calls === 1) {
+          await gate.promise;
+          return preIngestVectors;
+        }
+        return inProcessComputeVectors(path);
+      },
+    });
+
+    cache.prewarm(); // build #1: blocked on gate, will resolve with stale data
+    upsertSession(
+      db,
+      parseCodexSession("sess-enr-codex", fixture("codex", "enriched.jsonl"), new Map()),
+      "/x/codex.jsonl",
+      1,
+      2,
+      "codex",
+    );
+    // Must NOT be silently coalesced into build #1, which already committed
+    // to answering with the pre-ingest snapshot.
+    cache.invalidate();
+    gate.resolve();
+    await cache.settled();
+
+    expect(counter.calls).toBe(2);
+    expect(rebuilt).toBe(1);
+    expect(await cache.get()).toEqual(tokenEconomics(db));
+    cache.dispose();
+    db.close();
+  });
+
+  test("dispose() aborts an in-flight rebuild instead of waiting for it", async () => {
+    const dbPath = seededDbPath();
+    const db = openDb(dbPath);
+    let sawAbort = false;
+    const cache = new EconomicsCache({
+      dbPath,
+      db,
+      computeVectors: (_path, { signal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            sawAbort = true;
+            reject(new Error("aborted"));
+          });
+        }),
+    });
+
+    cache.prewarm();
+    cache.dispose();
+    await cache.settled();
+    expect(sawAbort).toBe(true);
     db.close();
   });
 
@@ -160,14 +225,7 @@ describe("economics cache", () => {
     const cache = new EconomicsCache({
       dbPath,
       db,
-      computeVectors: (path) => {
-        const worker = new Database(path, { readonly: true, strict: true });
-        try {
-          return Promise.resolve(computeSessionEconomicsVectors(worker));
-        } finally {
-          worker.close();
-        }
-      },
+      computeVectors: countingComputeVectors({ calls: 0 }),
     });
     const response = await handleRequest(
       new Request("http://127.0.0.1:3000/api/analytics/token-economics"),
