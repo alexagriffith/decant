@@ -7,7 +7,13 @@ import { openDb } from "../src/db.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
-import { tokenEconomics, tokenEconomicsForSession } from "../src/token-economics.ts";
+import {
+  aggregateEconomicsVectors,
+  computeSessionEconomicsVectors,
+  economicsVectorMatchesFilter,
+  tokenEconomics,
+  tokenEconomicsForSession,
+} from "../src/token-economics.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-token-economics-test-"));
 afterAll(() => rmSync(workDir, { recursive: true, force: true }));
@@ -249,6 +255,54 @@ describe("token economics", () => {
     );
     expect(scoped?.buckets.some((row) => row.sessions > 1)).toBe(true);
     expect(tokenEconomicsForSession(db, 999_999)).toBeNull();
+    db.close();
+  });
+
+  test("precomputed vectors reproduce tokenEconomics for any date filter", () => {
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl")),
+      "/x/claude.jsonl",
+      1,
+      2,
+      "claude",
+    );
+    upsertSession(
+      db,
+      parseCodexSession("sess-enr-codex", fixture("codex", "enriched.jsonl"), new Map()),
+      "/x/codex.jsonl",
+      1,
+      2,
+      "codex",
+    );
+    // Split the sessions across days, and leave one session dateless to pin
+    // the SQL NULL semantics: excluded whenever a bound is set.
+    db.exec(`
+      UPDATE session SET started_at = '2026-01-01T09:00:00Z' WHERE id = 1;
+      UPDATE session SET started_at = NULL WHERE id = 2;
+    `);
+
+    const vectors = computeSessionEconomicsVectors(db);
+    expect(vectors).toHaveLength(2);
+    const filters = [
+      undefined,
+      { from: "2026-01-01", to: "2026-01-01" },
+      { from: "2026-01-02", to: null },
+      { from: null, to: "2025-12-31" },
+    ] as const;
+    for (const filter of filters) {
+      const fromVectors = aggregateEconomicsVectors(
+        vectors.filter((vector) => economicsVectorMatchesFilter(vector, filter)),
+      );
+      expect(fromVectors).toEqual(tokenEconomics(db, filter));
+    }
+
+    const bounded = vectors.filter((vector) =>
+      economicsVectorMatchesFilter(vector, { from: "2026-01-01", to: null }),
+    );
+    expect(bounded.map((vector) => vector.id)).toEqual([1]);
+    expect(aggregateEconomicsVectors([])).toEqual(tokenEconomics(db, { from: "2030-01-01" }));
     db.close();
   });
 });

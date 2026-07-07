@@ -27,6 +27,7 @@ The pre-cutover tree is preserved in the signed `pre-typescript` tag.
 | `src/query.ts`, `src/stats.ts`, `src/export.ts` | Read/query/render surfaces. |
 | `src/distill.ts`, `src/recommendations.ts` | Deterministic artifact and recommendation generation. |
 | `src/watch.ts`, `src/server.ts` | Watch loop, local JSON routes, SSE, and UI serving. |
+| `src/economics-cache.ts`, `src/stats-worker.ts` | Precomputed token-economics vectors served from memory; heavy scans run in a worker thread off the request loop. |
 | `src/ui/` | React UI bundled by Bun HTML imports. |
 | `src/settings.ts`, `src/launcher.ts` | Local settings and native launcher helpers. |
 | `fixtures/` | Tiny synthetic Claude/Codex session files. |
