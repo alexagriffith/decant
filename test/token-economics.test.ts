@@ -65,6 +65,52 @@ describe("token economics", () => {
     db.close();
   });
 
+  test("splits each bucket into orientation/implementation phases that sum to the whole", () => {
+    const db = freshDb();
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl")),
+      "/x/claude.jsonl",
+      1,
+      2,
+      "claude",
+    );
+
+    const economics = tokenEconomics(db);
+    // Every bucket carries a phase split whose parts sum back to the bucket total.
+    for (const row of economics.buckets) {
+      expect(row.phases).toBeDefined();
+      const { orientation, implementation } = row.phases as NonNullable<typeof row.phases>;
+      expect(orientation.generation_tokens + implementation.generation_tokens).toBe(
+        row.generation_tokens,
+      );
+      expect(orientation.context_window_tokens + implementation.context_window_tokens).toBe(
+        row.context_window_tokens,
+      );
+      expect(orientation.estimated_cost_usd + implementation.estimated_cost_usd).toBeCloseTo(
+        row.estimated_cost_usd,
+        12,
+      );
+      expect(orientation.estimated_cost_usd).toBeGreaterThanOrEqual(0);
+      expect(implementation.estimated_cost_usd).toBeGreaterThanOrEqual(0);
+    }
+    // Totals phase split sums to the run total.
+    const phases = economics.totals.phases as NonNullable<typeof economics.totals.phases>;
+    expect(phases).toBeDefined();
+    expect(
+      phases.orientation.estimated_cost_usd + phases.implementation.estimated_cost_usd,
+    ).toBeCloseTo(economics.totals.estimated_cost_usd, 12);
+    // The fixture reads before it edits, so some context is gathered in orientation.
+    const context = economics.buckets.find((row) => row.bucket === "context");
+    expect(context?.phases?.orientation.context_window_tokens).toBeGreaterThan(0);
+
+    // The fast per-session path cannot order turns, so it omits the phase split.
+    const scoped = tokenEconomicsForSession(db, sessionId);
+    expect(scoped?.buckets.every((row) => row.phases === undefined)).toBe(true);
+    expect(scoped?.totals.phases).toBeUndefined();
+    db.close();
+  });
+
   test("classifies Codex patch edits as code and read-only shell as context", () => {
     const db = freshDb();
     const sessionId = upsertSession(
