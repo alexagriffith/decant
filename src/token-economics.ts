@@ -534,7 +534,7 @@ function sumWeights(weights: Map<ActivityBucket, number>): number {
 function firstEditSeqBySession(blocks: BlockRow[]): Map<number, number> {
   const boundary = new Map<number, number>();
   for (const block of blocks) {
-    if (block.type !== "tool_use" || !isCodeEditTool(block.tool_name)) {
+    if (block.type !== "tool_use" || !isCodeEditTool(block.tool_name, block.tool_input)) {
       continue;
     }
     const current = boundary.get(block.session_id);
