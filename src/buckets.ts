@@ -64,6 +64,13 @@ export function toolBucket(
   return "context";
 }
 
+/** True for tools that mutate a file on disk (the phase boundary marker):
+ * the first such tool_use flips a session from orientation to implementation.
+ * Excludes shell writes -- only explicit edit/patch/write tools count. */
+export function isCodeEditTool(toolName: string | null | undefined): boolean {
+  return CODE_TOOLS.has(localToolName(toolName ?? "").toLowerCase());
+}
+
 export function blockBucket(
   blockType: string | null,
   toolName?: string | null,
