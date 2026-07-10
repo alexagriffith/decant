@@ -32,9 +32,9 @@ export interface TokenEconomicsBucket {
   tool_calls: number;
   sessions: number;
   cost_share: number;
-  // Present only from the ordered whole-archive path (`tokens`), which can place
-  // each contribution before/after the first edit. Absent from the fast
-  // per-session path, which distributes by aggregate weights and has no order.
+  // Present only from the ordered whole-archive path, which can place each
+  // contribution before/after the first edit. Absent from the fast per-session
+  // path, which distributes by aggregate weights and has no order.
   phases?: Record<Phase, PhaseAmounts>;
 }
 
@@ -52,6 +52,7 @@ export interface TokenEconomics {
 
 interface SessionRow {
   id: number;
+  started_at: string | null;
   model: string | null;
   total_input_tokens: number;
   total_output_tokens: number;
@@ -76,17 +77,16 @@ interface BlockRow {
   role: string | null;
   output_tokens: number | null;
   type: string | null;
-  text: string | null;
   tool_name: string | null;
   tool_input: string | null;
+  text_bytes: number;
 }
 
 interface ResultRow {
   session_id: number;
   tool_name: string | null;
   input: string | null;
-  tool_result: string | null;
-  output_bytes: number | null;
+  bytes: number;
   call_seq: number | null;
 }
 
@@ -99,6 +99,7 @@ interface MutableBucket {
   // Orientation-phase portions (pre-first-edit). Implementation = total - these.
   // genOrientation feeds windowOrientation the same way generation feeds
   // contextWindow, so the phase cost split mirrors the whole-bucket formula.
+  // costOrientation is derived at aggregation only (the builder leaves it 0).
   genOrientation: number;
   windowOrientation: number;
   costOrientation: number;
@@ -106,104 +107,91 @@ interface MutableBucket {
 
 type QueryParam = string | number;
 
+export interface SessionEconomicsVector {
+  id: number;
+  started_at: string | null;
+  input_cost: number;
+  output_cost: number;
+  buckets: Record<
+    ActivityBucket,
+    {
+      generation: number;
+      context_window: number;
+      tool_calls: number;
+      touched: boolean;
+      // Pre-first-edit portions. context_window_orientation holds the
+      // tool-result orientation window only (before generation is folded in),
+      // matching how context_window excludes folded-in generation.
+      generation_orientation: number;
+      context_window_orientation: number;
+    }
+  >;
+}
+
 export function tokenEconomics(db: Database, filter?: DateFilter | null): TokenEconomics {
   const date = sessionDatePredicate("s", filter);
-  return tokenEconomicsForScope(
-    db,
-    `WITH scoped_session AS (
-       SELECT s.id FROM session s ${whereClause(date)}
-     )`,
-    date.params,
+  return aggregateEconomicsVectors(
+    vectorsForScope(
+      db,
+      `WITH scoped_session AS (
+         SELECT s.id FROM session s ${whereClause(date)}
+       )`,
+      date.params,
+    ),
   );
 }
 
-export function tokenEconomicsForSession(db: Database, sessionId: number): TokenEconomics | null {
-  return fastTokenEconomicsForSession(db, sessionId);
+/**
+ * Per-session activity vectors for the whole archive. Sums of these vectors
+ * reproduce tokenEconomics() exactly for any date scope, so a caller can
+ * compute them once (off the request path) and answer arbitrary date filters
+ * from memory via aggregateEconomicsVectors().
+ */
+export function computeSessionEconomicsVectors(db: Database): SessionEconomicsVector[] {
+  return vectorsForScope(db, "WITH scoped_session AS (SELECT id FROM session)", []);
 }
 
-function tokenEconomicsForScope(
-  db: Database,
-  scopeCte: string,
-  params: QueryParam[],
+/** Mirrors sessionDatePredicate: string-compare on the YYYY-MM-DD prefix. */
+export function economicsVectorMatchesFilter(
+  vector: SessionEconomicsVector,
+  filter?: DateFilter | null,
+): boolean {
+  const from = filter?.from ?? null;
+  const to = filter?.to ?? null;
+  if (from == null && to == null) {
+    return true;
+  }
+  if (vector.started_at == null) {
+    return false;
+  }
+  const day = vector.started_at.slice(0, 10);
+  return (from == null || day >= from) && (to == null || day <= to);
+}
+
+export function aggregateEconomicsVectors(
+  vectors: Iterable<SessionEconomicsVector>,
 ): TokenEconomics {
-  const sessions = db
-    .query(
-      `${scopeCte}
-       SELECT s.id, s.model, s.total_input_tokens, s.total_output_tokens,
-              s.total_cache_read_tokens, s.total_cache_creation_tokens,
-              s.total_reasoning_tokens, s.est_reasoning_tokens
-       FROM session s
-       JOIN scoped_session fs ON fs.id = s.id`,
-    )
-    .all(...params) as SessionRow[];
-  const sessionIds = sessions.map((session) => session.id);
   const buckets = emptyBuckets();
-
-  if (sessionIds.length === 0) {
-    return finish(buckets, 0, 0, true);
-  }
-
-  const blocks = db
-    .query(
-      `${scopeCte}
-       SELECT b.session_id, m.id AS message_id, m.seq AS seq, m.role, m.output_tokens, b.type,
-              b.text, b.tool_name, b.tool_input
-       FROM block b
-       JOIN message m ON m.id = b.message_id
-       JOIN scoped_session fs ON fs.id = b.session_id
-       ORDER BY b.session_id, m.seq, b.ordinal`,
-    )
-    .all(...params) as BlockRow[];
-  const boundaries = firstEditSeqBySession(blocks);
-  allocateGeneration(sessions, blocks, buckets, boundaries);
-
-  const results = db
-    .query(
-      `${scopeCte}
-       SELECT t.session_id, t.tool_name, t.input, rb.tool_result, t.output_bytes,
-              cm.seq AS call_seq
-       FROM tool_call t
-       JOIN scoped_session fs ON fs.id = t.session_id
-       LEFT JOIN block rb ON rb.id = t.result_block_id
-       LEFT JOIN block cb ON cb.id = t.call_block_id
-       LEFT JOIN message cm ON cm.id = cb.message_id`,
-    )
-    .all(...params) as ResultRow[];
-  for (const row of results) {
-    const bucket = toolBucket(row.tool_name, row.input);
-    const size = row.output_bytes ?? byteLength(row.tool_result ?? "");
-    const entry = buckets.get(bucket);
-    if (entry == null) {
-      continue;
-    }
-    const tokens = size / CHARS_PER_TOKEN;
-    entry.contextWindow += tokens;
-    entry.toolCalls += 1;
-    entry.sessions.add(row.session_id);
-    // A tool result belongs to orientation if its call happened before the
-    // session's first edit. Unplaceable calls (no call block) default to
-    // implementation so orientation is never overstated.
-    if (phaseOf(boundaries, row.session_id, row.call_seq) === "orientation") {
-      entry.windowOrientation += tokens;
-    }
-  }
-
   let inputCost = 0;
   let outputCost = 0;
-  for (const session of sessions) {
-    const parts = estimateCostParts(
-      session.model,
-      {
-        input: session.total_input_tokens,
-        output: session.total_output_tokens,
-        cacheRead: session.total_cache_read_tokens,
-        cacheCreation: session.total_cache_creation_tokens,
-        reasoning: session.total_reasoning_tokens,
-      },
-      defaultPricing(),
-    );
-    inputCost += parts.input + parts.cacheRead + parts.cacheCreation;
-    outputCost += parts.output;
+  for (const vector of vectors) {
+    inputCost += vector.input_cost;
+    outputCost += vector.output_cost;
+    for (const bucket of ACTIVITY_BUCKETS) {
+      const entry = buckets.get(bucket);
+      const part = vector.buckets[bucket];
+      if (entry == null || part == null) {
+        continue;
+      }
+      entry.generation += part.generation;
+      entry.contextWindow += part.context_window;
+      entry.genOrientation += part.generation_orientation;
+      entry.windowOrientation += part.context_window_orientation;
+      entry.toolCalls += part.tool_calls;
+      if (part.touched) {
+        entry.sessions.add(vector.id);
+      }
+    }
   }
 
   const totalGeneration = sumBuckets(buckets, "generation");
@@ -226,6 +214,134 @@ function tokenEconomicsForScope(
   }
   return finish(buckets, inputCost, outputCost, true);
 }
+
+export function tokenEconomicsForSession(db: Database, sessionId: number): TokenEconomics | null {
+  return fastTokenEconomicsForSession(db, sessionId);
+}
+
+function vectorsForScope(
+  db: Database,
+  scopeCte: string,
+  params: QueryParam[],
+): SessionEconomicsVector[] {
+  const sessions = db
+    .query(
+      `${scopeCte}
+       SELECT s.id, s.started_at, s.model, s.total_input_tokens, s.total_output_tokens,
+              s.total_cache_read_tokens, s.total_cache_creation_tokens,
+              s.total_reasoning_tokens, s.est_reasoning_tokens
+       FROM session s
+       JOIN scoped_session fs ON fs.id = s.id`,
+    )
+    .all(...params) as SessionRow[];
+  if (sessions.length === 0) {
+    return [];
+  }
+
+  const vectorBySession = new Map<number, { session: SessionRow; buckets: PerSessionBuckets }>();
+  for (const session of sessions) {
+    vectorBySession.set(session.id, { session, buckets: emptyBuckets() });
+  }
+
+  // Ship byte lengths, not text: bucket math only needs sizes, plus the tool
+  // input for the block types whose bucket depends on the command being run.
+  // Ordering (session, seq, ordinal) lets us place each block before/after the
+  // session's first file edit.
+  const blocks = db
+    .query(
+      `${scopeCte}
+       SELECT b.session_id, b.message_id, m.seq AS seq, m.role, m.output_tokens, b.type,
+              b.tool_name,
+              CASE WHEN b.type IN ('tool_use', 'tool_result', 'web_search')
+                   THEN b.tool_input END AS tool_input,
+              COALESCE(length(CAST(b.text AS BLOB)), 0) AS text_bytes
+       FROM block b
+       JOIN message m ON m.id = b.message_id
+       JOIN scoped_session fs ON fs.id = b.session_id
+       ORDER BY b.session_id, m.seq, b.ordinal`,
+    )
+    .all(...params) as BlockRow[];
+  const boundaries = firstEditSeqBySession(blocks);
+  const blocksBySession = groupBy(blocks, (block) => block.session_id);
+  for (const [sessionId, sessionBlocks] of blocksBySession) {
+    const vector = vectorBySession.get(sessionId);
+    if (vector != null) {
+      allocateGeneration([vector.session], sessionBlocks, vector.buckets, boundaries);
+    }
+  }
+  for (const vector of vectorBySession.values()) {
+    if (!blocksBySession.has(vector.session.id)) {
+      allocateGeneration([vector.session], [], vector.buckets, boundaries);
+    }
+  }
+
+  const results = db
+    .query(
+      `${scopeCte}
+       SELECT t.session_id, t.tool_name, t.input,
+              COALESCE(t.output_bytes, length(CAST(rb.tool_result AS BLOB)), 0) AS bytes,
+              cm.seq AS call_seq
+       FROM tool_call t
+       JOIN scoped_session fs ON fs.id = t.session_id
+       LEFT JOIN block rb ON rb.id = t.result_block_id
+       LEFT JOIN block cb ON cb.id = t.call_block_id
+       LEFT JOIN message cm ON cm.id = cb.message_id`,
+    )
+    .all(...params) as ResultRow[];
+  for (const row of results) {
+    const vector = vectorBySession.get(row.session_id);
+    const entry = vector?.buckets.get(toolBucket(row.tool_name, row.input));
+    if (entry == null) {
+      continue;
+    }
+    const tokens = row.bytes / CHARS_PER_TOKEN;
+    entry.contextWindow += tokens;
+    entry.toolCalls += 1;
+    entry.sessions.add(row.session_id);
+    // A tool result belongs to orientation if its call happened before the
+    // session's first edit. Unplaceable calls (no call block) default to
+    // implementation so orientation is never overstated.
+    if (phaseOf(boundaries, row.session_id, row.call_seq) === "orientation") {
+      entry.windowOrientation += tokens;
+    }
+  }
+
+  return sessions.map((session) => {
+    const mutable = vectorBySession.get(session.id);
+    const parts = estimateCostParts(
+      session.model,
+      {
+        input: session.total_input_tokens,
+        output: session.total_output_tokens,
+        cacheRead: session.total_cache_read_tokens,
+        cacheCreation: session.total_cache_creation_tokens,
+        reasoning: session.total_reasoning_tokens,
+      },
+      defaultPricing(),
+    );
+    const buckets = {} as SessionEconomicsVector["buckets"];
+    for (const bucket of ACTIVITY_BUCKETS) {
+      const entry = mutable?.buckets.get(bucket);
+      buckets[bucket] = {
+        generation: entry?.generation ?? 0,
+        context_window: entry?.contextWindow ?? 0,
+        tool_calls: entry?.toolCalls ?? 0,
+        touched: (entry?.sessions.size ?? 0) > 0,
+        generation_orientation: entry?.genOrientation ?? 0,
+        context_window_orientation: entry?.windowOrientation ?? 0,
+      };
+    }
+    return {
+      id: session.id,
+      started_at: session.started_at,
+      input_cost: parts.input + parts.cacheRead + parts.cacheCreation,
+      output_cost: parts.output,
+      buckets,
+    };
+  });
+}
+
+type PerSessionBuckets = Map<ActivityBucket, MutableBucket>;
 
 function fastTokenEconomicsForSession(db: Database, sessionId: number): TokenEconomics | null {
   const scopeCte = `WITH RECURSIVE scoped_session(id) AS (
@@ -317,6 +433,7 @@ function fastTokenEconomicsForSession(db: Database, sessionId: number): TokenEco
       outputCost * share(entry.generation, totalGeneration) +
       inputCost * share(entry.contextWindow, totalWindow);
   }
+  // No ordering on the fast path, so it emits no phase split (withPhases=false).
   return finish(buckets, inputCost, outputCost);
 }
 
@@ -580,7 +697,7 @@ function blockSize(block: BlockRow): number {
   if (block.type === "tool_use") {
     return byteLength(`${block.tool_name ?? ""}\n${block.tool_input ?? ""}`);
   }
-  return byteLength(block.text ?? "");
+  return block.text_bytes;
 }
 
 function addBucket(

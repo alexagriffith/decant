@@ -46,6 +46,12 @@ export interface WatchStoppedEvent {
 
 export type WatchEvent = SyncEvent | SyncErrorEvent | WatchReadyEvent | WatchStoppedEvent;
 
+export type SyncRunner = (
+  config: Config,
+  status: SyncStatusStore,
+  cancel: { aborted: boolean },
+) => Promise<SyncReport>;
+
 export interface WatchOptions {
   config: Config;
   intervalMs?: number;
@@ -55,6 +61,12 @@ export interface WatchOptions {
   open?: (path: string) => Database;
   enableWatch?: boolean;
   syncOnStart?: boolean;
+  /**
+   * How to execute one sync. Defaults to the in-process runSyncOnce; servers
+   * pass a worker-backed runner so multi-second ingests cannot stall the
+   * request event loop.
+   */
+  runner?: SyncRunner;
 }
 
 export interface WatchHandle {
@@ -150,6 +162,9 @@ export function startWatch(options: WatchOptions): WatchHandle {
   const intervalMs = options.intervalMs ?? DEFAULT_SYNC_INTERVAL_MS;
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   const open = options.open ?? openDb;
+  const runner: SyncRunner =
+    options.runner ??
+    (async (config, syncStatus, cancelFlag) => runSyncOnce(config, syncStatus, cancelFlag, open));
   const enableWatch = options.enableWatch !== false;
   const syncOnStart = options.syncOnStart !== false;
   const cancel = { aborted: false };
@@ -208,7 +223,7 @@ export function startWatch(options: WatchOptions): WatchHandle {
         nextReason = null;
         pendingReason = null;
         try {
-          const report = runSyncOnce(options.config, status, cancel, open);
+          const report = await runner(options.config, status, cancel);
           emit({ type: "sync", reason: current, report, status: status.snapshot() });
         } catch (error) {
           emit({

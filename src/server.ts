@@ -4,6 +4,7 @@ import type { Config } from "./config.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
 import { openDb } from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
+import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
 import type { Operation } from "./enrich.ts";
 import type { sync as ingestSync } from "./ingest.ts";
 import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
@@ -36,21 +37,37 @@ import {
 } from "./stats.ts";
 import { tokenEconomics, tokenEconomicsForSession } from "./token-economics.ts";
 import uiBundle from "./ui/index.html";
+import { type SyncStatusStore, startWatch, type WatchEvent, type WatchHandle } from "./watch.ts";
 
 export const DEFAULT_SERVE_HOST = "127.0.0.1";
 export const DEFAULT_SERVE_PORT = 3000;
+
+export interface ServeWatchOptions {
+  intervalMs?: number;
+  debounceMs?: number;
+  enableWatch?: boolean;
+  onEvent?: (event: WatchEvent) => void;
+}
 
 export interface ServeOptions {
   config: Config;
   port?: number;
   hostname?: string;
   trustedPeers?: string[];
+  /** When set, serve() runs the source watcher itself with a worker-backed
+   * sync runner so ingests never block the request event loop, and republishes
+   * watcher events to SSE clients. */
+  watch?: ServeWatchOptions;
+  /** Test seam: override how the economics cache computes vectors, e.g. to
+   * simulate a rebuild that is still in flight when the server is stopped. */
+  economicsComputeVectors?: EconomicsCacheOptions["computeVectors"];
 }
 
 type Db = ReturnType<typeof openDb>;
 type ServerEvent = { type: string };
 interface RequestContext {
   db?: Db;
+  economics?: EconomicsCache;
   boundHostname?: string;
   remoteAddress?: string | null;
   trustedPeers?: string[];
@@ -158,7 +175,7 @@ export async function handleRequest(
       if (contentTypeFailure != null) {
         return contentTypeFailure;
       }
-      return await syncNow(config);
+      return await syncNow(config, context.economics);
     }
     if (request.method === "GET" && url.pathname === "/api/sessions") {
       return withDb(config, context, (db) =>
@@ -234,6 +251,9 @@ export async function handleRequest(
       return withDb(config, context, (db) => json(modelSparklines(db, dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/token-economics") {
+      if (context.economics != null) {
+        return json(await context.economics.get(dateFilter));
+      }
       return withDb(config, context, (db) => json(tokenEconomics(db, dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/now") {
@@ -324,7 +344,7 @@ function settingsResponse(settings = getSettings()): Record<string, unknown> {
   };
 }
 
-async function syncNow(config: Config): Promise<Response> {
+async function syncNow(config: Config, economics?: EconomicsCache): Promise<Response> {
   syncStatus.in_progress = true;
   syncStatus.last_error = null;
   try {
@@ -337,6 +357,7 @@ async function syncNow(config: Config): Promise<Response> {
     syncStatus.ingested_count = report.ingested;
     publishServerEvent({ type: "sync", reason: "manual", report, status: { ...syncStatus } });
     if (report.ingested > 0) {
+      economics?.invalidate();
       publishServerEvent({
         type: "archive_updated",
         ingested: report.ingested,
@@ -352,14 +373,25 @@ async function syncNow(config: Config): Promise<Response> {
   }
 }
 
-function runSyncWorker(config: Config): Promise<ReturnType<typeof ingestSync>> {
+function runSyncWorker(
+  config: Config,
+  cancel?: { aborted: boolean },
+): Promise<ReturnType<typeof ingestSync>> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./sync-worker.ts", import.meta.url), { type: "module" });
+    let cancelPoll: Timer | null = null;
+    const settle = (): void => {
+      if (cancelPoll != null) {
+        clearInterval(cancelPoll);
+        cancelPoll = null;
+      }
+      worker.terminate();
+    };
     worker.addEventListener("message", (event) => {
       const data = event.data as
         | { ok: true; report: ReturnType<typeof ingestSync> }
         | { ok: false; error: string };
-      worker.terminate();
+      settle();
       if (data.ok) {
         resolve(data.report);
       } else {
@@ -367,9 +399,20 @@ function runSyncWorker(config: Config): Promise<ReturnType<typeof ingestSync>> {
       }
     });
     worker.addEventListener("error", (event) => {
-      worker.terminate();
+      settle();
       reject(event.error instanceof Error ? event.error : new Error(String(event.error)));
     });
+    if (cancel != null) {
+      // The in-process runner aborts between files; a worker cannot observe the
+      // flag, so poll it and terminate, resolving with the same cancelled-report
+      // shape so shutdown stays prompt instead of waiting out a long ingest.
+      cancelPoll = setInterval(() => {
+        if (cancel.aborted) {
+          settle();
+          resolve({ scanned: 0, ingested: 0, skipped: 0, issues: 0, failed: 0, cancelled: true });
+        }
+      }, 150);
+    }
     worker.postMessage(config);
   });
 }
@@ -435,6 +478,33 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   mkdirSync(dirname(options.config.dbPath), { recursive: true });
   const db = openDb(options.config.dbPath);
   ensureDerivedMetadata(db);
+  const economics = new EconomicsCache({
+    dbPath: options.config.dbPath,
+    db,
+    computeVectors: options.economicsComputeVectors,
+    onRebuilt: () =>
+      publishServerEvent({
+        type: "archive_updated",
+        reason: "stats",
+        last_sync_at: syncStatus.last_sync_at,
+      }),
+  });
+  economics.prewarm();
+  let watchHandle: WatchHandle | null = null;
+  if (options.watch != null) {
+    const onEvent = options.watch.onEvent;
+    watchHandle = startWatch({
+      config: options.config,
+      intervalMs: options.watch.intervalMs,
+      debounceMs: options.watch.debounceMs,
+      enableWatch: options.watch.enableWatch,
+      runner: workerSyncRunner,
+      onEvent: (event) => {
+        applyWatchEvent(event, economics);
+        onEvent?.(event);
+      },
+    });
+  }
   const server = Bun.serve({
     hostname,
     port,
@@ -453,6 +523,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
     fetch: (request, bunServer) =>
       handleRequest(request, options.config, {
         db,
+        economics,
         boundHostname: hostname,
         remoteAddress: bunServer.requestIP(request)?.address ?? null,
         trustedPeers,
@@ -462,15 +533,62 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   let closed = false;
   server.stop = async (closeActiveConnections?: boolean): Promise<void> => {
     try {
-      await stop(closeActiveConnections);
+      await watchHandle?.stop();
     } finally {
-      if (!closed) {
-        closed = true;
-        db.close();
+      // Abort any in-flight economics rebuild BEFORE awaiting the native
+      // stop(): forcing TCP connections closed doesn't make an in-flight
+      // request handler's own awaited Promise settle, so a request still
+      // awaiting a multi-second rebuild would otherwise block native stop()
+      // from ever resolving, even with closeActiveConnections=true.
+      economics.dispose();
+      try {
+        await stop(closeActiveConnections);
+      } finally {
+        if (!closed) {
+          closed = true;
+          db.close();
+        }
       }
     }
   };
   return server;
+}
+
+/** Runs one watcher-triggered sync in a worker thread, keeping request
+ * handling responsive while multi-second ingests run. */
+async function workerSyncRunner(
+  config: Config,
+  status: SyncStatusStore,
+  cancel: { aborted: boolean },
+): Promise<ReturnType<typeof ingestSync>> {
+  status.start();
+  try {
+    const report = await runSyncWorker(config, cancel);
+    status.finishOk(report);
+    return report;
+  } catch (error) {
+    status.finishErr(error instanceof Error ? error.message : String(error));
+    throw error;
+  }
+}
+
+function applyWatchEvent(event: WatchEvent, economics: EconomicsCache): void {
+  if ("status" in event && event.status != null) {
+    syncStatus.last_sync_at = event.status.last_sync_at;
+    syncStatus.in_progress = event.status.in_progress;
+    syncStatus.last_report = event.status.last_report;
+    syncStatus.last_error = event.status.last_error;
+    syncStatus.ingested_count = event.status.ingested_count;
+  }
+  publishServerEvent(event);
+  if (event.type === "sync" && event.report.ingested > 0) {
+    economics.invalidate();
+    publishServerEvent({
+      type: "archive_updated",
+      ingested: event.report.ingested,
+      last_sync_at: syncStatus.last_sync_at,
+    });
+  }
 }
 
 function withDb(config: Config, context: RequestContext, callback: (db: Db) => Response): Response {
