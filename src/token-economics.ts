@@ -12,9 +12,9 @@ import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filte
 const CHARS_PER_TOKEN = 4;
 const encoder = new TextEncoder();
 
-// A gap longer than this between two messages is the agent waiting on the human,
-// not working; cap it so idle time never inflates the activity latency. Mirrors
-// the ACTIVE_GAP_CAP_SECONDS used for session active_seconds in enrich.ts.
+// Cap every inter-message gap so long model, tool, or human pauses do not
+// dominate the timing breakdown. Mirrors the ACTIVE_GAP_CAP_SECONDS used for
+// session active_seconds in enrich.ts.
 const ACTIVE_GAP_CAP_MS = 300_000;
 
 /** A run splits into two phases at the first file edit: "orientation" (reading
@@ -43,10 +43,10 @@ export interface TokenEconomicsBucket {
   // sum of capped gaps between consecutive messages, charged to the activity
   // mix of the message that closed each gap (see allocateLatency). Answers
   // "how much *time* went to orientation/planning/etc.", not just tokens.
+  // User-authored response gaps are reported separately in totals.
   active_ms: number;
-  // Present only from the ordered whole-archive path, which can place each
-  // contribution before/after the first edit. Absent from the fast per-session
-  // path, which distributes by aggregate weights and has no order.
+  // Ordered block allocation places each contribution before/after the first
+  // edit for both archive-wide and per-session results.
   phases?: Record<Phase, PhaseAmounts>;
 }
 
@@ -58,7 +58,12 @@ export interface TokenEconomics {
     estimated_cost_usd: number;
     input_cost_usd: number;
     output_cost_usd: number;
+    // Time attributed to the four agent activity buckets.
     active_ms: number;
+    // Capped gaps closed by user-authored text, kept separate from agent time.
+    waiting_on_user_ms: number;
+    // All timing captured from block-bearing messages: agent time plus waiting.
+    attributed_ms: number;
     phases?: Record<Phase, PhaseAmounts>;
   };
 }
@@ -73,14 +78,6 @@ interface SessionRow {
   total_cache_creation_tokens: number;
   total_reasoning_tokens: number;
   est_reasoning_tokens: number;
-}
-
-interface FastToolRow {
-  session_id: number;
-  tool_name: string | null;
-  input: string | null;
-  calls: number;
-  output_bytes: number | null;
 }
 
 interface BlockRow {
@@ -123,6 +120,10 @@ interface MutableBucket {
   activeMsOrientation: number;
 }
 
+interface MutableLatency {
+  waitingOnUserMs: number;
+}
+
 type QueryParam = string | number;
 
 export interface SessionEconomicsVector {
@@ -130,6 +131,9 @@ export interface SessionEconomicsVector {
   started_at: string | null;
   input_cost: number;
   output_cost: number;
+  // Total billed input volume, including cache reads and cache creation.
+  billed_input_tokens: number;
+  waiting_on_user_ms: number;
   buckets: Record<
     ActivityBucket,
     {
@@ -195,9 +199,11 @@ export function aggregateEconomicsVectors(
   const buckets = emptyBuckets();
   let inputCost = 0;
   let outputCost = 0;
+  let waitingOnUserMs = 0;
   for (const vector of vectors) {
     inputCost += vector.input_cost;
     outputCost += vector.output_cost;
+    waitingOnUserMs += vector.waiting_on_user_ms;
     for (const bucket of ACTIVITY_BUCKETS) {
       const entry = buckets.get(bucket);
       const part = vector.buckets[bucket];
@@ -235,11 +241,78 @@ export function aggregateEconomicsVectors(
       outputCost * share(entry.genOrientation, totalGeneration) +
       inputCost * share(entry.windowOrientation, windowBasis);
   }
-  return finish(buckets, inputCost, outputCost, true);
+  return finish(buckets, inputCost, outputCost, waitingOnUserMs);
 }
 
 export function tokenEconomicsForSession(db: Database, sessionId: number): TokenEconomics | null {
-  return fastTokenEconomicsForSession(db, sessionId);
+  const scopeCte = `WITH RECURSIVE scoped_session(id) AS (
+    SELECT id FROM session WHERE id = ?1
+    UNION ALL
+    SELECT child.id
+    FROM session child
+    JOIN scoped_session parent ON parent.id = child.parent_session_id
+  )`;
+  const vectors = vectorsForScope(db, scopeCte, [sessionId]);
+  return vectors.length === 0 ? null : aggregateEconomicsVectors(withBilledInputWindow(vectors));
+}
+
+/** Session panels retain their billed-input Window total while using the same
+ * block-level activity weights as archive analytics. Allocate each run's input
+ * volume over the content that actually contributed to its context. */
+function withBilledInputWindow(vectors: SessionEconomicsVector[]): SessionEconomicsVector[] {
+  return vectors.map((vector) => {
+    const totalWeight = ACTIVITY_BUCKETS.reduce((sum, bucket) => {
+      const part = vector.buckets[bucket];
+      return sum + part.generation + part.context_window;
+    }, 0);
+    const buckets = {} as SessionEconomicsVector["buckets"];
+    for (const bucket of ACTIVITY_BUCKETS) {
+      const part = vector.buckets[bucket];
+      const weight = part.generation + part.context_window;
+      const allocatedInput =
+        totalWeight > 0
+          ? vector.billed_input_tokens * (weight / totalWeight)
+          : bucket === "context"
+            ? vector.billed_input_tokens
+            : 0;
+      const orientationWeight = part.generation_orientation + part.context_window_orientation;
+      const orientationShare =
+        weight > 0 ? orientationWeight / weight : bucket === "context" ? 1 : 0;
+      buckets[bucket] = {
+        ...part,
+        context_window: part.context_window + allocatedInput,
+        context_window_orientation:
+          part.context_window_orientation + allocatedInput * orientationShare,
+        touched: part.touched || allocatedInput > 0,
+      };
+    }
+    return { ...vector, buckets };
+  });
+}
+
+/** Load ordered block rows for generation and latency allocation. Tool-result
+ * blocks do not duplicate their calling tool metadata, so resolve it through
+ * the ingest-time tool_call linkage. */
+function blockRowsForScope(db: Database, scopeCte: string, params: QueryParam[]): BlockRow[] {
+  return db
+    .query(
+      `${scopeCte}
+       SELECT b.session_id, b.message_id, m.seq AS seq, m.role, m.output_tokens, b.type,
+              COALESCE(b.tool_name, tc.tool_name) AS tool_name,
+              m.timestamp AS timestamp,
+              CASE WHEN b.type IN ('tool_use', 'tool_result', 'web_search')
+                   THEN COALESCE(b.tool_input, tc.input) END AS tool_input,
+              CASE WHEN b.type = 'tool_result'
+                   THEN COALESCE(length(CAST(b.tool_result AS BLOB)), 0)
+                   ELSE COALESCE(length(CAST(b.text AS BLOB)), 0)
+              END AS text_bytes
+       FROM block b
+       JOIN message m ON m.id = b.message_id
+       JOIN scoped_session fs ON fs.id = b.session_id
+       LEFT JOIN tool_call tc ON tc.result_block_id = b.id
+       ORDER BY b.session_id, m.seq, b.ordinal`,
+    )
+    .all(...params) as BlockRow[];
 }
 
 function vectorsForScope(
@@ -261,36 +334,30 @@ function vectorsForScope(
     return [];
   }
 
-  const vectorBySession = new Map<number, { session: SessionRow; buckets: PerSessionBuckets }>();
+  const vectorBySession = new Map<
+    number,
+    { session: SessionRow; buckets: PerSessionBuckets; latency: MutableLatency }
+  >();
   for (const session of sessions) {
-    vectorBySession.set(session.id, { session, buckets: emptyBuckets() });
+    vectorBySession.set(session.id, {
+      session,
+      buckets: emptyBuckets(),
+      latency: emptyLatency(),
+    });
   }
 
   // Ship byte lengths, not text: bucket math only needs sizes, plus the tool
   // input for the block types whose bucket depends on the command being run.
   // Ordering (session, seq, ordinal) lets us place each block before/after the
   // session's first file edit.
-  const blocks = db
-    .query(
-      `${scopeCte}
-       SELECT b.session_id, b.message_id, m.seq AS seq, m.role, m.output_tokens, b.type,
-              b.tool_name, m.timestamp AS timestamp,
-              CASE WHEN b.type IN ('tool_use', 'tool_result', 'web_search')
-                   THEN b.tool_input END AS tool_input,
-              COALESCE(length(CAST(b.text AS BLOB)), 0) AS text_bytes
-       FROM block b
-       JOIN message m ON m.id = b.message_id
-       JOIN scoped_session fs ON fs.id = b.session_id
-       ORDER BY b.session_id, m.seq, b.ordinal`,
-    )
-    .all(...params) as BlockRow[];
+  const blocks = blockRowsForScope(db, scopeCte, params);
   const boundaries = firstEditSeqBySession(blocks);
   const blocksBySession = groupBy(blocks, (block) => block.session_id);
   for (const [sessionId, sessionBlocks] of blocksBySession) {
     const vector = vectorBySession.get(sessionId);
     if (vector != null) {
       allocateGeneration([vector.session], sessionBlocks, vector.buckets, boundaries);
-      allocateLatency(sessionId, sessionBlocks, vector.buckets, boundaries);
+      allocateLatency(sessionId, sessionBlocks, vector.buckets, boundaries, vector.latency);
     }
   }
   for (const vector of vectorBySession.values()) {
@@ -350,7 +417,7 @@ function vectorsForScope(
         generation: entry?.generation ?? 0,
         context_window: entry?.contextWindow ?? 0,
         tool_calls: entry?.toolCalls ?? 0,
-        touched: (entry?.sessions.size ?? 0) > 0,
+        touched: (entry?.sessions.size ?? 0) > 0 || (entry?.activeMs ?? 0) > 0,
         generation_orientation: entry?.genOrientation ?? 0,
         context_window_orientation: entry?.windowOrientation ?? 0,
         active_ms: entry?.activeMs ?? 0,
@@ -362,218 +429,17 @@ function vectorsForScope(
       started_at: session.started_at,
       input_cost: parts.input + parts.cacheRead + parts.cacheCreation,
       output_cost: parts.output,
+      billed_input_tokens:
+        session.total_input_tokens +
+        session.total_cache_read_tokens +
+        session.total_cache_creation_tokens,
+      waiting_on_user_ms: mutable?.latency.waitingOnUserMs ?? 0,
       buckets,
     };
   });
 }
 
 type PerSessionBuckets = Map<ActivityBucket, MutableBucket>;
-
-function fastTokenEconomicsForSession(db: Database, sessionId: number): TokenEconomics | null {
-  const scopeCte = `WITH RECURSIVE scoped_session(id) AS (
-    SELECT id FROM session WHERE id = ?1
-    UNION ALL
-    SELECT child.id
-    FROM session child
-    JOIN scoped_session parent ON parent.id = child.parent_session_id
-  )`;
-  const sessions = db
-    .query(
-      `${scopeCte}
-       SELECT s.id, s.model, s.total_input_tokens, s.total_output_tokens,
-              s.total_cache_read_tokens, s.total_cache_creation_tokens,
-              s.total_reasoning_tokens, s.est_reasoning_tokens
-       FROM session s
-       JOIN scoped_session fs ON fs.id = s.id`,
-    )
-    .all(sessionId) as SessionRow[];
-  if (sessions.length === 0) {
-    return null;
-  }
-
-  const buckets = emptyBuckets();
-  const toolRows = db
-    .query(
-      `${scopeCte}
-       SELECT t.session_id, t.tool_name, t.input, 1 AS calls,
-              COALESCE(t.output_bytes, 0) AS output_bytes
-       FROM tool_call t
-       JOIN scoped_session fs ON fs.id = t.session_id`,
-    )
-    .all(sessionId) as FastToolRow[];
-
-  let inputCost = 0;
-  let outputCost = 0;
-  let inputWindowTokens = 0;
-  let remainingOutputTokens = 0;
-  const toolCallWeights = new Map<ActivityBucket, number>();
-  for (const session of sessions) {
-    const planning = Math.min(
-      session.total_output_tokens,
-      session.total_reasoning_tokens || session.est_reasoning_tokens,
-    );
-    addBucket(buckets, "planning", planning, session.id);
-    remainingOutputTokens += Math.max(0, session.total_output_tokens - planning);
-    inputWindowTokens +=
-      session.total_input_tokens +
-      session.total_cache_read_tokens +
-      session.total_cache_creation_tokens;
-    const parts = estimateCostParts(
-      session.model,
-      {
-        input: session.total_input_tokens,
-        output: session.total_output_tokens,
-        cacheRead: session.total_cache_read_tokens,
-        cacheCreation: session.total_cache_creation_tokens,
-        reasoning: session.total_reasoning_tokens,
-      },
-      defaultPricing(),
-    );
-    inputCost += parts.input + parts.cacheRead + parts.cacheCreation;
-    outputCost += parts.output;
-  }
-
-  for (const row of toolRows) {
-    const bucket = toolBucket(row.tool_name, row.input);
-    const entry = buckets.get(bucket);
-    if (entry == null) {
-      continue;
-    }
-    entry.contextWindow += (row.output_bytes ?? 0) / CHARS_PER_TOKEN;
-    entry.toolCalls += row.calls;
-    entry.sessions.add(row.session_id);
-    toolCallWeights.set(bucket, (toolCallWeights.get(bucket) ?? 0) + row.calls);
-  }
-
-  distributeByWeights(remainingOutputTokens, toolCallWeights, buckets, sessions);
-  const windowWeights = toolCallWeights.size > 0 ? toolCallWeights : generationWeights(buckets);
-  distributeWindow(inputWindowTokens, windowWeights, buckets, sessions);
-  for (const entry of buckets.values()) {
-    entry.contextWindow += entry.generation;
-  }
-
-  // Wall-clock time per activity. The fast path has no first-edit ordering, so
-  // it emits no phase split (empty boundaries -> everything implementation),
-  // but a single session's ordered blocks are cheap to scan for gap timing.
-  const latencyBlocks = db
-    .query(
-      `${scopeCte}
-       SELECT b.session_id, b.message_id, m.seq AS seq, m.role, m.output_tokens, b.type,
-              b.tool_name, m.timestamp AS timestamp,
-              CASE WHEN b.type IN ('tool_use', 'tool_result', 'web_search')
-                   THEN b.tool_input END AS tool_input,
-              COALESCE(length(CAST(b.text AS BLOB)), 0) AS text_bytes
-       FROM block b
-       JOIN message m ON m.id = b.message_id
-       JOIN scoped_session fs ON fs.id = b.session_id
-       ORDER BY b.session_id, m.seq, b.ordinal`,
-    )
-    .all(sessionId) as BlockRow[];
-  const noBoundaries = new Map<number, number>();
-  for (const [id, sessionBlocks] of groupBy(latencyBlocks, (block) => block.session_id)) {
-    allocateLatency(id, sessionBlocks, buckets, noBoundaries);
-  }
-
-  const totalGeneration = sumBuckets(buckets, "generation");
-  const totalWindow = sumBuckets(buckets, "contextWindow");
-  for (const entry of buckets.values()) {
-    entry.cost =
-      outputCost * share(entry.generation, totalGeneration) +
-      inputCost * share(entry.contextWindow, totalWindow);
-  }
-  // No ordering on the fast path, so it emits no phase split (withPhases=false).
-  return finish(buckets, inputCost, outputCost);
-}
-
-function distributeByWeights(
-  tokens: number,
-  weights: Map<ActivityBucket, number>,
-  buckets: Map<ActivityBucket, MutableBucket>,
-  sessions: SessionRow[],
-): void {
-  if (tokens <= 0) {
-    return;
-  }
-  const totalWeight = sumWeights(weights);
-  if (totalWeight <= 0) {
-    addSharedGeneration(buckets, "communicating", tokens, sessions);
-    return;
-  }
-  for (const [bucket, weight] of weights) {
-    addSharedGeneration(buckets, bucket, tokens * (weight / totalWeight), sessions);
-  }
-}
-
-function distributeWindow(
-  tokens: number,
-  weights: Map<ActivityBucket, number>,
-  buckets: Map<ActivityBucket, MutableBucket>,
-  sessions: SessionRow[],
-): void {
-  if (tokens <= 0) {
-    return;
-  }
-  const totalWeight = sumWeights(weights);
-  if (totalWeight <= 0) {
-    addSharedWindow(buckets, "context", tokens, sessions);
-    return;
-  }
-  for (const [bucket, weight] of weights) {
-    addSharedWindow(buckets, bucket, tokens * (weight / totalWeight), sessions);
-  }
-}
-
-function generationWeights(
-  buckets: Map<ActivityBucket, MutableBucket>,
-): Map<ActivityBucket, number> {
-  const weights = new Map<ActivityBucket, number>();
-  for (const [bucket, entry] of buckets) {
-    if (entry.generation > 0) {
-      weights.set(bucket, entry.generation);
-    }
-  }
-  return weights;
-}
-
-function addSharedGeneration(
-  buckets: Map<ActivityBucket, MutableBucket>,
-  bucket: ActivityBucket,
-  tokens: number,
-  sessions: SessionRow[],
-): void {
-  const entry = buckets.get(bucket);
-  if (entry == null || tokens <= 0) {
-    return;
-  }
-  entry.generation += tokens;
-  for (const session of sessions) {
-    entry.sessions.add(session.id);
-  }
-}
-
-function addSharedWindow(
-  buckets: Map<ActivityBucket, MutableBucket>,
-  bucket: ActivityBucket,
-  tokens: number,
-  sessions: SessionRow[],
-): void {
-  const entry = buckets.get(bucket);
-  if (entry == null || tokens <= 0) {
-    return;
-  }
-  entry.contextWindow += tokens;
-  for (const session of sessions) {
-    entry.sessions.add(session.id);
-  }
-}
-
-function sumWeights(weights: Map<ActivityBucket, number>): number {
-  let total = 0;
-  for (const value of weights.values()) {
-    total += value;
-  }
-  return total;
-}
 
 /** First-edit boundary per session: the message seq of the first file-editing
  * tool_use. Messages with seq < boundary are orientation; the edit's own
@@ -668,16 +534,17 @@ function allocateGeneration(
 }
 
 /** Charge wall-clock time to activity buckets. The gap between a message and
- * the one before it is the time that produced the later message -- the model
- * generating (its thinking/text/tool_use blocks) or a tool executing (the
- * tool_result block in the following user message). Each gap is capped like
- * session active_seconds, then split across the closing message's blocks by the
- * same byte-weight generation uses, so a bucket's time and its tokens line up. */
+ * the one before it is the time that produced the later message: the model
+ * generating, a tool executing, or the human writing the next prompt. Each gap
+ * is capped like session active_seconds, then split across the closing
+ * message's blocks by the same byte weight generation uses. Blockless messages
+ * are absent here, so attributed time only approximates active_seconds. */
 function allocateLatency(
   sessionId: number,
   blocks: BlockRow[],
   buckets: Map<ActivityBucket, MutableBucket>,
   boundaries: Map<number, number>,
+  latency: MutableLatency,
 ): void {
   let previous: number | null = null;
   for (const message of orderedMessages(blocks)) {
@@ -687,7 +554,13 @@ function allocateLatency(
     }
     if (previous != null) {
       const gap = Math.min(Math.max(0, at - previous), ACTIVE_GAP_CAP_MS);
-      distributeLatency(gap, message.blocks, buckets, phaseOf(boundaries, sessionId, message.seq));
+      distributeLatency(
+        gap,
+        message.blocks,
+        buckets,
+        phaseOf(boundaries, sessionId, message.seq),
+        latency,
+      );
     }
     previous = at;
   }
@@ -721,6 +594,7 @@ function distributeLatency(
   blocks: BlockRow[],
   buckets: Map<ActivityBucket, MutableBucket>,
   phase: Phase,
+  latency: MutableLatency,
 ): void {
   if (ms <= 0 || blocks.length === 0) {
     return;
@@ -728,10 +602,15 @@ function distributeLatency(
   const weighted = blocks.map((block) => ({ block, weight: Math.max(1, blockSize(block)) }));
   const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
   for (const item of weighted) {
+    const shareMs = ms * (item.weight / totalWeight);
+    if (item.block.role === "user" && item.block.type === "text") {
+      latency.waitingOnUserMs += shareMs;
+      continue;
+    }
     addLatency(
       buckets,
       blockBucket(item.block.type, item.block.tool_name, item.block.tool_input),
-      ms * (item.weight / totalWeight),
+      shareMs,
       phase,
     );
   }
@@ -904,6 +783,10 @@ function emptyBuckets(): Map<ActivityBucket, MutableBucket> {
   );
 }
 
+function emptyLatency(): MutableLatency {
+  return { waitingOnUserMs: 0 };
+}
+
 function phasesFor(entry: MutableBucket | undefined): Record<Phase, PhaseAmounts> {
   const gen = entry?.generation ?? 0;
   const win = entry?.contextWindow ?? 0;
@@ -933,7 +816,7 @@ function finish(
   buckets: Map<ActivityBucket, MutableBucket>,
   inputCost: number,
   outputCost: number,
-  withPhases = false,
+  waitingOnUserMs = 0,
 ): TokenEconomics {
   const totalCost = sumBuckets(buckets, "cost");
   const rows: TokenEconomicsBucket[] = ACTIVITY_BUCKETS.map((bucket) => {
@@ -948,25 +831,25 @@ function finish(
       cost_share: share(entry?.cost ?? 0, totalCost),
       active_ms: Math.round(entry?.activeMs ?? 0),
     };
-    if (withPhases) {
-      row.phases = phasesFor(entry);
-    }
+    row.phases = phasesFor(entry);
     return row;
   });
+  const activeMs = rows.reduce((sum, row) => sum + row.active_ms, 0);
+  const waitingMs = Math.round(waitingOnUserMs);
   const totals: TokenEconomics["totals"] = {
     generation_tokens: rows.reduce((sum, row) => sum + row.generation_tokens, 0),
     context_window_tokens: rows.reduce((sum, row) => sum + row.context_window_tokens, 0),
     estimated_cost_usd: totalCost,
     input_cost_usd: inputCost,
     output_cost_usd: outputCost,
-    active_ms: rows.reduce((sum, row) => sum + row.active_ms, 0),
+    active_ms: activeMs,
+    waiting_on_user_ms: waitingMs,
+    attributed_ms: activeMs + waitingMs,
   };
-  if (withPhases) {
-    totals.phases = {
-      orientation: sumPhase(rows, "orientation"),
-      implementation: sumPhase(rows, "implementation"),
-    };
-  }
+  totals.phases = {
+    orientation: sumPhase(rows, "orientation"),
+    implementation: sumPhase(rows, "implementation"),
+  };
   return { buckets: rows, totals };
 }
 
