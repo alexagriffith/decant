@@ -11,6 +11,8 @@ import {
   aggregateEconomicsVectors,
   computeSessionEconomicsVectors,
   economicsVectorMatchesFilter,
+  materializeMissingSessionEconomics,
+  SESSION_ECONOMICS_FORMAT_VERSION,
   tokenEconomics,
   tokenEconomicsForSession,
 } from "../src/token-economics.ts";
@@ -194,6 +196,98 @@ describe("token economics", () => {
     expect(communicating?.generation_tokens).toBeGreaterThan(0);
     expect(communicating?.estimated_cost_usd).toBeGreaterThan(0);
     expect(communicating?.sessions).toBe(1);
+    db.close();
+  });
+
+  test("persists versioned vectors and serves economics without scanning transcript rows", () => {
+    const db = freshDb();
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl")),
+      "/x/claude.jsonl",
+      1,
+      2,
+      "claude",
+    );
+    const expected = tokenEconomicsForSession(db, sessionId);
+    const expectedAggregate = tokenEconomics(db);
+    const stored = db
+      .query(
+        "SELECT format_version, json_valid(vector_json) AS valid FROM session_economics WHERE session_id = ?1",
+      )
+      .get(sessionId) as { format_version: number; valid: number };
+    expect(stored).toEqual({ format_version: SESSION_ECONOMICS_FORMAT_VERSION, valid: 1 });
+
+    db.exec(`
+      DELETE FROM file_ref;
+      DELETE FROM tool_call;
+      DELETE FROM block;
+      DELETE FROM message;
+    `);
+    expect(tokenEconomicsForSession(db, sessionId)).toEqual(expected);
+    expect(tokenEconomics(db)).toEqual(expectedAggregate);
+    db.close();
+  });
+
+  test("server cache warmup never falls back to an uncached transcript scan", () => {
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl")),
+      "/x/claude.jsonl",
+      1,
+      2,
+      "claude",
+    );
+    db.exec("DELETE FROM session_economics");
+
+    expect(computeSessionEconomicsVectors(db)).toEqual([]);
+    expect(tokenEconomics(db).totals.generation_tokens).toBeGreaterThan(0);
+    db.close();
+  });
+
+  test("backfills stale, malformed, or structurally incomplete vectors", () => {
+    const db = freshDb();
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl")),
+      "/x/claude.jsonl",
+      1,
+      2,
+      "claude",
+    );
+    db.query("UPDATE session_economics SET format_version = ?1 WHERE session_id = ?2").run(
+      SESSION_ECONOMICS_FORMAT_VERSION - 1,
+      sessionId,
+    );
+
+    expect(materializeMissingSessionEconomics(db)).toBe(1);
+    expect(
+      (
+        db
+          .query("SELECT format_version FROM session_economics WHERE session_id = ?1")
+          .get(sessionId) as { format_version: number }
+      ).format_version,
+    ).toBe(SESSION_ECONOMICS_FORMAT_VERSION);
+    expect(materializeMissingSessionEconomics(db)).toBe(0);
+
+    db.query("UPDATE session_economics SET vector_json = '{' WHERE session_id = ?1").run(sessionId);
+    expect(materializeMissingSessionEconomics(db)).toBe(1);
+    expect(
+      (
+        db
+          .query(
+            "SELECT json_valid(vector_json) AS valid FROM session_economics WHERE session_id = ?1",
+          )
+          .get(sessionId) as { valid: number }
+      ).valid,
+    ).toBe(1);
+
+    db.query(
+      "UPDATE session_economics SET vector_json = json_remove(vector_json, '$.billed_input_tokens') WHERE session_id = ?1",
+    ).run(sessionId);
+    expect(materializeMissingSessionEconomics(db)).toBe(1);
+    expect(tokenEconomicsForSession(db, sessionId)).not.toBeNull();
     db.close();
   });
 
