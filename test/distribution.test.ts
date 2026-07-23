@@ -13,12 +13,13 @@ import {
 } from "../scripts/distribution.ts";
 
 describe("distribution helpers", () => {
-  test("keeps source development startup direct and dependency installation explicit", () => {
+  test("keeps source development startup direct and reproducible", () => {
     const root = join(import.meta.dir, "..");
     const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
       scripts?: Record<string, string>;
     };
 
+    expect(pkg.scripts?.predev).toBe("bun install --frozen-lockfile");
     expect(pkg.scripts?.dev).toBe("bun run src/cli.ts serve");
     expect(pkg.scripts?.up).toBeUndefined();
     expect(existsSync(join(root, "scripts", "dev.ts"))).toBe(false);
