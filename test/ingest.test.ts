@@ -197,8 +197,8 @@ describe("upsertSession", () => {
     const db = openFreshDb(dir);
     const parsed = parseClaudeSession("sample", fixture("claude", "sample.jsonl"));
 
-    upsertSession(db, parsed, "/x/sample.jsonl", 1, 2, "a");
-    upsertSession(db, parsed, "/x/sample-again.jsonl", 3, 4, "b");
+    const firstId = upsertSession(db, parsed, "/x/sample.jsonl", 1, 2, "a");
+    const replacedId = upsertSession(db, parsed, "/x/sample-again.jsonl", 3, 4, "b");
 
     const counts = db
       .query(
@@ -223,6 +223,26 @@ describe("upsertSession", () => {
       economics: 1,
       source_path: "/x/sample-again.jsonl",
     });
+    expect(replacedId).toBe(firstId);
+    db.close();
+  });
+
+  test("preserves the numeric session id when replacing an existing natural session", () => {
+    const dir = freshCase();
+    const db = openFreshDb(dir);
+    const parsed = parseClaudeSession("sample", fixture("claude", "sample.jsonl"));
+    const sibling = parseClaudeSession("sibling", fixture("claude", "sample.jsonl"));
+
+    const firstId = upsertSession(db, parsed, "/x/sample.jsonl", 1, 2, "a");
+    // A second session has to exist for this to prove anything. With only one
+    // row, SQLite's default `max(rowid) + 1` allocation hands back the same id
+    // after the delete whether or not it was preserved, so the assertion below
+    // would pass even with the preservation removed.
+    upsertSession(db, sibling, "/x/sibling.jsonl", 1, 2, "c");
+    const replacedId = upsertSession(db, parsed, "/x/sample-again.jsonl", 3, 4, "b");
+
+    expect(firstId).toBe(1);
+    expect(replacedId).toBe(firstId);
     db.close();
   });
 
