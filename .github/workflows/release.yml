@@ -1,76 +1,918 @@
-name: Release
+# Tag-driven release pipeline (runbook: docs/releasing.md).
+#
+# Publishes, for every v* tag: six npm packages (OIDC trusted publishing with
+# Sigstore provenance), a GitHub Release carrying deterministic tarballs +
+# SHA256SUMS + install.sh, a multi-arch GHCR image with SBOM + provenance, and
+# — for stable is_latest releases only — the Homebrew tap formula.
+# When the Apple secrets below are configured, the two darwin binaries are
+# Developer ID-signed and notarized (rcodesign, Linux-native) inside `build`,
+# before anything publishes; without them the build ad-hoc signs instead
+# (docs/releasing.md#macos-signing-and-notarization).
+#
+# Secrets contract:
+#   MACOS_CERT_P12_B64   base64-encoded Developer ID Application certificate (.p12).
+#   MACOS_CERT_PASSWORD  password for the .p12.
+#   ASC_ISSUER_ID        App Store Connect API key issuer ID (notarization).
+#   ASC_KEY_ID           App Store Connect API key ID (notarization).
+#   ASC_KEY_P8           App Store Connect API private key contents (.p8, notarization).
+#     All five or none: `build` Developer ID-signs and notarizes only when every one
+#     is present, and otherwise falls back to ad-hoc signing with a loud warning.
+#     Signing runs only on tag pushes and the guarded dispatch fallback — this
+#     workflow has no PR trigger. See
+#     docs/releasing.md#macos-signing-and-notarization.
+#   NPM_TOKEN            bootstrap-only granular token for the v0.1.0 first publish
+#                        (trusted publishers can only be configured on packages that
+#                        already exist). Revoke the token and delete this secret after
+#                        v0.1.0 — the OIDC path takes over automatically
+#                        (docs/releasing.md#npm-bootstrap-and-trusted-publishing).
+#   HOMEBREW_TOKEN       PAT with push access to dosu-ai/homebrew-dosu (tap-update).
+#
+# Re-run safety: every publish job is idempotent — npm skips versions
+# that already exist, github-release refreshes assets instead of 422ing, Docker
+# tags overwrite, and is_latest is recomputed from live origin tag state on every
+# run so :latest / the `latest` dist-tag / the tap can never regress. To re-run
+# manually, dispatch WITH THE TAG AS THE RUN REF:
+#   gh workflow run release.yml --ref vX.Y.Z -f version=X.Y.Z
+
+name: release
 
 on:
+  push:
+    tags: ["v*"]
+  # Manual fallback / re-runs — gated by meta's tag guard
+  # (docs/releasing.md#tag-guard-and-prerelease-detection).
   workflow_dispatch:
     inputs:
       version:
-        description: "Semver version to publish, for example 0.1.0"
+        description: "Version to release (must match an existing v* tag that peels to the run's commit)"
         required: true
         type: string
 
-permissions:
-  contents: read
-  packages: write
+permissions: {} # default-deny; grant per job
+
+concurrency: release-${{ github.ref_name }}
 
 jobs:
-  npm:
-    name: Publish npm packages
+  meta:
+    name: Release metadata
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    permissions:
+      contents: read # workflow-level is {}; checkout + ls-remote need read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      is_prerelease: ${{ steps.v.outputs.is_prerelease }}
+      is_latest: ${{ steps.v.outputs.is_latest }}
     steps:
-      - uses: actions/checkout@v7
+      # Default shallow checkout is fine — tag data comes from a targeted fetch +
+      # ls-remote, never the local clone.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Derive, validate, and guard VERSION
+        id: v
+        env:
+          RAW: ${{ inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${RAW#v}"; TAG="v$VERSION"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+            || { echo "::error::'$VERSION' is not semver"; exit 1; }
+
+          # Dispatch guard: the tag must exist on origin AND peel to the commit this run builds.
+          # Default checkout is shallow with fetch-tags:false, and on tag runs it rewrites the
+          # annotated tag object locally (actions/checkout#290) — always re-fetch, forced.
+          git fetch --no-tags --force origin "refs/tags/$TAG:refs/tags/$TAG" \
+            || { echo "::error::tag $TAG not found on origin — push the tag before releasing"; exit 1; }
+          TAG_COMMIT="$(git rev-parse "refs/tags/$TAG^{commit}")"   # ^{commit} peels annotated tags
+          [ "$TAG_COMMIT" = "$GITHUB_SHA" ] \
+            || { echo "::error::tag $TAG points at $TAG_COMMIT but this run builds $GITHUB_SHA — dispatch with the tag as the run ref"; exit 1; }
+
+          if [[ "$VERSION" == *-* ]]; then IS_PRERELEASE=true; else IS_PRERELEASE=false; fi
+
+          # is_latest: is VERSION the highest stable vX.Y.Z on origin right now? (Pure function of
+          # live tag state — a v0.1.0 rerun after v0.2.0 exists computes false, by construction.)
+          # sed strips the peeled ^{} refs ls-remote emits for annotated signed tags; sort -V on a
+          # pre-filtered stable-only list avoids git's versionsort.suffix prerelease-ordering trap.
+          IS_LATEST=false
+          if [[ "$IS_PRERELEASE" == false ]]; then
+            # Fetch as a standalone guarded assignment FIRST: a plain assignment from a single
+            # command substitution propagates its exit status, so a transient ls-remote failure
+            # kills the job here instead of silently yielding HIGHEST=$VERSION. is_latest must
+            # fail CLOSED — failing open re-creates the exact :latest/dist-tag/tap regression
+            # this gate exists to prevent. (Empty tag list on the first release is fine: the
+            # union with $VERSION below makes v0.1.0 correctly compute is_latest=true.)
+            TAGS="$(git ls-remote --tags origin 'v*')"
+            HIGHEST=$(
+              { printf '%s\n' "$TAGS" \
+                  | awk '{print $2}' | sed -e 's#^refs/tags/##' -e 's/\^{}$//' \
+                  | sort -u | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//'
+                echo "$VERSION"
+              } | sort -V | tail -n1)
+            [[ "$HIGHEST" == "$VERSION" ]] && IS_LATEST=true
+          fi
+
+          { echo "version=$VERSION"
+            echo "is_prerelease=$IS_PRERELEASE"
+            echo "is_latest=$IS_LATEST"
+          } >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Verify (biome, tsc, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Install Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.3.x
+          bun-version-file: .bun-version
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build and stage packages
-        run: bun run scripts/build-npm.ts --target all --clean --version "${{ inputs.version }}"
+      - name: Lint and format (Biome)
+        run: bunx biome ci .
 
-      - name: Configure npm auth
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
+      - name: Typecheck
+        run: bunx tsc --noEmit
 
-      - name: Publish platform packages
+      - name: Test
+        run: bun test
+
+  build:
+    name: Build, sign, and package binaries
+    needs: [meta, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write # Sigstore signing for actions/attest
+      attestations: write # persist the attestations
+      artifact-metadata: write # artifact storage record (required by actions/attest v4)
+    outputs:
+      # 'true' only when the darwin binaries are Developer ID-signed AND notarized;
+      # smoke-darwin reads this to decide whether the Gatekeeper gate applies.
+      signed: ${{ steps.signing-mode.outputs.signed }}
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build all release targets
+        run: bun run scripts/build-binaries.ts --target all --out-dir dist/bin --version "$VERSION"
+
+      # The determinism canary diffs against THESE hashes — Developer ID signatures
+      # embed a secure timestamp and would always diverge post-signing
+      # (docs/releasing.md#determinism-canary).
+      - name: Record pre-signing SHA256s
+        run: sha256sum dist/bin/*/decant | tee presign-sha256s.txt
+
+      - name: Install rcodesign (pinned)
         run: |
-          for package in dist/npm/decant-darwin-arm64 dist/npm/decant-darwin-x64 dist/npm/decant-linux-arm64 dist/npm/decant-linux-x64; do
-            npm publish "$package" --access public
+          set -euo pipefail
+          # Pinned release of apple-codesign (indygreg/apple-platform-rs); checksum is
+          # the published .tar.gz.sha256 asset for this exact version. Never "latest".
+          RCODESIGN_VERSION="0.29.0"
+          RCODESIGN_SHA256="dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002"
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o rcodesign.tar.gz \
+            "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F${RCODESIGN_VERSION}/apple-codesign-${RCODESIGN_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${RCODESIGN_SHA256}  rcodesign.tar.gz" | sha256sum -c -
+          tar -xzf rcodesign.tar.gz --strip-components=1 \
+            "apple-codesign-${RCODESIGN_VERSION}-x86_64-unknown-linux-musl/rcodesign"
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 755 rcodesign "$RUNNER_TEMP/bin/rcodesign"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # Developer ID signing needs all five Apple secrets. Until Apple Developer
+      # enrollment lands they are absent, so the release ad-hoc signs instead of
+      # failing — see docs/releasing.md#macos-signing-and-notarization. This step
+      # owns the presence check for both signing steps below; it tests emptiness
+      # only and never echoes a secret value.
+      - name: Determine signing mode
+        id: signing-mode
+        env:
+          MACOS_CERT_P12_B64: ${{ secrets.MACOS_CERT_P12_B64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for secret_name in MACOS_CERT_P12_B64 MACOS_CERT_PASSWORD ASC_ISSUER_ID ASC_KEY_ID ASC_KEY_P8; do
+            if [ -z "${!secret_name}" ]; then
+              echo "::warning::secret ${secret_name} is not configured"
+              missing=$((missing + 1))
+            fi
+          done
+          if [ "$missing" -eq 0 ]; then
+            echo "signing mode: Developer ID (sign + notarize)"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::${missing} of 5 Apple signing secrets are missing — falling back to AD-HOC signing. The darwin binaries will NOT be Developer ID-signed or notarized, and macOS users will get a Gatekeeper prompt on first run that they must clear by hand. Configure all five secrets to publish notarized builds: docs/releasing.md#macos-signing-and-notarization"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Runs only when every Apple secret is present. Signing happens only on tag
+      # builds by construction — this workflow has no PR trigger. A failure here
+      # (bad certificate, notary rejection) fails the release before anything
+      # publishes: docs/releasing.md#macos-signing-and-notarization.
+      - name: Sign and notarize darwin binaries (Developer ID)
+        if: steps.signing-mode.outputs.signed == 'true'
+        env:
+          MACOS_CERT_P12_B64: ${{ secrets.MACOS_CERT_P12_B64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          # Key material: 0600 files in a private temp dir, never echoed.
+          umask 077
+          keys_dir="$(mktemp -d "${RUNNER_TEMP}/sign.XXXXXX")"
+          printf '%s' "$MACOS_CERT_P12_B64" | base64 -d > "${keys_dir}/cert.p12"
+          printf '%s' "$MACOS_CERT_PASSWORD" > "${keys_dir}/p12-password"
+          printf '%s' "$ASC_KEY_P8" > "${keys_dir}/asc-key.p8"
+          # Unified App Store Connect API key JSON in the exact format rcodesign
+          # documents for --api-key-file, built in-job from the three secrets.
+          rcodesign encode-app-store-connect-api-key -o "${keys_dir}/asc-api-key.json" \
+            "$ASC_ISSUER_ID" "$ASC_KEY_ID" "${keys_dir}/asc-key.p8"
+
+          for target in darwin-arm64 darwin-x64; do
+            # --for-notarization enforces hardened runtime + secure timestamp;
+            # entitlements.plist carries Bun's documented JIT entitlements
+            # (docs/releasing.md#macos-signing-and-notarization).
+            rcodesign sign \
+              --p12-file "${keys_dir}/cert.p12" \
+              --p12-password-file "${keys_dir}/p12-password" \
+              --for-notarization \
+              -e entitlements.plist \
+              "dist/bin/${target}/decant"
+
+            # Notarize a temporary .zip: the Notary API rejects .tar.gz, and a
+            # bare Mach-O binary cannot be stapled, so the ticket stays with
+            # Apple rather than in the file
+            # (docs/releasing.md#macos-signing-and-notarization). Retry transient
+            # notary failures; a real rejection fails the release here, before
+            # anything publishes.
+            zip -j -q "${keys_dir}/decant-${target}.zip" "dist/bin/${target}/decant"
+            submitted=false
+            for attempt in 1 2 3; do
+              if rcodesign notary-submit --api-key-file "${keys_dir}/asc-api-key.json" \
+                  --wait "${keys_dir}/decant-${target}.zip"; then
+                submitted=true
+                break
+              fi
+              echo "::warning::notary-submit attempt ${attempt} failed for ${target} — retrying"
+              sleep 30
+            done
+            if [ "$submitted" != "true" ]; then
+              echo "::error::notarization failed for ${target} after 3 attempts"
+              exit 1
+            fi
           done
 
-      - name: Publish launcher
-        run: npm publish dist/npm/decant --access public
+          rm -rf "${keys_dir}"
+
+      # Fallback when the Apple secrets are absent. Ad-hoc signing is NOT a
+      # substitute for Developer ID + notarization, but it is not optional either:
+      # an unsigned Mach-O behaves worse than an ad-hoc signed one (arm64 macOS
+      # refuses to execute unsigned binaries outright), so sign either way.
+      - name: Ad-hoc sign darwin binaries (no Developer ID secrets)
+        if: steps.signing-mode.outputs.signed != 'true'
+        run: |
+          set -euo pipefail
+          for target in darwin-arm64 darwin-x64; do
+            rcodesign sign "dist/bin/${target}/decant"
+          done
+          echo "::warning::darwin binaries are AD-HOC signed — not Developer ID-signed and not notarized. macOS users will see a Gatekeeper prompt on first run: docs/releasing.md#macos-signing-and-notarization"
+
+      - name: Package deterministic release tarballs
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+          # Deterministic archives: fixed member order/ownership, mtimes pinned to
+          # the tag commit time, and gzip without the embedded timestamp
+          # (docs/releasing.md#deterministic-tarballs).
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          for target in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+            cp LICENSE NOTICE "dist/bin/${target}/"
+            tar --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime="@${SOURCE_DATE_EPOCH}" \
+              -C "dist/bin/${target}" -cf - decant LICENSE NOTICE \
+              | gzip -n > "dist/release/decant-${target}.tar.gz"
+          done
+          (cd dist/release && sha256sum decant-*.tar.gz | tee SHA256SUMS)
+
+      # Default mode = SLSA build provenance. Raw binaries are attested too, so a
+      # user can verify the extracted `decant` after unpacking a tarball.
+      - name: Attest build provenance (tarballs + raw binaries)
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: |
+            dist/release/decant-*.tar.gz
+            dist/bin/*/decant
+
+      - name: Upload pre-signing hashes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: presign-sha256s
+          path: presign-sha256s.txt
+          if-no-files-found: error
+
+      - name: Upload release tarballs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-tarballs
+          path: dist/release/
+          if-no-files-found: error
+
+      - name: Upload signed binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-binaries
+          path: dist/bin/
+          if-no-files-found: error
+
+  # Release GATE, not an observer: every publish job sits downstream of this one,
+  # so a darwin binary that will not run — or that fails the Gatekeeper gate on a
+  # Developer ID build — blocks all publishing
+  # (docs/releasing.md#macos-signing-and-notarization).
+  # Run both architectures: GitHub's standard macOS label is arm64, so an explicit
+  # Intel runner is required to exercise the darwin-x64 artifact too.
+  smoke-darwin:
+    name: Smoke signed darwin binary (${{ matrix.target }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    permissions: {}
+    env:
+      SIGNED: ${{ needs.build.outputs.signed }}
+    steps:
+      - name: Download release tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-tarballs
+          path: dist/release
+
+      - name: Extract, run, and verify the darwin binary
+        run: |
+          set -euo pipefail
+          mkdir -p smoke
+          tar -xzf "dist/release/decant-${{ matrix.target }}.tar.gz" -C smoke
+          ./smoke/decant --version
+          # UNCONDITIONAL: an ad-hoc signature must still be structurally valid.
+          codesign --verify --strict --verbose=2 smoke/decant
+
+          # Only the Gatekeeper acceptance gate depends on the signing mode. An
+          # ad-hoc build is expected to be rejected by spctl — report the
+          # assessment and move on; a Developer ID build must pass, fail-closed.
+          # Anything other than true/false means the build output wiring broke;
+          # refuse to guess rather than silently skipping the gate forever.
+          case "$SIGNED" in
+            true|false) ;;
+            *)
+              echo "::error::build reported no signing mode (got '${SIGNED}') — cannot decide whether the Gatekeeper gate applies"
+              exit 1
+              ;;
+          esac
+
+          if [ "$SIGNED" != "true" ]; then
+            echo "::warning::ad-hoc signed build — reporting the spctl assessment for information only (a Developer ID build must pass it)"
+            spctl -a -t exec -vv smoke/decant 2>&1 || true
+            exit 0
+          fi
+
+          if ! assessment="$(spctl -a -t exec -vv smoke/decant 2>&1)"; then
+            printf '%s\n' "$assessment"
+            echo "::error::spctl rejected the binary — Gatekeeper would block users"
+            exit 1
+          fi
+          printf '%s\n' "$assessment"
+          case "$assessment" in
+            *"Notarized Developer ID"*) echo "spctl assessment: Notarized Developer ID" ;;
+            *)
+              echo "::error::expected a 'Notarized Developer ID' spctl assessment"
+              exit 1
+              ;;
+          esac
+
+  determinism:
+    name: Determinism canary (non-blocking)
+    # meta must be a DIRECT dep — the needs context is non-transitive; without it
+    # needs.meta.outputs.version is empty and the rebuild diverges by construction.
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Rebuild all release targets
+        run: bun run scripts/build-binaries.ts --target all --out-dir dist/bin --version "$VERSION"
+
+      - name: Download pre-signing hashes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: presign-sha256s
+
+      - name: Compare rebuild against pre-signing hashes (WARN only)
+        run: |
+          set -euo pipefail
+          sha256sum dist/bin/*/decant | tee rebuild-sha256s.txt
+          if diff -u presign-sha256s.txt rebuild-sha256s.txt; then
+            echo "determinism canary: rebuild is byte-identical to the release build"
+          else
+            # Bun does not formally guarantee deterministic --compile output; measure,
+            # don't promise. Promote to blocking once green for a few releases
+            # (docs/releasing.md#determinism-canary).
+            echo "::warning::determinism canary: rebuild diverged from the release build's pre-signing hashes (non-blocking)"
+          fi
+
+  npm:
+    name: Publish npm packages
+    # meta must be a DIRECT dep (the needs context is non-transitive); smoke-darwin
+    # is a release GATE — nothing publishes if the signed darwin binary fails it.
+    needs: [meta, build, smoke-darwin]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write # OIDC trusted publishing; also required for --provenance on the bootstrap token path
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      # Secrets cannot be referenced in `if:` conditionals — hence the env
+      # indirection (docs/releasing.md#npm-bootstrap-and-trusted-publishing).
+      # NPM_TOKEN exists only for the v0.1.0 bootstrap publish; once the trusted
+      # publishers are configured and the secret is deleted, the OIDC step below
+      # takes over automatically.
+      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Staging must consume the binaries `build` signed — never rebuild here
+      # (docs/releasing.md#macos-signing-and-notarization).
+      - name: Download signed binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: signed-binaries
+          path: dist/bin
+
+      - name: Stage npm packages from signed binaries
+        run: bun run scripts/build-npm.ts --target all --binary-dir dist/bin --out-dir dist/npm --no-build --clean --version "$VERSION"
+
+      # Every published package must carry the license texts (Apache-2.0 §4(d)) —
+      # the four platform packages plus both launchers.
+      - name: Assert LICENSE and NOTICE staged in all six packages
+        run: |
+          set -euo pipefail
+          for dir in dist/npm/*/; do
+            for file in LICENSE NOTICE; do
+              if [ ! -f "${dir}${file}" ]; then
+                echo "::error::${file} missing from staged package ${dir} (Apache-2.0 §4(d))"
+                exit 1
+              fi
+            done
+          done
+
+      - name: Set up Node for npm publish
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      # Node 24's bundled npm already clears the trusted-publishing floor. Do NOT
+      # `npm install -g npm@latest` — an unpinned moving target at the most
+      # supply-chain-sensitive step; assert the floor instead
+      # (docs/releasing.md#npm-bootstrap-and-trusted-publishing).
+      - name: Assert npm supports trusted publishing (>= 11.5.1)
+        run: dpkg --compare-versions "$(npm --version)" ge 11.5.1 || exit 1
+
+      # Prove the real optionalDependencies resolution path — the code path every
+      # npx user hits — against the STAGED packages, before anything is
+      # irrevocably published. No DECANT_BINARY_PATH override.
+      #
+      # BOTH launchers run here. They ship identical content under different
+      # names, but npm-smoke only exercises the unscoped one post-publish, so this
+      # is the only place `@dosu/decant` is ever executed — and a launcher that
+      # cannot resolve its platform package is unrecoverable once published. Each
+      # gets its own scratch project, which is how a real user installs them.
+      - name: Pack-and-install smoke on staged packages (pre-publish)
+        run: |
+          set -euo pipefail
+          platform_tgz="$(cd dist/npm/decant-linux-x64 && npm pack --silent | tail -n1)"
+          for launcher_dir in decant dosu-decant; do
+            # Read the name from the staged manifest so the installed path can never
+            # drift from what the launcher directory actually declares.
+            launcher_pkg="$(node -p "JSON.parse(require('fs').readFileSync('dist/npm/${launcher_dir}/package.json','utf8')).name")"
+            launcher_tgz="$(cd "dist/npm/${launcher_dir}" && npm pack --silent | tail -n1)"
+            smoke_dir="$(mktemp -d)"
+            ( cd "$smoke_dir"
+              npm init -y >/dev/null
+              npm install --ignore-scripts --no-audit --no-fund \
+                "$GITHUB_WORKSPACE/dist/npm/decant-linux-x64/$platform_tgz" \
+                "$GITHUB_WORKSPACE/dist/npm/${launcher_dir}/$launcher_tgz"
+              out="$(env -u DECANT_BINARY_PATH node "node_modules/${launcher_pkg}/bin/decant.cjs" --version)"
+              echo "staged launcher ${launcher_pkg} reports: $out"
+              [[ "$out" == *"$VERSION"* ]] || { echo "::error::staged launcher ${launcher_pkg} reported '$out', expected version $VERSION"; exit 1; }
+            )
+            rm -rf "$smoke_dir" "dist/npm/${launcher_dir}/${launcher_tgz}"
+          done
+          rm -f "dist/npm/decant-linux-x64/${platform_tgz}"
+
+      # Dist-tag chosen at publish time: `npm dist-tag add` is not OIDC-capable, so
+      # tagging after the fact would silently keep the bootstrap token alive past
+      # its purpose (docs/releasing.md#npm-bootstrap-and-trusted-publishing).
+      - name: Derive npm dist-tag channel
+        run: |
+          if [[ "${{ needs.meta.outputs.is_prerelease }}" == "true" ]]; then CHANNEL=next
+          elif [[ "${{ needs.meta.outputs.is_latest }}" == "true" ]]; then CHANNEL=latest
+          else CHANNEL=previous; fi   # a stable backport landing after a newer stable already shipped
+          echo "CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
+
+      # OIDC trusted publishing: NO NODE_AUTH_TOKEN anywhere in this step — its
+      # presence silently flips npm onto the legacy token path.
+      #
+      # Publish ORDER MATTERS: the four platform packages first, because both
+      # launchers declare optionalDependencies on them, then `decant` (unscoped),
+      # then `@dosu/decant`. Package names come from each staged manifest — the
+      # directory name is not the package name for the two launchers, and a
+      # hard-coded guess would make the `npm view` idempotency check test a
+      # different package than the one `npm publish` ships. Same channel on all six.
+      - name: Publish packages (OIDC trusted publishing)
+        if: env.HAS_NPM_TOKEN != 'true'
+        run: |
+          set -euo pipefail
+          for dir in decant-darwin-arm64 decant-darwin-x64 decant-linux-arm64 decant-linux-x64 decant dosu-decant; do
+            pkg="$(node -p "JSON.parse(require('fs').readFileSync('dist/npm/${dir}/package.json','utf8')).name")"
+            if npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+              echo "::notice::${pkg}@${VERSION} already published — skipping (idempotent re-run)"
+              continue
+            fi
+            npm publish "dist/npm/${dir}" --access public --tag "$CHANNEL" --provenance
+          done
+
+      # Bootstrap token path — v0.1.0 only
+      # (docs/releasing.md#npm-bootstrap-and-trusted-publishing). Token auth on a
+      # GitHub-hosted runner emits the same Sigstore provenance as OIDC. Delete
+      # this step together with the NPM_TOKEN secret after v0.1.0. Same six
+      # packages, same order, same reasons as the OIDC step above.
+      - name: Publish packages (bootstrap token, v0.1.0 only)
+        if: env.HAS_NPM_TOKEN == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for dir in decant-darwin-arm64 decant-darwin-x64 decant-linux-arm64 decant-linux-x64 decant dosu-decant; do
+            pkg="$(node -p "JSON.parse(require('fs').readFileSync('dist/npm/${dir}/package.json','utf8')).name")"
+            if npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+              echo "::notice::${pkg}@${VERSION} already published — skipping (idempotent re-run)"
+              continue
+            fi
+            npm publish "dist/npm/${dir}" --access public --tag "$CHANNEL" --provenance
+          done
+
+  # Post-publish smoke: the exact code path every real `npx decant` user hits —
+  # the unscoped launcher is the invocation the docs tell people to type —
+  # including real optionalDependencies resolution off the live registry.
+  npm-smoke:
+    name: Post-publish npx smoke (${{ matrix.target }})
+    needs: [meta, npm]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: macos-15
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions: {}
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Run the launcher like an npx user (retry for registry propagation)
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 10); do
+            if npm exec --yes --prefer-online "decant@${VERSION}" -- --version; then
+              exit 0
+            fi
+            echo "attempt ${attempt}: decant@${VERSION} not resolvable yet — waiting for registry propagation"
+            sleep 30
+          done
+          echo "::error::decant@${VERSION} never became runnable via npm exec"
+          exit 1
+
+  github-release:
+    name: GitHub Release
+    # npm-smoke is a release GATE: the Latest release page — which
+    # releases/latest/download/ and install.sh resolve — and the tap formula
+    # behind it must not advance if the published launcher can't run.
+    needs: [meta, build, npm, npm-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the release and upload assets
+    steps:
+      # install.sh ships from the tag's tree as a release asset.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download release tarballs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-tarballs
+          path: dist/release
+
+      - name: Stage install.sh next to the tarballs
+        run: cp install.sh dist/release/install.sh
+
+      # gh release create is NOT idempotent (422 already_exists; --verify-tag only
+      # guards a missing tag) — view first, create on a miss, refresh assets on a hit.
+      - name: Publish or refresh the GitHub Release
+        working-directory: dist/release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ needs.meta.outputs.version }}
+          PRERELEASE: ${{ needs.meta.outputs.is_prerelease }}
+          IS_LATEST: ${{ needs.meta.outputs.is_latest }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::$TAG already has a release — refreshing assets only (gh release create would 422)"
+            gh release upload "$TAG" ./*.tar.gz SHA256SUMS install.sh --clobber
+          else
+            flags=(--verify-tag --generate-notes)
+            [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+            [ "$IS_LATEST" = "true" ] || flags+=(--latest=false)  # GitHub marks the newest-created
+              # release "Latest" by default — a backport would hijack releases/latest/download/
+            gh release create "$TAG" ./*.tar.gz SHA256SUMS install.sh "${flags[@]}"
+          fi
 
   docker:
     name: Publish Docker image
+    # verify is enforced transitively via build; gating on build + smoke-darwin keeps
+    # the release atomic — no GHCR push for a version whose signing or darwin smoke
+    # failed.
+    needs: [meta, build, smoke-darwin]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write # push to GHCR
+      id-token: write # Sigstore signing for actions/attest
+      attestations: write
+      artifact-metadata: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Hand-rolled tag list on purpose: docker/metadata-action's latest=auto cannot
+      # compare across tags and would re-tag :latest on a backport — meta owns that
+      # decision (docs/releasing.md#tag-guard-and-prerelease-detection).
+      - name: Compute tag list
+        id: tags
+        env:
+          IS_LATEST: ${{ needs.meta.outputs.is_latest }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          { echo "list<<TAGS_EOF"
+            echo "ghcr.io/dosu-ai/decant:${VERSION}"
+            [[ "$IS_LATEST" == "true" ]] && echo "ghcr.io/dosu-ai/decant:latest"
+            echo "TAGS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and push
-        uses: docker/build-push-action@v7
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/dosu-ai/decant:${{ inputs.version }}
-            ghcr.io/dosu-ai/decant:latest
+          tags: ${{ steps.tags.outputs.list }}
+          build-args: |
+            DECANT_VERSION=${{ needs.meta.outputs.version }}
+          provenance: mode=max
+          sbom: true
+
+      # Second producer on purpose: buildx provenance and GitHub attestations have
+      # different verifiers.
+      - name: Attest image provenance
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-name: ghcr.io/dosu-ai/decant # fully-qualified, no tag
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  # Render the exact formula that will be tested and pushed. Stable AND is_latest
+  # only: a prerelease must not seed the tap and a backport must not downgrade it.
+  homebrew-formula:
+    name: Render Homebrew formula
+    needs: [meta, build, github-release]
+    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download release tarballs (for SHA256SUMS)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-tarballs
+          path: dist/release
+
+      - name: Render decant.rb from the in-repo template
+        run: |
+          set -euo pipefail
+          sha_for() {
+            awk -v file="decant-$1.tar.gz" '$2 == file { print $1 }' dist/release/SHA256SUMS
+          }
+          darwin_arm64="$(sha_for darwin-arm64)"
+          darwin_x64="$(sha_for darwin-x64)"
+          linux_arm64="$(sha_for linux-arm64)"
+          linux_x64="$(sha_for linux-x64)"
+          for value in "$darwin_arm64" "$darwin_x64" "$linux_arm64" "$linux_x64"; do
+            if ! [[ "$value" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::missing or malformed sha256 in SHA256SUMS"
+              exit 1
+            fi
+          done
+          mkdir -p dist/homebrew
+          # '/^##/d' strips the template's own doc header from the rendered formula.
+          sed -e '/^##/d' \
+            -e "s/__VERSION__/${VERSION}/g" \
+            -e "s/__SHA256_DARWIN_ARM64__/${darwin_arm64}/g" \
+            -e "s/__SHA256_DARWIN_X64__/${darwin_x64}/g" \
+            -e "s/__SHA256_LINUX_ARM64__/${linux_arm64}/g" \
+            -e "s/__SHA256_LINUX_X64__/${linux_x64}/g" \
+            packaging/homebrew/decant.rb.template > dist/homebrew/decant.rb
+
+      - name: Upload rendered formula
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: homebrew-formula
+          path: dist/homebrew/decant.rb
+          if-no-files-found: error
+
+  # Test the rendered formula on every supported OS/architecture before the tap
+  # moves. This consumes live GitHub Release assets, so it validates the user path
+  # rather than only linting Ruby syntax.
+  homebrew-smoke:
+    name: Homebrew install smoke (${{ matrix.target }})
+    needs: [meta, homebrew-formula]
+    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Homebrew supports Linux on x86_64 only, so there is no linux-arm64
+          # leg. The formula still declares that URL for anyone whose brew works
+          # there, but tap-update needs this job — gating the tap push on a
+          # platform Homebrew does not support would block it on the very
+          # release that introduces the tap. linux-arm64 is covered by
+          # install.sh, npm, and the Docker image.
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-15
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@df4b09108a1de9d6f995fe68f302b3f68bd6d2ef # main @ 2026-07-17
+
+      - name: Download rendered formula
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: homebrew-formula
+          path: Formula
+
+      - name: Audit, install, and test
+        run: |
+          set -euo pipefail
+          brew tap dosu-ai/dosu
+          tap_root="$(brew --repository dosu-ai/dosu)"
+          cp Formula/decant.rb "${tap_root}/Formula/decant.rb"
+          brew audit --strict --online --formula dosu-ai/dosu/decant
+          brew install --formula dosu-ai/dosu/decant
+          brew test dosu-ai/dosu/decant
+          out="$(decant --version)"
+          echo "Homebrew decant reports: $out"
+          [[ "$out" == *"$VERSION"* ]] \
+            || { echo "::error::Homebrew decant reported '$out', expected version $VERSION"; exit 1; }
+
+  # The tap is a first-class install channel, so a stale formula is a
+  # user-visible regression. Push only the formula artifact that passed the
+  # four-platform Homebrew smoke matrix above.
+  tap-update:
+    name: Update Homebrew tap
+    needs: [meta, github-release, homebrew-formula, homebrew-smoke]
+    if: needs.meta.outputs.is_prerelease == 'false' && needs.meta.outputs.is_latest == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # the tap push authenticates via HOMEBREW_TOKEN
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - name: Check out dosu-ai/homebrew-dosu
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: dosu-ai/homebrew-dosu
+          token: ${{ secrets.HOMEBREW_TOKEN }}
+          path: homebrew-dosu
+
+      - name: Download tested formula
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: homebrew-formula
+          path: homebrew-dosu/Formula
+
+      - name: Commit and push
+        working-directory: homebrew-dosu
+        run: |
+          set -euo pipefail
+          git add Formula/decant.rb
+          if git diff --cached --quiet; then
+            echo "::notice::Formula/decant.rb already matches v${VERSION} — nothing to push"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update decant to v${VERSION}"
+          git push

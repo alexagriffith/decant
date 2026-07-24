@@ -144,6 +144,15 @@ export function stageNpmPackages(options: StageOptions = {}): string {
   return outDir;
 }
 
+// `npx decant` is the documented entry point, so the launcher publishes
+// unscoped. `@dosu/decant` publishes the same bytes under the scope for anyone
+// already installing it. Both are staged from `npm/decant`, so the only thing
+// that can differ between them is the name.
+const launcherPackages = [
+  { dir: "decant", name: "decant" },
+  { dir: "dosu-decant", name: "@dosu/decant" },
+];
+
 function stageLauncherPackage(
   root: string,
   outDir: string,
@@ -151,20 +160,24 @@ function stageLauncherPackage(
   version: string,
 ): void {
   const source = join(root, "npm", "decant");
-  const dest = join(outDir, "decant");
-  mkdirSync(join(dest, "bin"), { recursive: true });
-  for (const file of ["package.json", "README.md", "targets.json"]) {
-    copyFileSync(join(source, file), join(dest, file));
+  for (const launcher of launcherPackages) {
+    const dest = join(outDir, launcher.dir);
+    mkdirSync(join(dest, "bin"), { recursive: true });
+    for (const file of ["package.json", "README.md", "targets.json"]) {
+      copyFileSync(join(source, file), join(dest, file));
+    }
+    copyFileSync(join(source, "bin", "decant.cjs"), join(dest, "bin", "decant.cjs"));
+    copyFileSync(join(root, "LICENSE"), join(dest, "LICENSE"));
+    copyFileSync(join(root, "NOTICE"), join(dest, "NOTICE"));
+    rewritePackageJson(join(dest, "package.json"), (pkg) => {
+      pkg.name = launcher.name;
+      pkg.version = version;
+      pkg.optionalDependencies = Object.fromEntries(
+        targets.map((target) => [target.package, version]),
+      );
+      return pkg;
+    });
   }
-  copyFileSync(join(source, "bin", "decant.cjs"), join(dest, "bin", "decant.cjs"));
-  copyFileSync(join(root, "LICENSE"), join(dest, "LICENSE"));
-  rewritePackageJson(join(dest, "package.json"), (pkg) => {
-    pkg.version = version;
-    pkg.optionalDependencies = Object.fromEntries(
-      targets.map((target) => [target.package, version]),
-    );
-    return pkg;
-  });
 }
 
 function stagePlatformPackage(
@@ -192,7 +205,12 @@ function stagePlatformPackage(
   }
 
   mkdirSync(join(dest, dirname(target.binary)), { recursive: true });
-  copyFileSync(join(source, "package.json"), join(dest, "package.json"));
+  for (const file of ["package.json", "README.md"]) {
+    copyFileSync(join(source, file), join(dest, file));
+  }
+  for (const file of ["LICENSE", "NOTICE"]) {
+    copyFileSync(join(options.root, file), join(dest, file));
+  }
   rewritePackageJson(join(dest, "package.json"), (pkg) => {
     pkg.version = options.version;
     return pkg;
