@@ -3,14 +3,15 @@
 [![CI](https://github.com/dosu-ai/decant/actions/workflows/ci.yml/badge.svg)](https://github.com/dosu-ai/decant/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Extract Claude Code and Codex CLI sessions into a normalized,
-full-text-searchable SQLite archive, then browse, search, analyze, and distill
-that history from a fast local CLI or web UI.
+Your coding agent sessions contain a lot of useful information. What tokens got
+spent on, how full the context window got, which files an agent worked with, and
+what a run cost. decant gives you insight into what's on disk, right now.
 
-decant reads the JSONL logs those tools already write
+It reads the JSONL logs Claude Code and Codex already write
 (`~/.claude/projects/*.jsonl`, `~/.codex/sessions/rollout-*.jsonl`), normalizes
-the formats into one WAL + FTS5 SQLite archive, and keeps everything local. Your
-transcripts never leave your machine.
+both formats into one WAL + FTS5 SQLite archive, and gives you full-text search,
+token economics, context-window occupancy, and phase breakdowns from a CLI or a
+local web UI. Your transcripts never leave your machine.
 
 ![decant serve UI showing the session archive with synthetic demo data](docs/assets/decant-serve.png)
 

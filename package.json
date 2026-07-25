@@ -2,7 +2,7 @@
   "name": "@dosu/decant",
   "version": "0.0.0",
   "private": true,
-  "description": "Extract Claude Code and Codex CLI sessions into a normalized, full-text-searchable local SQLite archive.",
+  "description": "Local-first analysis of Claude Code and Codex sessions: token spend, context windows, files touched, and cost.",
   "license": "Apache-2.0",
   "repository": "https://github.com/dosu-ai/decant",
   "packageManager": "bun@1.3.14",
