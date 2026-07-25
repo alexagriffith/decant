@@ -8,20 +8,20 @@ selects the matching optional platform package, then runs the embedded
 Bun-compiled binary.
 
 ```sh
-npx decant sync
-npx decant ls
-npx decant serve
+npx @dosu/decant sync
+npx @dosu/decant ls
+npx @dosu/decant serve
 ```
 
 For a persistent install:
 
 ```sh
-npm i -g decant
+npm i -g @dosu/decant
 decant serve
 ```
 
-`@dosu/decant` is a scoped alias published from identical content at the same
-version, so `npx @dosu/decant` behaves the same. Prefer the unscoped `decant`.
+The global install puts a `decant` binary on your PATH, so day-to-day the
+command is just `decant`.
 
 Supported platforms are macOS and Linux on x64 and arm64. On unsupported
 platforms, the launcher exits with a clear message:
