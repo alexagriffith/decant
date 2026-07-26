@@ -77,6 +77,53 @@ export function isInteractiveTarget(target: unknown): boolean {
   );
 }
 
+/**
+ * The part of a turn element `revealTranscriptMessage` drives. Structural for
+ * the same reason as `TranscriptEventTarget`, and so tests need no real DOM.
+ */
+export interface TranscriptScrollTarget {
+  scrollIntoView(options: { behavior: "auto" | "smooth"; block: "start" }): void;
+  focus(options: { preventScroll: boolean }): void;
+}
+
+/**
+ * Bring a turn into view and move focus to it. Focus is the point: without it
+ * arrow-key navigation is a purely visual highlight that assistive tech never
+ * announces. `preventScroll` keeps the browser from running a second, competing
+ * scroll to an element we just animated to.
+ *
+ * Returns false when there is nothing to reveal, which happens whenever the
+ * target seq sits outside the currently loaded message window.
+ */
+export function revealTranscriptMessage(
+  target: TranscriptScrollTarget | null | undefined,
+  prefersReducedMotion: boolean,
+): boolean {
+  if (target == null) {
+    return false;
+  }
+  target.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" });
+  target.focus({ preventScroll: true });
+  return true;
+}
+
+/**
+ * Selector for anything modal enough that arrow keys should not reach the
+ * transcript underneath it. Nothing in the UI matches today; this is a guard
+ * against a modal added later silently scrolling the page behind itself.
+ *
+ * `[role='dialog']` alone missed both of the other ways a modal is normally
+ * expressed, so all three are covered: the native element (only while open,
+ * since a closed `<dialog>` stays in the DOM), the ARIA role, and the
+ * `aria-modal` flag.
+ */
+const MODAL_SELECTOR = "dialog[open], [role='dialog'], [role='alertdialog'], [aria-modal='true']";
+
+/** True when a modal is on screen, so transcript navigation should stand down. */
+export function hasOpenModal(root: { querySelector(selectors: string): unknown } | null): boolean {
+  return root?.querySelector(MODAL_SELECTOR) != null;
+}
+
 export function transcriptSeqFromHash(hash: string): number | null {
   const match = hash.match(/^#message-(\d+)$/);
   if (match == null) {

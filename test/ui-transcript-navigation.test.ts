@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  hasOpenModal,
   isInteractiveTarget,
   nextTranscriptSeq,
+  revealTranscriptMessage,
+  type TranscriptScrollTarget,
   transcriptNavigationDirection,
   transcriptSeqFromHash,
 } from "../src/ui/transcript-navigation.ts";
@@ -64,5 +67,67 @@ describe("interactive target guard", () => {
     expect(isInteractiveTarget("article")).toBe(false);
     expect(isInteractiveTarget({})).toBe(false);
     expect(isInteractiveTarget({ matches: () => false })).toBe(false);
+  });
+});
+
+describe("revealTranscriptMessage", () => {
+  function recordingTarget() {
+    const calls: { scrolled: string[]; focused: boolean[] } = { scrolled: [], focused: [] };
+    const target: TranscriptScrollTarget = {
+      scrollIntoView: (options) => calls.scrolled.push(options.behavior),
+      focus: (options) => calls.focused.push(options.preventScroll),
+    };
+    return { calls, target };
+  }
+
+  test("moves focus to the turn it scrolls to", () => {
+    const { calls, target } = recordingTarget();
+    expect(revealTranscriptMessage(target, false)).toBe(true);
+    expect(calls.scrolled).toEqual(["smooth"]);
+    // Focus is what makes arrow-key navigation perceivable to a screen reader.
+    expect(calls.focused).toEqual([true]);
+  });
+
+  test("honors reduced motion without giving up focus", () => {
+    const { calls, target } = recordingTarget();
+    revealTranscriptMessage(target, true);
+    expect(calls.scrolled).toEqual(["auto"]);
+    expect(calls.focused).toEqual([true]);
+  });
+
+  test("reports a miss when the seq is outside the loaded window", () => {
+    expect(revealTranscriptMessage(null, false)).toBe(false);
+    expect(revealTranscriptMessage(undefined, false)).toBe(false);
+  });
+});
+
+describe("hasOpenModal", () => {
+  function root(matcher: (selectors: string) => boolean) {
+    return { querySelector: (selectors: string) => (matcher(selectors) ? {} : null) };
+  }
+
+  test("covers every way the UI could express a modal", () => {
+    for (const marker of [
+      "dialog[open]",
+      "[role='dialog']",
+      "[role='alertdialog']",
+      "[aria-modal='true']",
+    ]) {
+      expect(hasOpenModal(root((selectors) => selectors.includes(marker)))).toBe(true);
+    }
+  });
+
+  test("requires a native dialog to be open", () => {
+    // A closed <dialog> stays in the DOM, so matching bare "dialog" would wedge
+    // navigation permanently once one is added. Asserted by checking that a
+    // root matching only the bare tag is not considered modal.
+    expect(hasOpenModal(root((selectors) => /(^|[\s,])dialog([\s,]|$)/.test(selectors)))).toBe(
+      false,
+    );
+  });
+
+  test("lets navigation through when nothing is modal", () => {
+    expect(hasOpenModal(root(() => false))).toBe(false);
+    expect(hasOpenModal(null)).toBe(false);
   });
 });

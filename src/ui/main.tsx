@@ -38,6 +38,7 @@ import {
 import {
   type CSSProperties,
   type MouseEvent,
+  memo,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   useCallback,
@@ -48,7 +49,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
   type AnalyticsChartMetric,
@@ -63,8 +64,10 @@ import { effortDisplayLabel, effortTooltip } from "./effort.ts";
 import { isFramed } from "./frame-guard.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import {
+  hasOpenModal,
   isInteractiveTarget,
   nextTranscriptSeq,
+  revealTranscriptMessage,
   type TranscriptNavigationDirection,
   transcriptNavigationDirection,
   transcriptSeqFromHash,
@@ -72,6 +75,8 @@ import {
 import {
   appendTranscriptPage,
   clampTranscriptWindowOffset,
+  prependTranscriptPage,
+  previousTranscriptPageRequest,
   runWithTranscriptRequestSlot,
   transcriptWindowOffset,
 } from "./transcript-pagination.ts";
@@ -4181,6 +4186,10 @@ function SessionDetailView({ id }: { id: number }) {
   const [economicsError, setEconomicsError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  // Separate from loadMoreError: the two loads fail in different places and
+  // retry in opposite directions, so one shared message would report a failed
+  // backward load at the foot of the transcript under the wrong wording.
+  const [loadEarlierError, setLoadEarlierError] = useState<string | null>(null);
   const [jumpingToSeq, setJumpingToSeq] = useState<number | null>(null);
   const [activeMessageSeq, setActiveMessageSeq] = useState<number | null>(null);
   const detailRef = useRef<SessionDetailData | null>(null);
@@ -4204,6 +4213,7 @@ function SessionDetailView({ id }: { id: number }) {
     setEconomicsError(null);
     setLoadingMore(false);
     setLoadMoreError(null);
+    setLoadEarlierError(null);
     setJumpingToSeq(null);
     activeMessageSeqRef.current = null;
     handledMessageHashRef.current = null;
@@ -4311,6 +4321,108 @@ function SessionDetailView({ id }: { id: number }) {
       });
     loadMorePromiseRef.current = request;
     return request;
+  }, [id]);
+
+  /**
+   * Fill in the gap in front of the loaded window.
+   *
+   * A window only starts partway into a session when the reader arrived by deep
+   * link, outline click, or compaction jump. Without this, everything before
+   * that landing point is unreachable by keyboard: ArrowUp hits the top of the
+   * window and stops, even though earlier messages exist.
+   */
+  const loadPreviousMessages = useCallback((): Promise<boolean> => {
+    const sessionVersion = sessionVersionRef.current;
+    return runWithTranscriptRequestSlot(
+      loadMorePromiseRef,
+      () => sessionVersionRef.current === sessionVersion,
+      false,
+      async () => {
+        const current = detailRef.current;
+        if (current == null || current.summary.id !== id) {
+          return false;
+        }
+        const request = previousTranscriptPageRequest(
+          current.message_offset ?? 0,
+          SESSION_DETAIL_MESSAGE_PAGE_SIZE,
+        );
+        if (request == null) {
+          return false;
+        }
+        setLoadingMore(true);
+        setLoadEarlierError(null);
+        return getJson<SessionDetailData>(
+          `/api/sessions/${id}?message_limit=${request.limit}&message_offset=${request.offset}`,
+        )
+          .then((page) => {
+            if (sessionVersionRef.current !== sessionVersion) {
+              return false;
+            }
+            const latest = detailRef.current;
+            if (latest == null || latest.summary.id !== id) {
+              return false;
+            }
+            if (page.messages.length === 0) {
+              return false;
+            }
+            // Inserting above the viewport shifts everything below it down by
+            // the height of the new content. Browser scroll anchoring does not
+            // rescue this: measured in Chromium, a page's worth of prepended
+            // turns moved the anchor by its full height, so the correction below
+            // is doing the work rather than duplicating the browser's.
+            //
+            // Anchor on how far a surviving turn moved rather than on
+            // scrollHeight, which would misread the content-visibility
+            // placeholders: their height stays an estimate until they render.
+            let anchorSeq: number | null = null;
+            let anchorTop: number | null = null;
+            for (const message of latest.messages) {
+              const top = document
+                .getElementById(`message-${message.seq}`)
+                ?.getBoundingClientRect().top;
+              if (top != null) {
+                anchorSeq = message.seq;
+                anchorTop = top;
+                break;
+              }
+            }
+            const nextDetail = {
+              ...latest,
+              messages: prependTranscriptPage(latest.messages, page.messages),
+              message_offset: request.offset,
+            };
+            detailRef.current = nextDetail;
+            // flushSync commits the prepend before it returns, so the
+            // measurement below is guaranteed to see the new DOM. Deferring to
+            // requestAnimationFrame would be both less certain -- React commits
+            // on its own schedule -- and a frame late, long enough for the
+            // browser to paint the shifted position before it was corrected.
+            flushSync(() => {
+              setDetail(nextDetail);
+            });
+            if (anchorSeq != null && anchorTop != null) {
+              const after = document
+                .getElementById(`message-${anchorSeq}`)
+                ?.getBoundingClientRect().top;
+              if (after != null && after !== anchorTop) {
+                window.scrollBy({ behavior: "auto", top: after - anchorTop });
+              }
+            }
+            return true;
+          })
+          .catch((err: unknown) => {
+            if (sessionVersionRef.current === sessionVersion) {
+              setLoadEarlierError(errorMessage(err));
+            }
+            return false;
+          })
+          .finally(() => {
+            if (sessionVersionRef.current === sessionVersion) {
+              setLoadingMore(false);
+            }
+          });
+      },
+    );
   }, [id]);
 
   const loadMessageWindow = useCallback(
@@ -4460,8 +4572,10 @@ function SessionDetailView({ id }: { id: number }) {
         activeSeq = nearestTranscriptSeq(sequences);
       }
       let targetSeq = nextTranscriptSeq(sequences, activeSeq, direction);
-      if (targetSeq == null && direction === 1 && current.has_more_messages === true) {
-        await loadMoreMessages();
+      const canLoadForward = direction === 1 && current.has_more_messages === true;
+      const canLoadBackward = direction === -1 && (current.message_offset ?? 0) > 0;
+      if (targetSeq == null && (canLoadForward || canLoadBackward)) {
+        await (canLoadForward ? loadMoreMessages() : loadPreviousMessages());
         if (sessionVersionRef.current !== sessionVersion) {
           return;
         }
@@ -4485,7 +4599,7 @@ function SessionDetailView({ id }: { id: number }) {
         }
       });
     },
-    [id, loadMoreMessages],
+    [id, loadMoreMessages, loadPreviousMessages],
   );
 
   useEffect(() => {
@@ -4496,7 +4610,7 @@ function SessionDetailView({ id }: { id: number }) {
         event.repeat ||
         isInteractiveTarget(event.target) ||
         isInteractiveTarget(document.activeElement) ||
-        document.querySelector("[role='dialog']") != null
+        hasOpenModal(document)
       ) {
         return;
       }
@@ -4506,6 +4620,12 @@ function SessionDetailView({ id }: { id: number }) {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [navigateTranscript]);
+
+  // Hoisted above the early returns because hooks cannot run conditionally.
+  // TranscriptTurn is memoized, and a Map rebuilt every render would defeat
+  // that for every turn on the screen.
+  const subagents = detail?.subagents;
+  const subagentsByToolUse = useMemo(() => subagentMap(subagents ?? []), [subagents]);
 
   if (error != null) {
     return <div className="notice danger">Unable to load session: {error}</div>;
@@ -4517,8 +4637,13 @@ function SessionDetailView({ id }: { id: number }) {
 
   const messages = renderableMessages(detail.messages);
   const toc = outline == null ? threadToc(messages) : threadTocFromOutline(outline);
-  const stats = threadStats(detail.summary, messages, toc, contextWindow?.turn_count);
-  const subagentsByToolUse = subagentMap(detail.subagents);
+  const stats = threadStats(
+    detail.summary,
+    messages,
+    toc,
+    contextWindow?.turn_count,
+    detail.totals,
+  );
   const subagentRuns = countSubagentRuns(detail.subagents);
   const compactionBySeq = new Map(
     (contextWindow?.compactions ?? []).map((compaction) => [compaction.seq, compaction] as const),
@@ -4618,7 +4743,6 @@ function SessionDetailView({ id }: { id: number }) {
                 </span>
                 <span>{item.label}</span>
                 {jumpingToSeq === item.seq ? <b>loading</b> : null}
-                {item.tools > 0 ? <b>{item.tools}</b> : null}
               </a>
             ))}
           </div>
@@ -4627,17 +4751,40 @@ function SessionDetailView({ id }: { id: number }) {
         <div className="transcript-column">
           {(detail.message_offset ?? 0) > 0 ? (
             <div className="transcript-window-start">
+              {/* Counts what is missing rather than naming the first loaded
+                  message. The offset is a zero-based row index, so printing it
+                  as a 1-based ordinal contradicted the #message-<seq> anchor
+                  for that very message. */}
               <span>
-                Viewing from message {formatInt((detail.message_offset ?? 0) + 1)} of{" "}
-                {formatInt(detail.summary.message_count)}
+                {formatInt(detail.message_offset ?? 0)} earlier{" "}
+                {(detail.message_offset ?? 0) === 1 ? "message" : "messages"} not loaded
               </span>
-              <button
-                className="button small secondary"
-                onClick={() => void jumpToMessage(0)}
-                type="button"
-              >
-                Start at the beginning
-              </button>
+              {loadEarlierError != null ? (
+                <span className="transcript-window-start-error" role="status">
+                  Couldn’t load the earlier messages: {loadEarlierError}
+                </span>
+              ) : null}
+              <span className="transcript-window-start-actions">
+                <button
+                  className="button small secondary"
+                  disabled={loadingMore}
+                  onClick={() => void loadPreviousMessages()}
+                  type="button"
+                >
+                  {loadEarlierError != null
+                    ? "Try again"
+                    : loadingMore
+                      ? "Loading…"
+                      : "Load earlier"}
+                </button>
+                <button
+                  className="button small secondary"
+                  onClick={() => void jumpToMessage(0)}
+                  type="button"
+                >
+                  Start at the beginning
+                </button>
+              </span>
             </div>
           ) : null}
           {messages.map((message) => (
@@ -4709,6 +4856,7 @@ type SessionDetailData = {
     blocks: TranscriptBlockData[];
   }[];
   subagents: SubagentDetailData[];
+  totals?: { reply_count: number; tool_call_count: number };
   message_offset?: number;
   message_limit?: number | null;
   has_more_messages?: boolean;
@@ -4767,7 +4915,14 @@ type TranscriptBlockData = {
   tool_result: string | null;
 };
 
-function TranscriptTurn({
+// tabIndex={-1} makes each turn programmatically focusable without adding it to
+// the tab order, so arrow-key navigation can move focus and a screen reader
+// announces the turn it scrolled to. Without it the highlight is visual only.
+//
+// Memoized: a transcript loads an unbounded number of turns, and every arrow
+// keypress changes `active` on exactly two of them. Without this, each keypress
+// re-renders every loaded turn.
+const TranscriptTurn = memo(function TranscriptTurn({
   active,
   compaction,
   message,
@@ -4815,6 +4970,7 @@ function TranscriptTurn({
         active ? " is-keyboard-active" : ""
       }${providerClass}`}
       id={`message-${message.seq}`}
+      tabIndex={-1}
     >
       <TranscriptIdentityBadge message={message} tool={tool} />
       <div className="turn-meta">
@@ -4836,7 +4992,7 @@ function TranscriptTurn({
       </div>
     </article>
   );
-}
+});
 
 function CompactionTurn({
   active = false,
@@ -5862,7 +6018,6 @@ function threadToc(messages: SessionDetailData["messages"]): ThreadTocItem[] {
       {
         seq: message.seq,
         ...tocPresentation(label),
-        tools: message.blocks.filter((block) => block.block_type === "tool_use").length,
       },
     ];
   });
@@ -5872,14 +6027,12 @@ function threadTocFromOutline(outline: SessionOutlineItemData[]): ThreadTocItem[
   return outline.map((item) => ({
     seq: item.seq,
     ...tocPresentation(item.text),
-    tools: 0,
   }));
 }
 
 type ThreadTocItem = {
   seq: number;
   label: string;
-  tools: number;
   icon: IconName;
 };
 
@@ -5891,20 +6044,31 @@ function tocPresentation(text: string): { label: string; icon: IconName } {
   return { label: firstLine(cleanSessionTitle(text) ?? text, 70), icon: "messages" };
 }
 
+/**
+ * Header stats are all whole-session figures. Counting `messages` here would
+ * mix scopes: turns and tokens cover the session, so replies and tool calls
+ * counted from the loaded window would silently shrink the moment a transcript
+ * paginates. `totals` comes from the server aggregated over the session; the
+ * window fallback only applies to a payload that predates it.
+ */
 function threadStats(
   summary: SessionSummary,
   messages: SessionDetailData["messages"],
   toc: ThreadTocItem[],
   fullTurnCount?: number | null,
+  totals?: SessionDetailData["totals"],
 ) {
   return {
     turns: fullTurnCount != null && fullTurnCount > 0 ? fullTurnCount : toc.length,
-    replies: messages.filter((message) => message.role === "assistant").length,
-    toolCalls: messages.reduce(
-      (sum, message) =>
-        sum + message.blocks.filter((block) => block.block_type === "tool_use").length,
-      0,
-    ),
+    replies:
+      totals?.reply_count ?? messages.filter((message) => message.role === "assistant").length,
+    toolCalls:
+      totals?.tool_call_count ??
+      messages.reduce(
+        (sum, message) =>
+          sum + message.blocks.filter((block) => block.block_type === "tool_use").length,
+        0,
+      ),
     tokens: summary.total_input_tokens + summary.total_output_tokens,
   };
 }
@@ -6051,10 +6215,10 @@ function nearestTranscriptSeq(sequences: readonly number[]): number | null {
 }
 
 function scrollTranscriptMessage(seq: number) {
-  document.getElementById(`message-${seq}`)?.scrollIntoView({
-    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-    block: "start",
-  });
+  revealTranscriptMessage(
+    document.getElementById(`message-${seq}`),
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
 }
 
 async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
