@@ -4,6 +4,7 @@ import type { Stats } from "node:fs";
 import {
   closeSync,
   existsSync,
+  fstatSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -120,29 +121,47 @@ export function sync(
       break;
     }
 
-    let stats: Stats;
+    // One descriptor for everything: the skip decision, the recorded stat,
+    // and the content read all describe the same inode, so a path swapped
+    // mid-loop can neither skip wrongly nor record metadata for content that
+    // was never read. A file that vanished before open is a silent skip,
+    // matching the old stat-failure path; any other open error counts as
+    // failed, matching the old read-failure path.
+    let fd: number;
     try {
-      stats = statSync(file.path);
-    } catch {
+      fd = openSync(file.path, "r");
+    } catch (error) {
+      if ((error as { code?: string }).code !== "ENOENT") {
+        report.failed += 1;
+      }
       continue;
     }
-    const size = stats.size;
-    const mtime = mtimeSecs(stats);
-    const prior = db
-      .query("SELECT size, mtime FROM ingest_source WHERE path = ?1")
-      .get(file.path) as { size: number; mtime: number } | null;
-    if (prior != null && prior.size === size && prior.mtime === mtime) {
-      report.skipped += 1;
-      continue;
-    }
-
+    let stats: Stats;
     let content: string;
     try {
-      content = readFileSync(file.path, "utf8");
-      stats = statSync(file.path);
+      stats = fstatSync(fd);
+      const prior = db
+        .query("SELECT size, mtime FROM ingest_source WHERE path = ?1")
+        .get(file.path) as { size: number; mtime: number } | null;
+      if (prior != null && prior.size === stats.size && prior.mtime === mtimeSecs(stats)) {
+        report.skipped += 1;
+        continue;
+      }
+      // fstat before read: a write landing mid-window records a smaller size
+      // than the content read, so the next sync re-ingests instead of
+      // silently skipping the tail.
+      content = readFileSync(fd, "utf8");
     } catch {
       report.failed += 1;
       continue;
+    } finally {
+      try {
+        closeSync(fd);
+      } catch {
+        // A close failure (EIO on network/FUSE mounts) cannot invalidate a
+        // read that already succeeded, and a throw here would mask the real
+        // error on the failure path.
+      }
     }
 
     const stem = fileStem(file.path);
