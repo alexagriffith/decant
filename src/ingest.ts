@@ -34,7 +34,7 @@ import {
   materializeMissingSessionEconomics,
   materializeSessionEconomics,
 } from "./token-economics.ts";
-import { classifyTool, preview } from "./tools.ts";
+import { classifyTool, previewHeadTail } from "./tools.ts";
 import { resolveWorktreeRoots } from "./worktree.ts";
 
 export interface IngestConfig {
@@ -48,6 +48,9 @@ export interface SyncReport {
   ingested: number;
   skipped: number;
   issues: number;
+  /** `issues` split by IngestIssueCode; only codes actually seen appear. Lets
+   * callers separate data loss (`unparsed_line`) from informational sensors. */
+  issuesByCode: Record<string, number>;
   failed: number;
   cancelled: boolean;
 }
@@ -79,7 +82,7 @@ export function discover(config: IngestConfig): SourceFile[] {
   }
 
   const out: SourceFile[] = [];
-  collect(config.claudeDir, "claude_code", false, (name) => name.endsWith(".jsonl"), out);
+  collect(config.claudeDir, "claude_code", false, isClaudeSessionFile, out);
   collect(join(config.codexDir, "sessions"), "codex", false, isCodexRollout, out);
   collect(join(config.codexDir, "archived_sessions"), "codex", true, isCodexRollout, out);
   return out;
@@ -106,6 +109,7 @@ export function sync(
     ingested: 0,
     skipped: 0,
     issues: 0,
+    issuesByCode: {},
     failed: 0,
     cancelled: false,
   };
@@ -162,6 +166,9 @@ export function sync(
     writeIngestedFile(db, prepared, parsed);
     report.ingested += 1;
     report.issues += parsed.issues.length;
+    for (const issue of parsed.issues) {
+      report.issuesByCode[issue.code] = (report.issuesByCode[issue.code] ?? 0) + 1;
+    }
   }
 
   resolveSubagentParents(db);
@@ -544,11 +551,11 @@ function writeIngestedFile(db: Database, prepared: Prepared, parsed: ParsedSessi
     );
     db.query("DELETE FROM ingest_issue WHERE source_path = ?1").run(prepared.file.path);
     const insertIssue = db.prepare(
-      `INSERT INTO ingest_issue(source_path, line_no, error, raw_line, created_at)
-       VALUES (?1, ?2, ?3, ?4, datetime('now'))`,
+      `INSERT INTO ingest_issue(source_path, line_no, error, raw_line, code, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))`,
     );
     for (const issue of parsed.issues) {
-      insertIssue.run(prepared.file.path, issue.lineNo, issue.error, issue.rawLine);
+      insertIssue.run(prepared.file.path, issue.lineNo, issue.error, issue.rawLine, issue.code);
     }
     const status = parsed.issues.length === 0 ? "ok" : "ok_with_issues";
     db.query(
@@ -784,7 +791,7 @@ function writeSession(
       call.block.toolUseId,
       call.block.toolInput === undefined ? null : canonicalJson(call.block.toolInput),
       isError == null ? null : Number(isError),
-      output == null ? null : preview(output, 500),
+      output == null ? null : previewHeadTail(output, 500),
       output == null ? null : byteLength(output),
       call.block.ordinal,
       call.timestamp,
@@ -861,7 +868,7 @@ function collectSourcePath(path: string, out: SourceFile[]): void {
 
 function sourceFileForPath(path: string): SourceFile | null {
   const name = pathBasename(path);
-  if (!name.endsWith(".jsonl") || name === "session_index.jsonl") {
+  if (!name.endsWith(".jsonl") || name === "session_index.jsonl" || name === "journal.jsonl") {
     return null;
   }
   if (isCodexRollout(name)) {
@@ -881,6 +888,14 @@ function dedupeSourceFiles(files: SourceFile[]): SourceFile[] {
     unique.push(file);
   }
   return unique;
+}
+
+/** Claude Code also writes non-session JSONL into the projects tree; the only
+ * one today is the dynamic-workflow orchestration journal
+ * (subagents/workflows/<runId>/journal.jsonl). Session transcripts are
+ * <uuid>.jsonl mains and agent-*.jsonl subagents, which must keep flowing. */
+function isClaudeSessionFile(name: string): boolean {
+  return name.endsWith(".jsonl") && name !== "journal.jsonl";
 }
 
 function isCodexRollout(name: string): boolean {

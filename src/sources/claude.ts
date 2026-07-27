@@ -1,10 +1,12 @@
 import { isPriceable } from "../cost.ts";
+import { linkageIssues } from "../diagnostics.ts";
 import { canonicalJson } from "../json.ts";
 import {
   emptyUsage,
   type Json,
   type NormalizedBlock,
   type NormalizedMessage,
+  type NormalizedSession,
   type ParsedSession,
   type Role,
   reasoningEffortLevels,
@@ -66,6 +68,7 @@ export function parseClaudeSession(
   let endedAt: string | null = null;
   let title: string | null = null;
   let seq = 0;
+  const unknownTypes = new Map<string, { count: number; firstLine: number }>();
 
   for (const [index, line] of content.split(/\n/).entries()) {
     if (line.trim() === "") {
@@ -77,6 +80,7 @@ export function parseClaudeSession(
       value = JSON.parse(line) as Json;
     } catch (error) {
       issues.push({
+        code: "unparsed_line",
         lineNo: index + 1,
         error: error instanceof Error ? error.message : String(error),
         rawLine: line,
@@ -141,9 +145,21 @@ export function parseClaudeSession(
         }
       }
     } else {
+      const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: index + 1 };
+      seen.count += 1;
+      unknownTypes.set(typ, seen);
       messages.push(simpleMessage(value, "other", seq));
       seq += 1;
     }
+  }
+
+  for (const [typ, seen] of unknownTypes) {
+    issues.push({
+      code: "unknown_record_type",
+      lineNo: seen.firstLine,
+      error: `unknown record type "${typ}" on ${seen.count} line(s); kept as role "other"`,
+      rawLine: null,
+    });
   }
 
   const messageTotals = emptyUsage();
@@ -190,35 +206,35 @@ export function parseClaudeSession(
   };
   const effortLevels = reasoningEffortLevels(reasoningEfforts);
 
-  return {
-    session: {
-      tool: "claude_code",
-      sourceSessionId,
-      projectPath: cwd,
-      title,
-      cwd,
-      gitBranch,
-      model,
-      reasoningEffort: summarizeReasoningEfforts(effortLevels),
-      reasoningEffortLevels: effortLevels,
-      cliVersion,
-      startedAt,
-      endedAt,
-      isArchived: false,
-      isSubagent,
-      rootSourceSessionId,
-      spawnToolUseId,
-      agentId,
-      agentType,
-      spawnDepth,
-      rawMeta,
-      totals,
-      estReasoningTokens,
-      reasoningSource: anyThinking ? "inferred" : "none",
-      messages,
-    },
-    issues,
+  const normalized: NormalizedSession = {
+    tool: "claude_code",
+    sourceSessionId,
+    projectPath: cwd,
+    title,
+    cwd,
+    gitBranch,
+    model,
+    reasoningEffort: summarizeReasoningEfforts(effortLevels),
+    reasoningEffortLevels: effortLevels,
+    cliVersion,
+    startedAt,
+    endedAt,
+    isArchived: false,
+    isSubagent,
+    rootSourceSessionId,
+    spawnToolUseId,
+    agentId,
+    agentType,
+    spawnDepth,
+    rawMeta,
+    totals,
+    estReasoningTokens,
+    reasoningSource: anyThinking ? "inferred" : "none",
+    messages,
   };
+  issues.push(...linkageIssues(normalized));
+
+  return { session: normalized, issues };
 }
 
 function lineReasoningInputs(message: NormalizedMessage): [number, number, boolean] {

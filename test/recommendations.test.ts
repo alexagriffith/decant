@@ -87,6 +87,7 @@ describe("recommendations", () => {
       "catalog:subagents",
       "catalog:mcp",
       "catalog:hooks",
+      "catalog:trajectory-export",
     ]);
     expect(rows[0]).toMatchObject({
       kind: "catalog",
@@ -164,6 +165,7 @@ describe("recommendations", () => {
       ["signal:churn:src/main.ts", "signal", "Cold", "Runbook or regression test"],
       ["signal:search-heavy", "signal", "Hot", "AGENTS.md code map"],
       ["signal:abandoned-rate", "signal", "Governance", "Planning checklist or Skill"],
+      ["signal:ingest-health", "signal", "Governance", "Release notes or upstream issue"],
       ["catalog:agents-md", "catalog", "Hot", "AGENTS.md"],
       ["catalog:claude-md", "catalog", "Hot", "Project memory"],
       ["catalog:skills", "catalog", "Procedural", "SKILL.md"],
@@ -171,6 +173,7 @@ describe("recommendations", () => {
       ["catalog:subagents", "catalog", "Governance", "Subagent workflow"],
       ["catalog:mcp", "catalog", "Cold", "MCP integration"],
       ["catalog:hooks", "catalog", "Governance", "Hook or preflight gate"],
+      ["catalog:trajectory-export", "catalog", "Cold", "Export integration"],
       ["signal:unknown", "signal", "Cold", "Runbook"],
     ];
     for (const [key, kind] of cases) {
@@ -309,11 +312,34 @@ describe("recommendations", () => {
     db.close();
   });
 
+  test("ingest-health signal fires when recent sessions carry drift diagnostics", () => {
+    const db = freshDb();
+    // 20 recent sessions, 5 with unknown_record_type issues on their source
+    for (let i = 0; i < 20; i += 1) {
+      db.query(
+        `INSERT INTO session (tool, source_session_id, source_path, started_at)
+         VALUES ('claude_code', ?1, ?2, datetime('now','-1 day'))`,
+      ).run(`s${i}`, `/src/s${i}.jsonl`);
+    }
+    for (let i = 0; i < 5; i += 1) {
+      db.query(
+        `INSERT INTO ingest_issue (source_path, line_no, error, raw_line, code, created_at)
+         VALUES (?1, NULL, 'unknown record type "fallback" on 3 line(s)', NULL, 'unknown_record_type', datetime('now'))`,
+      ).run(`/src/s${i}.jsonl`);
+    }
+    const out = signals(db).filter((rec) => rec.key === "signal:ingest-health");
+    expect(out).toHaveLength(1);
+    expect(out[0]?.title).toContain("5");
+    db.close();
+  });
+
   test("regenerate is idempotent and preserves implemented state", () => {
     const db = base();
     seedTool(db, "fetch", "mcp", "svc", 25, 5);
     regenerate(db);
-    expect((db.query("SELECT COUNT(*) AS n FROM recommendation").get() as { n: number }).n).toBe(9);
+    expect((db.query("SELECT COUNT(*) AS n FROM recommendation").get() as { n: number }).n).toBe(
+      10,
+    );
     const firstSeen = (
       db
         .query("SELECT first_seen_at FROM recommendation WHERE key = 'catalog:agents-md'")

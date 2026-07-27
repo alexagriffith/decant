@@ -6,6 +6,7 @@ import { basename, dirname, join } from "node:path";
 import { openDb } from "../src/db.ts";
 import {
   discover,
+  discoverSourcePaths,
   type IngestConfig,
   resolveSubagentParents,
   sync,
@@ -379,6 +380,98 @@ describe("upsertSession", () => {
     });
     db.close();
   });
+
+  test("stores head-tail preview for long tool output", () => {
+    const dir = freshCase();
+    const db = openFreshDb(dir);
+
+    // Create a synthetic session with a tool call that has >500 char output
+    const headText = "Starting output";
+    const middleText = "x".repeat(2000);
+    const tailText = "Error: something failed";
+    const longOutput = headText + middleText + tailText;
+
+    const content = [
+      JSON.stringify({
+        type: "user",
+        uuid: "u1",
+        parentUuid: null,
+        sessionId: "preview-test",
+        timestamp: "2026-07-01T10:00:00.000Z",
+        cwd: "/tmp",
+        gitBranch: "main",
+        version: "2.1.0",
+        message: {
+          role: "user",
+          content: "Test",
+        },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        uuid: "a1",
+        parentUuid: "u1",
+        sessionId: "preview-test",
+        timestamp: "2026-07-01T10:00:05.000Z",
+        cwd: "/tmp",
+        gitBranch: "main",
+        version: "2.1.0",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          stop_reason: "tool_use",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-1",
+              name: "Bash",
+              input: { command: "test" },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        uuid: "u2",
+        parentUuid: "a1",
+        sessionId: "preview-test",
+        timestamp: "2026-07-01T10:00:06.000Z",
+        cwd: "/tmp",
+        gitBranch: "main",
+        version: "2.1.0",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-1",
+              is_error: false,
+              content: longOutput,
+            },
+          ],
+        },
+      }),
+    ].join("\n");
+
+    const parsed = parseClaudeSession("preview-test", content);
+    const sessionId = upsertSession(db, parsed, "/x/preview-test.jsonl", 1, 2, "hash");
+
+    const toolCall = db
+      .query("SELECT output_preview FROM tool_call WHERE session_id = ?1")
+      .get(sessionId) as { output_preview: string };
+
+    expect(toolCall.output_preview.startsWith("Starting output")).toBe(true);
+    expect(toolCall.output_preview.endsWith("Error: something failed")).toBe(true);
+    expect(toolCall.output_preview).toContain("chars omitted");
+    expect(toolCall.output_preview.includes("\n[… ")).toBe(true);
+
+    db.close();
+  });
 });
 
 describe("sync", () => {
@@ -433,6 +526,35 @@ describe("sync", () => {
       { tool: "codex", name: "rollout-old.jsonl", archived: true },
       { tool: "codex", name: "rollout-one.jsonl", archived: false },
     ]);
+  });
+
+  test("discover skips workflow journal files", () => {
+    const dir = freshCase();
+    const claudeDir = join(dir, "claude");
+    const wfDir = join(
+      claudeDir,
+      "proj-a",
+      "1111aaaa-1111-aaaa-1111-aaaa1111aaaa",
+      "subagents",
+      "workflows",
+      "wf_test1",
+    );
+    const journalLine = '{"type":"agent_result","key":"a1","agentId":"agent-abc123"}\n';
+    write(join(claudeDir, "proj-a", "1111aaaa-1111-aaaa-1111-aaaa1111aaaa.jsonl"), "");
+    write(join(wfDir, "agent-abc123.jsonl"), "");
+    write(join(wfDir, "journal.jsonl"), journalLine);
+    const files = discover({ claudeDir, codexDir: join(dir, "codex") });
+    const names = files.map((file) => basename(file.path)).sort();
+    expect(names).toEqual(["1111aaaa-1111-aaaa-1111-aaaa1111aaaa.jsonl", "agent-abc123.jsonl"]);
+  });
+
+  test("discoverSourcePaths skips workflow journal files", () => {
+    const dir = freshCase();
+    const journal = join(dir, "journal.jsonl");
+    const journalLine = '{"type":"agent_result","key":"a1","agentId":"agent-abc123"}\n';
+    write(journal, journalLine);
+    expect(discoverSourcePaths([journal])).toEqual([]);
+    expect(discoverSourcePaths([dir])).toEqual([]);
   });
 
   test("is idempotent, records parse issues, and refreshes issues on reingest", () => {
@@ -495,6 +617,45 @@ describe("sync", () => {
         }
       ).score,
     ).toBe(0);
+    db.close();
+  });
+
+  test("tallies issues by code and stores the code on every issue row", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    const sourcePath = join(config.claudeDir, "proj", "mixed.jsonl");
+    write(
+      sourcePath,
+      [
+        fixture("claude", "sample.jsonl").trimEnd(),
+        '{"type":"mystery","uuid":"m1","timestamp":"2026-05-01T10:01:00.000Z"}',
+        '{"type":"mystery","uuid":"m2","timestamp":"2026-05-01T10:02:00.000Z"}',
+        "{not json",
+      ].join("\n"),
+    );
+    const db = openFreshDb(dir);
+
+    const report = sync(db, config);
+    expect(report).toMatchObject({ scanned: 1, ingested: 1, issues: 2, failed: 0 });
+    // Two mystery lines collapse into one unknown_record_type issue.
+    expect(report.issuesByCode).toEqual({ unparsed_line: 1, unknown_record_type: 1 });
+    expect(
+      db
+        .query("SELECT code, COUNT(*) AS n FROM ingest_issue GROUP BY code ORDER BY code")
+        .all() as { code: string; n: number }[],
+    ).toEqual([
+      { code: "unknown_record_type", n: 1 },
+      { code: "unparsed_line", n: 1 },
+    ]);
+
+    // A clean source reports no codes at all.
+    write(sourcePath, fixture("claude", "sample.jsonl"));
+    const clean = sync(db, config);
+    expect(clean).toMatchObject({ ingested: 1, issues: 0 });
+    expect(clean.issuesByCode).toEqual({});
     db.close();
   });
 

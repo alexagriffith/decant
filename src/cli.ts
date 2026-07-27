@@ -18,7 +18,7 @@ import {
   timeline,
 } from "./distill.ts";
 import type { Operation } from "./enrich.ts";
-import { toMarkdown } from "./export.ts";
+import { exportTrajectory, toMarkdown } from "./export.ts";
 import { sync as ingestSync } from "./ingest.ts";
 import { configureLogging, getDecantLogger, logWatchEvent } from "./logging.ts";
 import { getSession, listProjects, listSessions, search } from "./query.ts";
@@ -212,6 +212,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         ingested: report.ingested,
         skipped: report.skipped,
         issues: report.issues,
+        issues_by_code: report.issuesByCode,
         failed: report.failed,
       };
       if (isJson(globals())) {
@@ -222,7 +223,10 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
             `${report.skipped} skipped, ${report.issues} issues, ${report.failed} failed\n`,
         );
       }
-      return report.issues > 0 ? 3 : 0;
+      // Exit 3 means decant dropped source content, which is what an unparsed
+      // line is. The other codes are sensors over content that did land, so
+      // they are reported without failing the command.
+      return (report.issuesByCode.unparsed_line ?? 0) > 0 ? 3 : 0;
     } finally {
       archive.db.close();
     }
@@ -950,63 +954,124 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
 
   program
     .command("export")
-    .description("export a session to Markdown or JSON")
+    .description("export a session to Markdown, JSON, or a trajectory-v1 record file")
     .argument("[id]", "session id", optionalInteger)
     .option("--all", "export every session")
+    .option("--include-subagents", "with --all, also export subagent sessions")
+    // Named --as, not --format, to match `distill script --as` rather than
+    // collide with the global --format table|json|md: Commander resolves a
+    // global option's flag anywhere in argv (before or after a subcommand),
+    // so a same-named local option on export would be shadowed by the root's.
+    .option("--as <format>", "md | json | trajectory (default: md, or json with --json)")
     .option("--out <dir>", "output directory")
-    .action((id: number | undefined, commandOptions: { all?: boolean; out?: string }) =>
-      run(() => {
-        const archive = readArchive();
-        try {
-          const ext = isJson(globals()) ? "json" : "md";
-          const render = (sessionId: number): string | null => {
-            const detail = getSession(archive.db, sessionId);
-            if (detail == null) {
-              return null;
-            }
-            return isJson(globals()) ? JSON.stringify(detail, null, 2) : toMarkdown(detail);
-          };
-
-          if (commandOptions.all === true) {
-            if (commandOptions.out == null) {
-              io.writeErr("error: --all requires --out <dir>\n");
-              return 2;
-            }
-            mkdirSync(commandOptions.out, { recursive: true });
-            let count = 0;
-            for (const session of listSessions(archive.db, { limit: Number.MAX_SAFE_INTEGER })) {
-              const content = render(session.id);
-              if (content != null) {
-                writeFileSync(join(commandOptions.out, `${session.id}.${ext}`), content);
-                count += 1;
-              }
-            }
-            io.writeErr(`exported ${count} sessions to ${commandOptions.out}\n`);
-            return 0;
-          }
-
-          if (id == null) {
-            io.writeErr("error: provide a session id, or --all --out <dir>\n");
+    .action(
+      (
+        id: number | undefined,
+        commandOptions: {
+          all?: boolean;
+          includeSubagents?: boolean;
+          as?: string;
+          out?: string;
+        },
+      ) =>
+        run(() => {
+          const format = commandOptions.as ?? (isJson(globals()) ? "json" : "md");
+          if (format !== "md" && format !== "json" && format !== "trajectory") {
+            io.writeErr(`error: unknown export format: ${format}\n`);
             return 2;
           }
-          const content = render(id);
-          if (content == null) {
-            io.writeErr(`error: no session with id ${id}\n`);
-            return 1;
+          const archive = readArchive();
+          try {
+            const ext = format === "md" ? "md" : format === "json" ? "json" : "trajectory.json";
+            const render = (sessionId: number): { content: string } | { error: string } => {
+              if (format === "trajectory") {
+                const out = exportTrajectory(archive.db, sessionId);
+                if (!out.ok) {
+                  return out.reason === "not_found"
+                    ? { error: `no session with id ${sessionId}` }
+                    : {
+                        error:
+                          `session ${sessionId} has no ` +
+                          `${out.reason === "missing_user_records" ? "user" : "assistant"} ` +
+                          "records; not exportable as a trajectory",
+                      };
+                }
+                if (!globals().quiet) {
+                  const repairs = Object.entries(out.report)
+                    .filter(([key, value]) => key !== "dropped_blocks" && (value as number) > 0)
+                    .map(([key, value]) => `${key}=${value}`);
+                  const dropped = Object.entries(out.report.dropped_blocks)
+                    .map(([kind, count]) => `${kind}=${count}`)
+                    .join(" ");
+                  if (dropped !== "") {
+                    repairs.push(`dropped[${dropped}]`);
+                  }
+                  const line = repairs.join(" ");
+                  if (line !== "") {
+                    io.writeErr(`session ${sessionId}: ${line}\n`);
+                  }
+                }
+                return { content: JSON.stringify(out.records, null, 2) };
+              }
+              const detail = getSession(archive.db, sessionId);
+              if (detail == null) {
+                return { error: `no session with id ${sessionId}` };
+              }
+              return {
+                content: format === "json" ? JSON.stringify(detail, null, 2) : toMarkdown(detail),
+              };
+            };
+
+            if (commandOptions.all === true) {
+              if (commandOptions.out == null) {
+                io.writeErr("error: --all requires --out <dir>\n");
+                return 2;
+              }
+              mkdirSync(commandOptions.out, { recursive: true });
+              let count = 0;
+              let skipped = 0;
+              const sessions = listSessions(archive.db, {
+                limit: Number.MAX_SAFE_INTEGER,
+                includeSubagents: commandOptions.includeSubagents === true,
+              });
+              for (const session of sessions) {
+                const rendered = render(session.id);
+                if ("error" in rendered) {
+                  skipped += 1;
+                  continue;
+                }
+                writeFileSync(join(commandOptions.out, `${session.id}.${ext}`), rendered.content);
+                count += 1;
+              }
+              io.writeErr(
+                `exported ${count} sessions to ${commandOptions.out}` +
+                  `${skipped > 0 ? ` (${skipped} skipped)` : ""}\n`,
+              );
+              return 0;
+            }
+
+            if (id == null) {
+              io.writeErr("error: provide a session id, or --all --out <dir>\n");
+              return 2;
+            }
+            const rendered = render(id);
+            if ("error" in rendered) {
+              io.writeErr(`error: ${rendered.error}\n`);
+              return 1;
+            }
+            if (commandOptions.out != null) {
+              mkdirSync(commandOptions.out, { recursive: true });
+              const path = join(commandOptions.out, `${id}.${ext}`);
+              writeFileSync(path, rendered.content);
+              io.writeErr(`wrote ${path}\n`);
+            } else {
+              io.writeOut(`${rendered.content}\n`);
+            }
+            return 0;
+          } finally {
+            archive.db.close();
           }
-          if (commandOptions.out != null) {
-            mkdirSync(commandOptions.out, { recursive: true });
-            const path = join(commandOptions.out, `${id}.${ext}`);
-            writeFileSync(path, content);
-            io.writeErr(`wrote ${path}\n`);
-          } else {
-            io.writeOut(`${content}\n`);
-          }
-          return 0;
-        } finally {
-          archive.db.close();
-        }
-      }),
+        }),
     );
 
   try {
