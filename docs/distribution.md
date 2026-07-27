@@ -48,9 +48,9 @@ bun run scripts/build-npm.ts --target all --clean --version 0.1.0
 ```
 
 Release builds stamp the same version into package metadata and the compiled
-binary. The release workflow publishes all platform packages first, then both
-launcher packages, so `optionalDependencies` always point at packages that
-already exist.
+binary. The release workflow publishes all platform packages first, then the
+launcher, so `optionalDependencies` always point at packages that already
+exist.
 
 The launcher prints a clear reinstall message if optional dependencies were
 disabled and the matching platform package is missing. Windows packages are
@@ -231,6 +231,15 @@ gh attestation verify oci://ghcr.io/dosu-ai/decant:0.1.0 -R dosu-ai/decant
 
 The `oci://` form needs a registry login first (`docker login ghcr.io`).
 
+Each release also ships its attestation as `decant-<version>.sigstore.json`
+(covering the tarballs, the raw binaries, and `SHA256SUMS` itself), so
+verification works offline from release assets alone:
+
+```sh
+gh attestation verify decant-darwin-arm64.tar.gz -R dosu-ai/decant \
+  --bundle decant-0.2.0.sigstore.json
+```
+
 **npm provenance.** Confirm the published packages carry Sigstore-signed
 provenance. `npm audit signatures` checks the packages installed in the
 current project, so install the release into a scratch project first:
@@ -238,11 +247,11 @@ current project, so install the release into a scratch project first:
 ```sh
 mkdir -p /tmp/decant-verify && cd /tmp/decant-verify
 npm init -y >/dev/null
-npm install decant@0.1.0
+npm install @dosu/decant@0.1.0
 npm audit signatures
 ```
 
-**LICENSE and NOTICE.** Every published package — both launchers and all four
+**LICENSE and NOTICE.** Every published package — the launcher and all four
 platform packages — ships both files. `npm pack <pkg>@<version>` downloads the
 registry tarball so you can inspect exactly what users receive:
 
