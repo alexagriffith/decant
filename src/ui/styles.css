@@ -164,12 +164,17 @@ svg {
 
 .brand-icon {
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   place-items: center;
-  border-radius: 8px;
-  background: var(--accent);
-  color: var(--on-accent);
+  flex: 0 0 auto;
+}
+
+.brand-icon img {
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
 }
 
 nav {
@@ -248,48 +253,66 @@ nav a[aria-current="page"] svg {
 
 .sidebar-footer {
   display: grid;
-  gap: 6px;
+  gap: 3px;
   margin-top: auto;
   border-top: 1px solid var(--line);
-  padding: 12px 16px;
+  padding: 13px 16px 14px;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.35;
 }
 
 .sidebar-stat {
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  min-height: 23px;
   min-width: 0;
 }
 
-.sidebar-stat svg {
-  width: 14px;
-  height: 14px;
+.sidebar-stat-icon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
   color: var(--faint);
+}
+
+.sidebar-stat-icon svg {
+  width: 15px;
+  height: 15px;
+  color: var(--faint);
+  stroke-width: 1.9;
 }
 
 .sidebar-stat strong {
   color: var(--fg);
-  font-weight: 650;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
 }
 
-.live-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--success);
-  animation: pulse 1.6s ease-in-out infinite;
+.dosu-attribution {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-top: 7px;
+  border-top: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 550;
+  padding-top: 11px;
+  transition: color 0.12s ease;
 }
 
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 1;
-  }
+.dosu-attribution:hover {
+  color: var(--fg);
+}
+
+.dosu-attribution img {
+  width: 17px;
+  height: 17px;
 }
 
 .workspace {
@@ -1034,6 +1057,60 @@ td a:hover {
   padding-left: calc(var(--depth, 0) * 18px);
 }
 
+.session-title-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-title-line > a {
+  min-width: 0;
+}
+
+.dosu-provenance-badge {
+  display: inline-flex;
+  min-width: 0;
+  height: 23px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid color-mix(in oklab, #b4bb91 45%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in oklab, #b4bb91 12%, var(--surface));
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  padding: 0 8px 0 5px;
+}
+
+.dosu-provenance-badge:hover,
+.dosu-provenance-badge:focus-visible {
+  border-color: color-mix(in oklab, #b4bb91 72%, var(--line-strong));
+  color: var(--fg);
+}
+
+.dosu-provenance-badge img {
+  width: 16px;
+  height: 16px;
+}
+
+.dosu-label-compact {
+  display: none;
+}
+
+.dosu-evidence-tooltip {
+  display: grid;
+  gap: 4px;
+  max-width: 24rem;
+}
+
+.dosu-evidence-tooltip p {
+  margin: 0;
+  color: var(--muted);
+}
+
 .session-title-stack a,
 .session-title-stack small {
   overflow: hidden;
@@ -1485,6 +1562,186 @@ mark {
   color: var(--accent);
 }
 
+.chart-share-button {
+  display: inline-flex;
+  min-height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 9px;
+}
+
+.chart-share-button:hover {
+  border-color: var(--line-strong);
+  background: var(--elevated);
+  color: var(--fg);
+}
+
+.chart-share-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.share-review-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+  background: rgb(0 0 0 / 72%);
+  padding: 24px;
+  backdrop-filter: blur(8px);
+}
+
+.share-review-sheet {
+  width: min(100%, 68rem);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 44%);
+}
+
+.share-review-sheet > header,
+.share-review-sheet > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+}
+
+.share-review-sheet > header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in oklab, var(--surface) 92%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.share-review-sheet > header span {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.share-review-sheet > header h2 {
+  margin: 3px 0 0;
+  font-size: 18px;
+}
+
+.share-review-body {
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+}
+
+.share-preview {
+  display: grid;
+  gap: 10px;
+}
+
+.share-preview img,
+.share-preview-loading {
+  width: 100%;
+  aspect-ratio: 1200 / 630;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0b0e14;
+  object-fit: contain;
+}
+
+.share-preview-loading {
+  display: grid;
+  place-items: center;
+  color: #9aa6b8;
+}
+
+.share-export-size {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.share-privacy-review {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.share-privacy-review > div,
+.share-copy-review > div {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--elevated);
+  padding: 13px 14px;
+}
+
+.share-privacy-review h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.share-privacy-review ul {
+  display: grid;
+  gap: 5px;
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  padding-left: 18px;
+}
+
+.share-copy-review {
+  display: grid;
+  gap: 10px;
+}
+
+.share-copy-review p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.share-review-sheet > footer {
+  position: sticky;
+  bottom: 0;
+  align-items: flex-end;
+  border-top: 1px solid var(--line);
+  background: color-mix(in oklab, var(--surface) 92%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.share-actions .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.share-review-sheet > footer p {
+  margin: 0;
+  color: var(--faint);
+  font-size: 11px;
+  text-align: right;
+}
+
 .analytics-chart .chart-grid {
   stroke: var(--line);
   stroke-dasharray: 3 5;
@@ -1857,7 +2114,106 @@ mark {
 }
 
 .insights-stack {
-  gap: 40px;
+  gap: 36px;
+}
+
+.insights-heading {
+  max-width: 62rem;
+  gap: 6px;
+  padding-bottom: 4px;
+}
+
+.page-eyebrow,
+.section-eyebrow {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 720;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.insights-heading h1 {
+  font-size: 28px;
+  font-weight: 680;
+  line-height: 1.15;
+}
+
+.insights-heading p {
+  max-width: 68ch;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.insights-section {
+  gap: 16px;
+}
+
+.insights-section-heading {
+  align-items: flex-start;
+}
+
+.insights-section-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.insights-section-heading h2 {
+  font-size: 20px;
+  font-weight: 660;
+}
+
+.insights-section-heading p {
+  line-height: 1.45;
+}
+
+.section-count {
+  width: fit-content;
+  align-self: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  line-height: 1;
+  padding: 6px 9px;
+}
+
+.dosu-callout {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid color-mix(in oklab, #b4bb91 34%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in oklab, #b4bb91 8%, var(--surface));
+  padding: 12px 14px;
+}
+
+.dosu-callout > img {
+  width: 26px;
+  height: 27px;
+}
+
+.dosu-callout > div {
+  display: grid;
+  gap: 2px;
+}
+
+.dosu-callout strong {
+  font-size: 13px;
+}
+
+.dosu-callout span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dosu-callout > a {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.dosu-callout > a:hover {
+  color: var(--fg);
 }
 
 .signal-hero {
@@ -2068,8 +2424,15 @@ mark {
   gap: 12px;
 }
 
+.insights-dosu-suggestion {
+  display: grid;
+  width: min(100%, 32rem);
+  justify-self: end;
+  margin-top: 4px;
+}
+
 .insights-history-heading {
-  margin-top: 20px;
+  margin-top: 8px;
 }
 
 .catalog-card {
@@ -2083,6 +2446,58 @@ mark {
 .catalog-card.is-featured {
   grid-column: span 2;
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 25%, transparent);
+}
+
+.dosu-insights-card {
+  border-color: color-mix(in oklab, #b4bb91 38%, var(--line));
+  background: color-mix(in oklab, #b4bb91 7%, var(--surface));
+  box-shadow: 0 12px 28px -26px color-mix(in oklab, #65704b 48%, transparent);
+}
+
+.dosu-card-mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.dosu-card-mark img {
+  width: 25px;
+  height: 26px;
+}
+
+.dosu-card-kicker {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.dosu-insights-card .recommendation-actions {
+  justify-content: space-between;
+  margin-top: auto;
+  border-top: 1px solid var(--line);
+}
+
+.dosu-insights-card .recommendation-actions > div {
+  display: grid;
+  gap: 2px;
+}
+
+.dosu-insights-card .recommendation-actions strong {
+  font-size: 12px;
+}
+
+.dosu-insights-card .recommendation-actions small {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.dosu-insights-card .recommendation-actions a {
+  color: var(--fg);
 }
 
 .catalog-card > div:first-child {
@@ -2180,6 +2595,68 @@ mark {
 .settings-note {
   color: var(--faint);
   font-size: 12px;
+}
+
+.about-decant .panel-heading > img {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 11px;
+}
+
+.about-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.about-links a {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.about-links a:hover {
+  color: var(--fg);
+}
+
+.about-privacy {
+  margin: 16px 0;
+  border-left: 2px solid var(--success);
+  color: var(--muted);
+  font-size: 13px;
+  padding-left: 12px;
+}
+
+.archive-info {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+
+.archive-info > div {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  gap: 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
+  padding: 10px 0;
+}
+
+.archive-info dt {
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.archive-info dd {
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-detail {
@@ -2487,6 +2964,24 @@ mark {
   stroke-width: 1.8;
 }
 
+.toc-icon img {
+  width: 15px;
+  height: 15px;
+}
+
+.toc-icon.is-dosu {
+  background: color-mix(in oklab, #b4bb91 16%, transparent);
+}
+
+.toc a.is-dosu {
+  color: var(--fg);
+}
+
+.toc a.is-dosu:hover .toc-icon,
+.toc a.is-dosu.is-current .toc-icon {
+  background: color-mix(in oklab, #b4bb91 25%, transparent);
+}
+
 .toc a:hover .toc-icon {
   background: color-mix(in oklab, var(--accent) 10%, transparent);
   color: var(--accent);
@@ -2501,6 +2996,18 @@ mark {
   color: var(--faint);
   font-size: 10px;
   font-weight: 600;
+}
+
+.toc em {
+  align-self: center;
+  border: 1px solid color-mix(in oklab, #b4bb91 40%, var(--line));
+  border-radius: 999px;
+  color: var(--faint);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 5px;
 }
 
 .transcript-column {
@@ -2594,7 +3101,8 @@ mark {
 }
 
 .tool-call > div {
-  display: flex;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
   min-width: 0;
   align-items: center;
   gap: 8px;
@@ -2602,7 +3110,13 @@ mark {
   font-size: 14px;
 }
 
-.tool-call > div span {
+.tool-call > div > svg {
+  width: 15px;
+  height: 15px;
+  justify-self: center;
+}
+
+.tool-call > div .tool-call-name {
   overflow: hidden;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   text-overflow: ellipsis;
@@ -2616,6 +3130,40 @@ mark {
 
 .tool-call details {
   margin-top: 6px;
+}
+
+.tool-call.is-dosu {
+  border-color: color-mix(in oklab, #b4bb91 58%, var(--line));
+  background: color-mix(in oklab, #b4bb91 9%, var(--surface));
+  box-shadow:
+    inset 3px 0 0 color-mix(in oklab, #899364 70%, transparent),
+    0 12px 28px -22px color-mix(in oklab, #65704b 65%, transparent);
+  padding-left: 12px;
+}
+
+.dosu-tool-mark {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 6px;
+  background: color-mix(in oklab, #b4bb91 18%, transparent);
+}
+
+.dosu-tool-mark img {
+  width: 17px;
+  height: 17px;
+}
+
+.dosu-tool-badge {
+  border: 1px solid color-mix(in oklab, #b4bb91 48%, var(--line));
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 4px 7px;
+  white-space: nowrap;
 }
 
 .tool-result {
@@ -2979,6 +3527,10 @@ pre {
   .catalog-card.is-featured {
     grid-column: span 1;
   }
+
+  .share-review-sheet {
+    max-height: calc(100vh - 24px);
+  }
 }
 
 @media (max-width: 640px) {
@@ -3035,6 +3587,62 @@ pre {
 
   .signal-hero {
     padding: 16px;
+  }
+
+  .dosu-label-full {
+    display: none;
+  }
+
+  .dosu-label-compact {
+    display: inline;
+  }
+
+  .dosu-callout {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .dosu-callout > a {
+    grid-column: 2;
+  }
+
+  .dosu-callout > .icon-button {
+    grid-row: 1;
+    grid-column: 3;
+  }
+
+  .share-review-backdrop {
+    place-items: end center;
+    padding: 0;
+  }
+
+  .share-review-sheet {
+    max-height: calc(100vh - 12px);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  }
+
+  .share-review-sheet > header,
+  .share-review-sheet > footer,
+  .share-review-body {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .share-privacy-review {
+    grid-template-columns: 1fr;
+  }
+
+  .share-review-sheet > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .share-review-sheet > footer p {
+    text-align: left;
+  }
+
+  .archive-info > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 }
 

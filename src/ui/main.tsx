@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   ArrowLeft,
   BarChart3,
+  ChartNoAxesCombined,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -10,6 +11,7 @@ import {
   ChevronUp,
   CircleDollarSign,
   Clock3,
+  Copy,
   Cpu,
   Download,
   FileText,
@@ -28,6 +30,7 @@ import {
   Rows3,
   Search,
   Settings,
+  Share2,
   ShieldCheck,
   Sun,
   Upload,
@@ -51,6 +54,8 @@ import {
 } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
+import dosuDecantUrl from "./assets/dosu-decant.png";
+import dosuOfficialUrl from "./assets/dosu-official.svg";
 import {
   type AnalyticsChartMetric,
   type AnalyticsChartState,
@@ -60,16 +65,41 @@ import {
 import { layoutContextAnnotations } from "./context-window-layout.ts";
 import { contextWindowDisplayMode } from "./context-window-state.ts";
 import { compactDateTime, fullDateTime } from "./date-time.ts";
+import { dosuBadgeAriaLabel, dosuBadgeVisualLabel, dosuEvidenceSummary } from "./dosu-badge.ts";
+import {
+  DOSU_ANALYTICS_DISMISSAL_KEY,
+  type DosuSuggestions,
+  shouldShowDosuCta,
+} from "./dosu-cta.ts";
+import { dosuLink } from "./dosu-links.ts";
+import { dosuToolDisplayName, isDosuToolName } from "./dosu-tool.ts";
 import { effortDisplayLabel, effortTooltip } from "./effort.ts";
 import { isFramed } from "./frame-guard.ts";
 import { formatIssueBadge } from "./ingest-issues.ts";
 import { planSessionLoad, shouldShowSessionSkeleton } from "./loading-state.ts";
 import {
+  documentTitleFor,
   pathOnly,
   activeRoute as resolveActiveRoute,
   activeRouteKey as resolveActiveRouteKey,
   titleFor,
 } from "./navigation.ts";
+import {
+  hasShareCardValues,
+  SHARE_CARD_HEIGHT,
+  SHARE_CARD_SCALE,
+  SHARE_CARD_WIDTH,
+  SHARE_EXCLUDED_FIELDS,
+  SHARE_INCLUDED_FIELDS,
+  type ShareCardCopyInput,
+  shareCardAltText,
+  shareCardButtonLabel,
+  shareCardCaption,
+  shareCardFilename,
+  shareCardQualifier,
+  shareCardTakeaway,
+  shareCardTitle,
+} from "./share-card.ts";
 import {
   hasOpenModal,
   isInteractiveTarget,
@@ -130,6 +160,8 @@ type SessionSummary = {
   subagent_estimated_cost_usd: number;
   /** Ingest diagnostics recorded against this session's source file. */
   ingest_issue_count: number;
+  dosu_mcp_direct_calls: number;
+  dosu_mcp_tree_calls: number;
   subagents?: SessionSummary[];
 };
 
@@ -270,12 +302,14 @@ type ConfigView = {
   dbPath: string;
   claudeDir: string;
   codexDir: string;
+  version: string;
 };
 
 type UserSettings = {
   agent: string;
   terminal: string;
   ide: string;
+  dosuSuggestions: DosuSuggestions;
 };
 
 type SettingsInfo = {
@@ -286,6 +320,7 @@ type SettingsInfo = {
     agents: [string, string][];
     terminals: [string, string][];
     ides: [string, string][];
+    dosuSuggestions: [string, string][];
   };
 };
 
@@ -440,7 +475,15 @@ const ROUTE_SLICES: Record<string, DataSlice[]> = {
   Sessions: [],
   Projects: ["projects"],
   Search: [],
-  Analytics: ["byDay", "byModel", "byProject", "activity", "modelSparklines", "tokenEconomics"],
+  Analytics: [
+    "byDay",
+    "byModel",
+    "byProject",
+    "activity",
+    "modelSparklines",
+    "tokenEconomics",
+    "settings",
+  ],
   Insights: ["recommendations", "settings"],
   "Tools & MCP": ["tools", "mcp"],
   Files: ["files"],
@@ -545,6 +588,10 @@ function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  useEffect(() => {
+    document.title = documentTitleFor(path, navItems);
+  }, [path]);
 
   useEffect(
     () => () => {
@@ -702,7 +749,7 @@ function App() {
         <div className="brand-row">
           <a className="brand" href="/" onClick={(event) => navigate(event, "/", setPath)}>
             <span className="brand-icon">
-              <Icon name="beaker" />
+              <img alt="" src={dosuDecantUrl} />
             </span>
             <span>decant</span>
           </a>
@@ -744,24 +791,34 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="sidebar-stat" title="Live and auto-syncing">
-            <span className="live-dot" />
+          <div className="sidebar-stat" title="Sessions in this archive">
+            <span className="sidebar-stat-icon">
+              <Icon name="trend" />
+            </span>
             <span>
               <strong>{formatInt(metrics?.sessions ?? 0)}</strong> sessions
             </span>
           </div>
           <div className="sidebar-stat">
-            <Icon name="money" />
+            <span className="sidebar-stat-icon">
+              <Icon name="money" />
+            </span>
             <span>
               <strong>{money(metrics?.estimated_cost_usd ?? 0)}</strong> tracked
             </span>
           </div>
           {lastActivity != null ? (
             <div className="sidebar-stat">
-              <Icon name="clock" />
+              <span className="sidebar-stat-icon">
+                <Icon name="clock" />
+              </span>
               <span>latest {lastActivity}</span>
             </div>
           ) : null}
+          <a className="dosu-attribution" href={dosuLink("sidebar")} rel="noopener" target="_blank">
+            <img alt="" src={dosuOfficialUrl} />
+            <span>Built by Dosu ↗</span>
+          </a>
         </div>
       </aside>
       <div className="workspace">
@@ -886,6 +943,7 @@ function renderView(
           dateRange={actions.dateRange}
           onDateRangeChange={actions.onDateRangeChange}
           onSync={actions.runSync}
+          suggestions={data.settings?.settings.dosuSuggestions}
           syncing={actions.syncing}
         />
       );
@@ -915,7 +973,9 @@ function renderView(
         />
       );
     case "Settings":
-      return <SettingsView config={data.config} settingsInfo={data.settings} />;
+      return (
+        <SettingsView config={data.config} onSaved={actions.refresh} settingsInfo={data.settings} />
+      );
     default:
       return (
         <SessionsView
@@ -1424,7 +1484,10 @@ function SessionTableRow({
       </td>
       <td className="truncate-cell">
         <span className="session-title-stack" style={indentStyle}>
-          <a href={`/sessions/${session.id}`}>{title}</a>
+          <span className="session-title-line">
+            <a href={`/sessions/${session.id}`}>{title}</a>
+            <DosuProvenanceBadge session={session} />
+          </span>
           {isSubagent ? <small>{subagentDescriptor(session)}</small> : null}
         </span>
       </td>
@@ -1447,6 +1510,41 @@ function SessionTableRow({
         <SessionStartedAt value={session.started_at} />
       </td>
     </tr>
+  );
+}
+
+function DosuProvenanceBadge({ session }: { session: SessionSummary }) {
+  if (session.dosu_mcp_tree_calls <= 0) {
+    return null;
+  }
+  const evidence = {
+    directCalls: session.dosu_mcp_direct_calls,
+    treeCalls: session.dosu_mcp_tree_calls,
+  };
+  return (
+    <Tooltip
+      content={
+        <div className="dosu-evidence-tooltip">
+          <strong>Dosu MCP used in this session</strong>
+          <p>{dosuEvidenceSummary(evidence)}</p>
+        </div>
+      }
+    >
+      {(tooltipProps) => (
+        <a
+          {...tooltipProps}
+          aria-label={dosuBadgeAriaLabel(evidence)}
+          className="dosu-provenance-badge"
+          href={dosuLink("session_badge")}
+          rel="noopener"
+          target="_blank"
+        >
+          <img alt="" src={dosuOfficialUrl} />
+          <span className="dosu-label-full">{dosuBadgeVisualLabel(false)}</span>
+          <span className="dosu-label-compact">{dosuBadgeVisualLabel(true)}</span>
+        </a>
+      )}
+    </Tooltip>
   );
 }
 
@@ -1867,14 +1965,19 @@ function AnalyticsView({
   dateRange,
   onDateRangeChange,
   onSync,
+  suggestions,
   syncing,
 }: {
   data: DashboardData;
   dateRange: DateRangeSelection;
   onDateRangeChange: (range: DateRangeSelection) => void;
   onSync: () => void;
+  suggestions: DosuSuggestions | undefined;
   syncing: boolean;
 }) {
+  const [dosuDismissed, setDosuDismissed] = useState(
+    () => localStorage.getItem(DOSU_ANALYTICS_DISMISSAL_KEY) === "1",
+  );
   const [modelSort, setModelSort] = useState<SortState<ModelSortKey>>({
     key: "cost",
     direction: "desc",
@@ -1957,14 +2060,52 @@ function AnalyticsView({
       <TokenEconomicsPanel economics={data.tokenEconomics} />
 
       <div className="split">
-        <DailyPanel rows={byDay} metric="sessions" title="Sessions per day" />
-        <DailyPanel rows={byDay} metric="cost" title="Cost per day" />
+        <DailyPanel
+          rows={byDay}
+          metric="sessions"
+          timezone={data.activity?.timezone}
+          title="Sessions per day"
+        />
+        <DailyPanel
+          rows={byDay}
+          metric="cost"
+          timezone={data.activity?.timezone}
+          title="Cost per day"
+        />
       </div>
 
       <div className="split">
-        <ActivityPanel activity={data.activity} />
-        <WeekdayPanel activity={data.activity} />
+        <ActivityPanel activity={data.activity} rangeLabels={byDay.map((row) => row.key)} />
+        <WeekdayPanel activity={data.activity} rangeLabels={byDay.map((row) => row.key)} />
       </div>
+
+      {shouldShowDosuCta({
+        dismissed: dosuDismissed,
+        route: "analytics",
+        suggestions,
+      }) ? (
+        <aside className="dosu-callout">
+          <img alt="" src={dosuOfficialUrl} />
+          <div>
+            <strong>Your archive shows the pattern.</strong>
+            <span>Dosu helps the next agent use it.</span>
+          </div>
+          <a href={dosuLink("analytics_callout")} rel="noopener" target="_blank">
+            Learn about Dosu →
+          </a>
+          <button
+            aria-label="Dismiss Dosu suggestion"
+            className="icon-button"
+            onClick={() => {
+              localStorage.setItem(DOSU_ANALYTICS_DISMISSAL_KEY, "1");
+              setDosuDismissed(true);
+            }}
+            type="button"
+          >
+            <Icon name="x" />
+          </button>
+        </aside>
+      ) : null}
 
       <section className="panel">
         <div className="panel-heading">
@@ -2115,9 +2256,24 @@ function AnalyticsView({
   );
 }
 
-function ActivityPanel({ activity }: { activity: Activity | null }) {
+function ActivityPanel({
+  activity,
+  rangeLabels,
+}: {
+  activity: Activity | null;
+  rangeLabels: string[];
+}) {
   const labels = Array.from({ length: 24 }, (_, hour) => hourLabel(hour));
   const peak = activity?.peak_hour ?? peakIndex(activity?.by_hour ?? []);
+  const range = shareRange(rangeLabels);
+  const shareInput: ShareCardCopyInput = {
+    kind: "busiest_hours",
+    labels,
+    values: activity?.by_hour ?? [],
+    start: range.start,
+    end: range.end,
+    timezone: activity?.timezone ?? localTimezone(),
+  };
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -2129,6 +2285,12 @@ function ActivityPanel({ activity }: { activity: Activity | null }) {
               : `Local time, you ship most around ${hourLabel(peak)}`}
           </p>
         </div>
+        <ShareChartButton
+          disabled={!hasShareCardValues(activity?.by_hour)}
+          input={shareInput}
+          metric="int"
+          variant="bar"
+        />
       </div>
       <div className="panel-body chart-panel-body">
         <AnalyticsChart
@@ -2462,9 +2624,24 @@ function Tooltip({
   );
 }
 
-function WeekdayPanel({ activity }: { activity: Activity | null }) {
+function WeekdayPanel({
+  activity,
+  rangeLabels,
+}: {
+  activity: Activity | null;
+  rangeLabels: string[];
+}) {
   const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const peak = activity?.peak_weekday ?? peakIndex(activity?.by_weekday ?? []);
+  const range = shareRange(rangeLabels);
+  const shareInput: ShareCardCopyInput = {
+    kind: "busiest_days",
+    labels,
+    values: activity?.by_weekday ?? [],
+    start: range.start,
+    end: range.end,
+    timezone: activity?.timezone ?? localTimezone(),
+  };
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -2472,6 +2649,12 @@ function WeekdayPanel({ activity }: { activity: Activity | null }) {
           <h2>Busiest days</h2>
           <p>{peak == null ? "Sessions by weekday" : `You ship most on ${weekdayLabel(peak)}`}</p>
         </div>
+        <ShareChartButton
+          disabled={!hasShareCardValues(activity?.by_weekday)}
+          input={shareInput}
+          metric="int"
+          variant="bar"
+        />
       </div>
       <div className="panel-body chart-panel-body">
         <AnalyticsChart
@@ -2488,26 +2671,44 @@ function WeekdayPanel({ activity }: { activity: Activity | null }) {
 function DailyPanel({
   rows,
   metric,
+  timezone,
   title,
 }: {
   rows: DimensionRow[];
   metric: "sessions" | "cost";
+  timezone: string | undefined;
   title: string;
 }) {
+  const labels = rows.map((row) => row.key);
   const values = rows.map((row) => (metric === "sessions" ? row.sessions : row.estimated_cost_usd));
+  const range = shareRange(labels);
+  const shareInput: ShareCardCopyInput = {
+    kind: metric === "sessions" ? "sessions_per_day" : "estimated_cost_per_day",
+    labels,
+    values,
+    start: range.start,
+    end: range.end,
+    timezone: timezone ?? localTimezone(),
+  };
   return (
     <section className="panel">
       <div className="panel-heading">
         <div>
           <h2>{title}</h2>
         </div>
+        <ShareChartButton
+          disabled={rows.length === 0}
+          input={shareInput}
+          metric={metric === "cost" ? "money" : "int"}
+          variant={metric === "cost" ? "line" : "bar"}
+        />
       </div>
       <div className="panel-body">
         {rows.length === 0 ? (
           <EmptyState icon="chart" message="Widen the date range." title="No data in range" />
         ) : (
           <AnalyticsChart
-            labels={rows.map((row) => row.key)}
+            labels={labels}
             metric={metric === "cost" ? "money" : "int"}
             values={values}
             variant={metric === "cost" ? "line" : "bar"}
@@ -2516,6 +2717,444 @@ function DailyPanel({
       </div>
     </section>
   );
+}
+
+function ShareChartButton({
+  disabled = false,
+  input,
+  metric,
+  variant,
+}: {
+  disabled?: boolean;
+  input: ShareCardCopyInput;
+  metric: AnalyticsChartMetric;
+  variant: AnalyticsChartVariant;
+}) {
+  const [open, setOpen] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [png, setPng] = useState<Blob | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
+  const renderVersionRef = useRef(0);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const title = shareCardTitle(input.kind);
+  const caption = shareCardCaption(input);
+  const altText = shareCardAltText(input);
+  const filename = shareCardFilename(input.kind, input.start, input.end);
+
+  const setPreview = useCallback((blob: Blob | null) => {
+    if (previewUrlRef.current != null) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    const nextUrl = blob == null ? null : URL.createObjectURL(blob);
+    previewUrlRef.current = nextUrl;
+    setPreviewUrl(nextUrl);
+    setPng(blob);
+  }, []);
+
+  const renderPreview = useCallback(async () => {
+    const version = renderVersionRef.current + 1;
+    renderVersionRef.current = version;
+    setBusy(true);
+    setStatus(null);
+    try {
+      const blob = await renderShareCardPng(input, metric, variant);
+      if (renderVersionRef.current === version) {
+        setPreview(blob);
+      }
+    } catch (error) {
+      if (renderVersionRef.current === version) {
+        setStatus(`Unable to render image: ${errorMessage(error)}`);
+        setPreview(null);
+      }
+    } finally {
+      if (renderVersionRef.current === version) {
+        setBusy(false);
+      }
+    }
+  }, [input, metric, setPreview, variant]);
+
+  useEffect(
+    () => () => {
+      renderVersionRef.current += 1;
+      if (previewUrlRef.current != null) {
+        URL.revokeObjectURL(previewUrlRef.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const returnFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : triggerRef.current;
+    const focusFrame = window.requestAnimationFrame(() => {
+      shareDialogFocusTargets(dialogRef.current)[0]?.focus();
+    });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+      const dialog = dialogRef.current;
+      const focusTargets = shareDialogFocusTargets(dialog);
+      const first = focusTargets[0];
+      const last = focusTargets.at(-1);
+      if (dialog == null || first == null || last == null) {
+        return;
+      }
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", onKeyDown);
+      if (returnFocus?.isConnected === true) {
+        returnFocus.focus();
+      }
+    };
+  }, [open]);
+
+  const copyText = async (value: string, success: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setStatus(success);
+    } catch (error) {
+      setStatus(`Clipboard unavailable: ${errorMessage(error)}`);
+    }
+  };
+
+  const copyImage = async () => {
+    if (png == null || typeof ClipboardItem === "undefined" || navigator.clipboard?.write == null) {
+      setStatus("Image copying is unavailable in this browser. Download the PNG instead.");
+      return;
+    }
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+      setStatus("Image copied.");
+    } catch (error) {
+      setStatus(`Image copy failed: ${errorMessage(error)}`);
+    }
+  };
+
+  const download = () => {
+    if (previewUrl == null) {
+      return;
+    }
+    const anchor = document.createElement("a");
+    anchor.download = filename;
+    anchor.href = previewUrl;
+    anchor.click();
+    setStatus(`Downloaded ${filename}.`);
+  };
+
+  const nativeShare = async () => {
+    if (png == null || navigator.share == null) {
+      setStatus("The native share sheet is unavailable in this browser.");
+      return;
+    }
+    const file = new File([png], filename, { type: "image/png" });
+    if (navigator.canShare?.({ files: [file] }) === false) {
+      setStatus("This browser cannot share PNG files. Download the image instead.");
+      return;
+    }
+    try {
+      await navigator.share({ files: [file], title, text: caption });
+      setStatus("Shared from your device.");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setStatus("Share canceled.");
+      } else {
+        setStatus(`Share failed: ${errorMessage(error)}`);
+      }
+    }
+  };
+
+  return (
+    <>
+      <button
+        aria-label={shareCardButtonLabel(input.kind)}
+        className="chart-share-button"
+        disabled={disabled}
+        onClick={() => {
+          setOpen(true);
+          void renderPreview();
+        }}
+        ref={triggerRef}
+        type="button"
+      >
+        <Icon name="share" />
+        Share ↗
+      </button>
+      {open
+        ? createPortal(
+            <div className="share-review-backdrop">
+              <section
+                aria-labelledby={`share-title-${input.kind}`}
+                aria-modal="true"
+                className="share-review-sheet"
+                ref={dialogRef}
+                role="dialog"
+              >
+                <header>
+                  <div>
+                    <span>Local, aggregate-only export</span>
+                    <h2 id={`share-title-${input.kind}`}>Review {title}</h2>
+                  </div>
+                  <button
+                    aria-label="Close share review"
+                    className="icon-button"
+                    onClick={() => setOpen(false)}
+                    type="button"
+                  >
+                    <Icon name="x" />
+                  </button>
+                </header>
+                <div className="share-review-body">
+                  <div className="share-preview">
+                    {busy ? (
+                      <div className="share-preview-loading">Rendering locally…</div>
+                    ) : previewUrl == null ? (
+                      <div className="share-preview-loading">Preview unavailable</div>
+                    ) : (
+                      <img alt={altText} src={previewUrl} />
+                    )}
+                    <p className="share-export-size">2× high-density PNG · 2400 × 1260</p>
+                  </div>
+                  <div className="share-privacy-review">
+                    <div>
+                      <h3>Included</h3>
+                      <ul>
+                        {SHARE_INCLUDED_FIELDS.map((field) => (
+                          <li key={field}>{field}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div>
+                      <h3>Always excluded</h3>
+                      <ul>
+                        {SHARE_EXCLUDED_FIELDS.map((field) => (
+                          <li key={field}>{field}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                  <div className="share-copy-review">
+                    <div>
+                      <strong>Caption</strong>
+                      <p>{caption}</p>
+                    </div>
+                    <div>
+                      <strong>Alt text</strong>
+                      <p>{altText}</p>
+                    </div>
+                  </div>
+                </div>
+                <footer>
+                  <div className="share-actions">
+                    <button
+                      className="secondary-button"
+                      disabled={png == null || busy}
+                      onClick={() => void copyImage()}
+                      type="button"
+                    >
+                      <Icon name="copy" />
+                      Copy image
+                    </button>
+                    <button
+                      className="secondary-button"
+                      disabled={png == null || busy}
+                      onClick={download}
+                      type="button"
+                    >
+                      <Icon name="download" />
+                      Download PNG
+                    </button>
+                    <button
+                      className="secondary-button"
+                      disabled={png == null || busy}
+                      onClick={() => void nativeShare()}
+                      type="button"
+                    >
+                      <Icon name="share" />
+                      Share…
+                    </button>
+                    <button
+                      className="secondary-button"
+                      onClick={() => void copyText(caption, "Caption copied.")}
+                      type="button"
+                    >
+                      Copy caption
+                    </button>
+                    <button
+                      className="secondary-button"
+                      onClick={() => void copyText(altText, "Alt text copied.")}
+                      type="button"
+                    >
+                      Copy alt text
+                    </button>
+                  </div>
+                  <p aria-live="polite">{status ?? "Nothing leaves this machine until you act."}</p>
+                </footer>
+              </section>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+function shareDialogFocusTargets(dialog: HTMLElement | null): HTMLElement[] {
+  if (dialog == null) {
+    return [];
+  }
+  return Array.from(
+    dialog.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.getClientRects().length > 0);
+}
+
+async function renderShareCardPng(
+  input: ShareCardCopyInput,
+  metric: AnalyticsChartMetric,
+  variant: AnalyticsChartVariant,
+): Promise<Blob> {
+  const scale = SHARE_CARD_SCALE;
+  const chartNode = document.createElement("div");
+  chartNode.style.cssText =
+    "position:fixed;left:-10000px;top:-10000px;width:1080px;height:310px;pointer-events:none";
+  document.body.append(chartNode);
+  const chart = echarts.init(chartNode, null, {
+    renderer: "canvas",
+    width: 1080,
+    height: 310,
+  });
+  let chartUrl: string;
+  try {
+    const state = prepareAnalyticsChartState({
+      labels: input.labels,
+      metric,
+      values: input.values,
+      variant,
+    });
+    chart.setOption(
+      {
+        ...buildChartOption(state),
+        animation: false,
+        backgroundColor: "#11151f",
+      },
+      true,
+    );
+    chartUrl = chart.getDataURL({
+      backgroundColor: "#11151f",
+      pixelRatio: Math.max(1, scale),
+      type: "png",
+    });
+  } finally {
+    chart.dispose();
+    chartNode.remove();
+  }
+
+  const [chartImage, decantImage, dosuImage] = await Promise.all([
+    loadCanvasImage(chartUrl),
+    loadCanvasImage(dosuDecantUrl),
+    loadCanvasImage(dosuOfficialUrl),
+  ]);
+  const canvas = document.createElement("canvas");
+  canvas.width = SHARE_CARD_WIDTH * scale;
+  canvas.height = SHARE_CARD_HEIGHT * scale;
+  const context = canvas.getContext("2d");
+  if (context == null) {
+    throw new Error("2D canvas is unavailable");
+  }
+  context.scale(scale, scale);
+  context.fillStyle = "#0b0e14";
+  context.fillRect(0, 0, SHARE_CARD_WIDTH, SHARE_CARD_HEIGHT);
+  context.fillStyle = "#11151f";
+  context.fillRect(42, 34, SHARE_CARD_WIDTH - 84, SHARE_CARD_HEIGHT - 68);
+
+  context.drawImage(decantImage, 68, 58, 34, 34);
+  context.fillStyle = "#e7eaf0";
+  context.font = "650 22px Inter, ui-sans-serif, system-ui, sans-serif";
+  context.fillText("decant", 114, 83);
+  context.fillStyle = "#9aa6b8";
+  context.font = "500 17px Inter, ui-sans-serif, system-ui, sans-serif";
+  context.textAlign = "right";
+  context.fillText(shareCardRange(input), SHARE_CARD_WIDTH - 68, 81);
+  context.textAlign = "left";
+
+  context.fillStyle = "#e7eaf0";
+  context.font = "650 36px Inter, ui-sans-serif, system-ui, sans-serif";
+  context.fillText(shareCardTitle(input.kind), 68, 142);
+  context.fillStyle = "#9aa6b8";
+  context.font = "500 22px Inter, ui-sans-serif, system-ui, sans-serif";
+  context.fillText(shareCardTakeaway(input), 68, 178);
+  context.drawImage(chartImage, 68, 204, SHARE_CARD_WIDTH - 136, 304);
+
+  context.fillStyle = "#6b7689";
+  context.font = "500 16px Inter, ui-sans-serif, system-ui, sans-serif";
+  context.fillText(shareCardQualifier(input.kind), 68, 557);
+  context.drawImage(dosuImage, SHARE_CARD_WIDTH - 244, 537, 24, 25);
+  context.fillStyle = "#9aa6b8";
+  context.font = "600 16px Inter, ui-sans-serif, system-ui, sans-serif";
+  context.fillText("decant · by Dosu", SHARE_CARD_WIDTH - 210, 557);
+
+  return await canvasPngBlob(canvas);
+}
+
+function loadCanvasImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`Unable to load local image asset: ${src}`));
+    image.src = src;
+  });
+}
+
+function canvasPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob == null) {
+        reject(new Error("PNG encoding failed"));
+      } else {
+        resolve(blob);
+      }
+    }, "image/png");
+  });
+}
+
+function shareRange(labels: string[]): { start: string; end: string } {
+  return {
+    start: labels[0] ?? "All time",
+    end: labels.at(-1) ?? "All time",
+  };
+}
+
+function shareCardRange(input: ShareCardCopyInput): string {
+  const range = input.start === input.end ? input.start : `${input.start}–${input.end}`;
+  return `${range} · ${input.timezone}`;
+}
+
+function localTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "Local time";
 }
 
 function AnalyticsChart({
@@ -2815,6 +3454,7 @@ type IconName =
   | "chevronRight"
   | "chevronUp"
   | "clock"
+  | "copy"
   | "cpu"
   | "desktop"
   | "download"
@@ -2831,10 +3471,12 @@ type IconName =
   | "plus"
   | "refresh"
   | "search"
+  | "share"
   | "sessions"
   | "settings"
   | "shield"
   | "sun"
+  | "trend"
   | "tools"
   | "upload"
   | "x";
@@ -3298,6 +3940,8 @@ function iconComponent(name: IconName): LucideIcon {
       return ChevronUp;
     case "clock":
       return Clock3;
+    case "copy":
+      return Copy;
     case "cpu":
       return Cpu;
     case "desktop":
@@ -3330,6 +3974,8 @@ function iconComponent(name: IconName): LucideIcon {
       return RefreshCw;
     case "search":
       return Search;
+    case "share":
+      return Share2;
     case "sessions":
       return Rows3;
     case "settings":
@@ -3338,6 +3984,8 @@ function iconComponent(name: IconName): LucideIcon {
       return ShieldCheck;
     case "sun":
       return Sun;
+    case "trend":
+      return ChartNoAxesCombined;
     case "tools":
       return Wrench;
     case "upload":
@@ -3585,6 +4233,10 @@ function InsightsView({
   const [hero, ...rest] = signals;
   const catalogGroups = groupByCategory(openRows.filter((row) => row.kind === "catalog"));
   const canLaunch = settingsInfo?.can_launch === true;
+  const showDosuSuggestion = shouldShowDosuCta({
+    route: "insights",
+    suggestions: settingsInfo?.settings.dosuSuggestions,
+  });
   const completeRecommendation = (row: Recommendation) => {
     setError(null);
     if (isPresent(row.prompt) && canLaunch && settingsInfo != null) {
@@ -3618,20 +4270,27 @@ function InsightsView({
 
   return (
     <div className="view-stack insights-stack">
-      <header className="page-heading">
+      <header className="page-heading insights-heading">
+        <span className="page-eyebrow">Archive → action</span>
         <h1>Insights</h1>
-        <p>What could make your coding agents better, drawn from your archive.</p>
+        <p>
+          Decant finds recurring patterns in your local sessions, ranks the ones worth acting on,
+          and suggests durable improvements for future agent runs.
+        </p>
       </header>
 
       {error != null ? <div className="notice danger inline-notice">{error}</div> : null}
 
-      <section className="view-stack">
-        <div className="section-title-row">
+      <section className="view-stack insights-section">
+        <div className="section-title-row insights-section-heading">
           <div>
-            <h2>Promotion candidates</h2>
-            <p>Data-backed lessons ranked by impact</p>
+            <span className="section-eyebrow">Detected in your archive</span>
+            <h2>Patterns worth acting on</h2>
+            <p>Evidence-backed signals from your own sessions, ranked by expected impact.</p>
           </div>
-          {signals.length > 0 ? <span>{formatInt(signals.length)} active</span> : null}
+          {signals.length > 0 ? (
+            <span className="section-count">{formatInt(signals.length)} active</span>
+          ) : null}
         </div>
 
         {signals.length === 0 ? (
@@ -3666,12 +4325,13 @@ function InsightsView({
         ) : null}
       </section>
 
-      {catalogGroups.length > 0 ? (
-        <section className="view-stack">
-          <div className="section-title-row">
+      {catalogGroups.length > 0 || showDosuSuggestion ? (
+        <section className="view-stack insights-section">
+          <div className="section-title-row insights-section-heading">
             <div>
-              <h2>Recommended for coding agents</h2>
-              <p>Set these up to make your agents faster and more consistent</p>
+              <span className="section-eyebrow">Reusable improvements</span>
+              <h2>Set up for future runs</h2>
+              <p>Project practices your coding agents can use in every session.</p>
             </div>
           </div>
           {catalogGroups.map(([category, items], groupIndex) => (
@@ -3691,17 +4351,23 @@ function InsightsView({
               </div>
             </div>
           ))}
+          {showDosuSuggestion ? (
+            <div className="insights-dosu-suggestion">
+              <DosuInsightsCard />
+            </div>
+          ) : null}
         </section>
       ) : null}
 
       {implementedRows.length > 0 ? (
-        <section className="view-stack insights-history-heading">
-          <div className="section-title-row">
+        <section className="view-stack insights-history-heading insights-section">
+          <div className="section-title-row insights-section-heading">
             <div>
-              <h2>Implemented</h2>
-              <p>Recommendations already marked complete</p>
+              <span className="section-eyebrow">History</span>
+              <h2>Already implemented</h2>
+              <p>Improvements you have already marked complete.</p>
             </div>
-            <span>{formatInt(implementedRows.length)} saved</span>
+            <span className="section-count">{formatInt(implementedRows.length)} saved</span>
           </div>
           <div className="catalog-grid">
             {implementedRows.map((row) => (
@@ -3711,6 +4377,35 @@ function InsightsView({
         </section>
       ) : null}
     </div>
+  );
+}
+
+function DosuInsightsCard() {
+  return (
+    <article className="catalog-card dosu-insights-card">
+      <div>
+        <span className="dosu-card-mark">
+          <img alt="" src={dosuOfficialUrl} />
+        </span>
+        <div>
+          <span className="dosu-card-kicker">Optional · Dosu</span>
+          <h4>Make these patterns available to every coding agent</h4>
+        </div>
+      </div>
+      <p>
+        Dosu turns repeated fixes and project conventions into durable context your agents can
+        retrieve when they need it.
+      </p>
+      <div className="recommendation-actions">
+        <div>
+          <strong>Use Dosu with your agents</strong>
+          <small>Opens only after your click</small>
+        </div>
+        <a href={dosuLink("insights_card")} rel="noopener" target="_blank">
+          See how →
+        </a>
+      </div>
+    </article>
   );
 }
 
@@ -4146,9 +4841,12 @@ function FilesView({
 }
 
 function SettingsView({
+  config,
+  onSaved,
   settingsInfo,
 }: {
   config: ConfigView | null;
+  onSaved: () => void;
   settingsInfo: SettingsInfo | null;
 }) {
   const [settings, setSettings] = useState<UserSettings | null>(settingsInfo?.settings ?? null);
@@ -4174,7 +4872,10 @@ function SettingsView({
       method: "POST",
       body: JSON.stringify(next),
     })
-      .then((response) => setSettings(response.settings))
+      .then((response) => {
+        setSettings(response.settings);
+        onSaved();
+      })
       .catch((err: unknown) => {
         setSettings(previous ?? base);
         setSaveError(errorMessage(err));
@@ -4215,6 +4916,20 @@ function SettingsView({
             value={settings?.ide ?? "vscode"}
             onChange={(ide) => save({ ide })}
           />
+          <SettingSelect
+            help="Hiding removes contextual Dosu suggestions. Attribution and verified provenance badges remain."
+            label="Dosu suggestions"
+            options={
+              settingsInfo?.options.dosuSuggestions ?? [
+                ["show", "Show"],
+                ["hide", "Hide"],
+              ]
+            }
+            value={settings?.dosuSuggestions ?? "show"}
+            onChange={(dosuSuggestions) =>
+              save({ dosuSuggestions: dosuSuggestions as DosuSuggestions })
+            }
+          />
         </div>
         {saveError != null ? <div className="notice danger inline-notice">{saveError}</div> : null}
         <p className="settings-note">
@@ -4224,6 +4939,57 @@ function SettingsView({
               ? "Native launcher is available on this Mac."
               : "Native launcher is unavailable on this platform."}
         </p>
+      </section>
+
+      <section className="panel about-decant">
+        <div className="panel-heading">
+          <div>
+            <h2>About decant</h2>
+            <p>
+              Local-first analytics for Claude Code and Codex sessions. decant is an open source
+              tool from Dosu.
+            </p>
+          </div>
+          <img alt="" src={dosuDecantUrl} />
+        </div>
+        <div className="panel-body">
+          <div className="about-links">
+            <a href={dosuLink("about")} rel="noopener" target="_blank">
+              Visit Dosu ↗
+            </a>
+            <a href="https://github.com/dosu-ai/decant" rel="noopener" target="_blank">
+              View source ↗
+            </a>
+            <a
+              href="https://github.com/dosu-ai/decant/blob/main/LICENSE"
+              rel="noopener"
+              target="_blank"
+            >
+              Apache-2.0 license ↗
+            </a>
+          </div>
+          <p className="about-privacy">
+            decant makes no outbound network calls; your archive stays on this machine.
+          </p>
+          <dl className="archive-info">
+            <div>
+              <dt>Version</dt>
+              <dd>{config?.version ?? "0.0.0-dev"}</dd>
+            </div>
+            <div>
+              <dt>Archive</dt>
+              <dd title={config?.dbPath}>{config?.dbPath ?? "Loading…"}</dd>
+            </div>
+            <div>
+              <dt>Claude Code sessions</dt>
+              <dd title={config?.claudeDir}>{config?.claudeDir ?? "Loading…"}</dd>
+            </div>
+            <div>
+              <dt>Codex sessions</dt>
+              <dd title={config?.codexDir}>{config?.codexDir ?? "Loading…"}</dd>
+            </div>
+          </dl>
+        </div>
       </section>
     </div>
   );
@@ -4775,6 +5541,7 @@ function SessionDetailView({ id }: { id: number }) {
           <div className="thread-badges">
             <ToolBadge tool={detail.summary.tool} />
             <ModelBadge model={detail.summary.model} />
+            <DosuProvenanceBadge session={detail.summary} />
             <EffortBadge
               effort={detail.summary.reasoning_effort}
               labeled
@@ -4852,26 +5619,33 @@ function SessionDetailView({ id }: { id: number }) {
               </span>
               Move through messages
             </div>
-            {toc.length === 0 ? <p>No prompts to list</p> : null}
+            {toc.length === 0 ? <p>No prompts or Dosu calls to list</p> : null}
             {toc.map((item) => (
               <a
+                aria-label={item.kind === "dosu" ? `Dosu tool call: ${item.label}` : undefined}
                 className={[
+                  item.kind === "dosu" ? "is-dosu" : null,
                   jumpingToSeq === item.seq ? "is-loading" : null,
                   activeMessageSeq === item.seq ? "is-current" : null,
                 ]
                   .filter(isPresent)
                   .join(" ")}
                 href={`#message-${item.seq}`}
-                key={item.seq}
+                key={item.key}
                 onClick={(event) => {
                   event.preventDefault();
                   void jumpToMessage(item.seq);
                 }}
               >
-                <span className="toc-icon">
-                  <Icon name={item.icon} />
+                <span className={`toc-icon${item.kind === "dosu" ? " is-dosu" : ""}`}>
+                  {item.kind === "dosu" ? (
+                    <img alt="" src={dosuOfficialUrl} />
+                  ) : (
+                    <Icon name={item.icon} />
+                  )}
                 </span>
                 <span>{item.label}</span>
+                {item.kind === "dosu" ? <em>Dosu</em> : null}
                 {jumpingToSeq === item.seq ? <b>loading</b> : null}
               </a>
             ))}
@@ -5047,6 +5821,8 @@ type SessionDetailData = {
 type SessionOutlineItemData = {
   seq: number;
   text: string;
+  kind: "prompt" | "dosu";
+  ordinal: number;
 };
 
 /** Mirrors the server's SessionIngestIssue, minus raw_line and created_at:
@@ -5772,12 +6548,23 @@ function TranscriptBlock({
   tool?: string;
 }) {
   if (block.block_type === "tool_use") {
+    const isDosu = isDosuToolName(block.tool_name);
     return (
-      <div className="tool-call">
+      <div className={`tool-call${isDosu ? " is-dosu" : ""}`}>
         <div>
-          <Icon name="bolt" />
-          <span>{block.tool_name ?? "tool_use"}</span>
-          <small>tool call</small>
+          {isDosu ? (
+            <span className="dosu-tool-mark">
+              <img alt="" src={dosuOfficialUrl} />
+            </span>
+          ) : (
+            <Icon name="bolt" />
+          )}
+          <span className="tool-call-name">{block.tool_name ?? "tool_use"}</span>
+          {isDosu ? (
+            <span className="dosu-tool-badge">Optimized by Dosu</span>
+          ) : (
+            <small>tool call</small>
+          )}
         </div>
         {isPresent(block.tool_input) ? (
           <details open={block.tool_input.length <= 240}>
@@ -6195,36 +6982,62 @@ function renderableMessages(
 
 function threadToc(messages: SessionDetailData["messages"]): ThreadTocItem[] {
   return messages.flatMap((message) => {
+    const items: ThreadTocItem[] = [];
     // Compact summaries are machine-generated continuations, not prompts.
-    if (message.role !== "user" || message.is_compact_summary) {
-      return [];
+    if (message.role === "user" && !message.is_compact_summary) {
+      const label =
+        message.blocks.find((block) => block.block_type === "text" && isPresent(block.text))
+          ?.text ?? "";
+      if (label.trim() !== "") {
+        items.push({
+          key: `prompt:${message.seq}`,
+          seq: message.seq,
+          kind: "prompt",
+          ...tocPresentation(label),
+        });
+      }
     }
-    const label =
-      message.blocks.find((block) => block.block_type === "text" && isPresent(block.text))?.text ??
-      "";
-    if (label.trim() === "") {
-      return [];
-    }
-    return [
-      {
+    for (const block of message.blocks) {
+      if (block.block_type !== "tool_use" || !isDosuToolName(block.tool_name)) {
+        continue;
+      }
+      items.push({
+        key: `dosu:${message.seq}:${block.ordinal}`,
         seq: message.seq,
-        ...tocPresentation(label),
-      },
-    ];
+        label: dosuToolDisplayName(block.tool_name),
+        icon: "bolt",
+        kind: "dosu",
+      });
+    }
+    return items;
   });
 }
 
 function threadTocFromOutline(outline: SessionOutlineItemData[]): ThreadTocItem[] {
-  return outline.map((item) => ({
-    seq: item.seq,
-    ...tocPresentation(item.text),
-  }));
+  return outline.map((item) =>
+    item.kind === "dosu"
+      ? {
+          key: `dosu:${item.seq}:${item.ordinal}`,
+          seq: item.seq,
+          label: item.text || "Dosu tool",
+          icon: "bolt",
+          kind: "dosu",
+        }
+      : {
+          key: `prompt:${item.seq}`,
+          seq: item.seq,
+          kind: "prompt",
+          ...tocPresentation(item.text),
+        },
+  );
 }
 
 type ThreadTocItem = {
+  key: string;
   seq: number;
   label: string;
   icon: IconName;
+  kind: "prompt" | "dosu";
 };
 
 function tocPresentation(text: string): { label: string; icon: IconName } {
@@ -6250,7 +7063,10 @@ function threadStats(
   totals?: SessionDetailData["totals"],
 ) {
   return {
-    turns: fullTurnCount != null && fullTurnCount > 0 ? fullTurnCount : toc.length,
+    turns:
+      fullTurnCount != null && fullTurnCount > 0
+        ? fullTurnCount
+        : toc.filter((item) => item.kind === "prompt").length,
     replies:
       totals?.reply_count ?? messages.filter((message) => message.role === "assistant").length,
     toolCalls:
