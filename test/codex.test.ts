@@ -103,10 +103,16 @@ describe("parseCodexSession", () => {
         payload: {
           type: "token_count",
           info: {
-            total_token_usage: { input_tokens: 900, cached_input_tokens: 700, output_tokens: 60 },
+            total_token_usage: {
+              input_tokens: 900,
+              cached_input_tokens: 700,
+              cache_write_input_tokens: 50,
+              output_tokens: 60,
+            },
             last_token_usage: {
               input_tokens: 900,
               cached_input_tokens: 700,
+              cache_write_input_tokens: 50,
               output_tokens: 60,
               reasoning_output_tokens: 10,
             },
@@ -148,10 +154,10 @@ describe("parseCodexSession", () => {
     expect(messages).toHaveLength(4);
     expect(messages[0]?.usage).toBeNull();
     expect(messages[1]?.usage).toEqual({
-      input: 200,
+      input: 150,
       output: 60,
       cacheRead: 700,
-      cacheCreation: 0,
+      cacheCreation: 50,
       cacheCreation1h: 0,
       reasoning: 10,
     });
@@ -160,6 +166,48 @@ describe("parseCodexSession", () => {
     expect(messages[3]?.blocks[0]?.text).toBe("Carried summary.");
     const rawMeta = parsed.session.rawMeta as { model_context_window?: number };
     expect(rawMeta.model_context_window).toBe(258_400);
+  });
+
+  test("preserves inclusive input when a future cache-write breakdown is inconsistent", () => {
+    const content = [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-06-01T09:00:00Z",
+        payload: { id: "sess-cache-breakdown", cwd: "/tmp/proj" },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-06-01T09:00:01Z",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "ok" }],
+        },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-06-01T09:00:02Z",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: {
+              input_tokens: 100,
+              cached_input_tokens: 90,
+              cache_write_input_tokens: 50,
+              output_tokens: 1,
+            },
+          },
+        },
+      }),
+    ].join("\n");
+
+    expect(
+      parseCodexSession("sess-cache-breakdown", content, new Map()).session.messages[0]?.usage,
+    ).toMatchObject({
+      input: 10,
+      cacheRead: 90,
+      cacheCreation: 0,
+    });
   });
 
   test("token_count before any assistant output is dropped", () => {

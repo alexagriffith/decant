@@ -1,7 +1,7 @@
-# Releasing decant
+# Releasing Decant
 
-Audience: a maintainer cutting a decant release. This is a condensed runbook
-for the tag-driven release pipeline decant's automation is designed around;
+Audience: a maintainer cutting a Decant release. This is a condensed runbook
+for the tag-driven release pipeline Decant's automation is designed around;
 it has two parts — a one-time bootstrap that happens once, before the first
 tag, and the steady-state process every release after that follows.
 
@@ -53,6 +53,13 @@ Before the first tag, also confirm:
 - A full-ref secret scan (gitleaks or similar) across every ref and tag.
 - `main` is green and carries the release-blocking work — the tag is what
   publishes it, so nothing lands as a follow-up.
+
+## v18 archive upgrade note
+
+The first open of an existing v17 archive rebuilds its FTS index synchronously
+as part of the v18 migration. Large archives can therefore take noticeably
+longer to start once; Decant logs the migration before beginning the rebuild.
+Later starts use the migrated index and do not repeat this work.
 
 ## Steady-state release
 
@@ -212,7 +219,7 @@ step:
 - **A bare Mach-O binary cannot be stapled.** Stapling attaches the
   notarization ticket to a container format (app bundle, disk image, installer
   package), and a standalone executable has nowhere to put it. So a notarized
-  `decant` ships with no ticket attached, and its Gatekeeper assessment depends
+  Decant ships with no ticket attached, and its Gatekeeper assessment depends
   on the machine being able to check notarization status with Apple rather than
   on anything in the file. Whoever configures the Apple secrets should confirm
   the resulting binary's real behavior on a clean machine — including offline —

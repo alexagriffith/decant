@@ -3,7 +3,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { openDb } from "../src/db.ts";
+import { closeDb, openDb } from "../src/db.ts";
 import {
   discover,
   discoverSourcePaths,
@@ -15,6 +15,7 @@ import {
 import { getSession, listSessions } from "../src/query.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
+import { ROW_QUERIES } from "./golden-rows.ts";
 
 const repoRoot = join(import.meta.dir, "..");
 const fixtureRoot = join(repoRoot, "fixtures");
@@ -71,52 +72,6 @@ function rows(db: Database, sql: string): unknown[] {
 function canonicalizeRows(value: unknown, dir: string): unknown {
   return JSON.parse(JSON.stringify(value).replaceAll(dir, "<TMP>")) as unknown;
 }
-
-const ROW_QUERIES = {
-  sessions: `
-    SELECT s.tool, s.source_session_id, p.path AS project_path, p.name AS project_name,
-           s.title, s.cwd, s.git_branch, s.model, s.cli_version, s.started_at, s.ended_at,
-           s.message_count, s.total_input_tokens, s.total_output_tokens,
-           s.total_cache_read_tokens, s.total_cache_creation_tokens,
-           s.total_reasoning_tokens, s.est_reasoning_tokens, s.reasoning_source,
-           s.estimated_cost_usd, s.is_archived, s.source_path,
-           s.turn_count, s.error_count, s.interruption_count, s.compaction_count,
-           s.sidechain_message_count, s.agent_spawn_count, s.skill_count, s.command_count,
-           s.thinking_block_count, s.thinking_chars, s.active_seconds, s.outcome, s.work_type
-    FROM session s LEFT JOIN project p ON p.id = s.project_id
-    ORDER BY s.tool, s.source_session_id`,
-  messages: `
-    SELECT s.tool, s.source_session_id, m.seq, m.source_uuid, m.parent_source_uuid,
-           m.role, m.model, m.stop_reason, m.timestamp, m.input_tokens, m.output_tokens,
-           m.cache_read_tokens, m.cache_creation_tokens, m.raw
-    FROM message m JOIN session s ON s.id = m.session_id
-    ORDER BY s.tool, s.source_session_id, m.seq`,
-  blocks: `
-    SELECT s.tool, s.source_session_id, m.seq, b.ordinal, b.type, b.text,
-           b.tool_name, b.tool_use_id, b.tool_input, b.tool_result
-    FROM block b JOIN message m ON m.id = b.message_id JOIN session s ON s.id = b.session_id
-    ORDER BY s.tool, s.source_session_id, m.seq, b.ordinal`,
-  tool_calls: `
-    SELECT s.tool, s.source_session_id, m.seq, tc.ordinal, tc.tool_kind, tc.tool_name,
-           tc.mcp_server, tc.tool_base_name, tc.tool_use_id, tc.input, tc.is_error,
-           tc.output_preview, tc.output_bytes, tc.duration_ms, tc.timestamp
-    FROM tool_call tc
-    LEFT JOIN message m ON m.id = tc.message_id
-    JOIN session s ON s.id = tc.session_id
-    ORDER BY s.tool, s.source_session_id, m.seq, tc.ordinal, tc.tool_use_id`,
-  file_refs: `
-    SELECT s.tool, s.source_session_id, m.seq, f.path, f.rel_path, f.ext,
-           f.operation, f.timestamp
-    FROM file_ref f
-    LEFT JOIN message m ON m.id = f.message_id
-    JOIN session s ON s.id = f.session_id
-    ORDER BY s.tool, s.source_session_id, m.seq, f.path, f.operation`,
-  recommendations: `
-    SELECT key, kind, category, title, detail, suggestion, prompt, url,
-           link_label, icon, tone, score, status, status_source, note
-    FROM recommendation
-    ORDER BY key`,
-} as const;
 
 describe("upsertSession", () => {
   test("classifies namespaced Codex MCP tool calls", () => {
@@ -232,6 +187,30 @@ describe("upsertSession", () => {
       .query("SELECT COUNT(*) AS n FROM block_fts WHERE block_fts MATCH 'auth'")
       .get() as { n: number };
     expect(fts.n).toBeGreaterThan(0);
+
+    expect(
+      db
+        .query(
+          `SELECT tool_use_id, input_bytes, has_result, duration_ms
+           FROM tool_call
+           WHERE session_id = ?1 AND tool_use_id IN ('toolu_read', 'toolu_agent')
+           ORDER BY tool_use_id`,
+        )
+        .all(sessionId),
+    ).toEqual([
+      {
+        tool_use_id: "toolu_agent",
+        input_bytes: 35,
+        has_result: 0,
+        duration_ms: null,
+      },
+      {
+        tool_use_id: "toolu_read",
+        input_bytes: 43,
+        has_result: 1,
+        duration_ms: 30_000,
+      },
+    ]);
     db.close();
   });
 
@@ -618,6 +597,39 @@ describe("sync", () => {
       ).score,
     ).toBe(0);
     db.close();
+  });
+
+  test("reports sync progress from discovery through each inspected source", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+    };
+    write(join(config.claudeDir, "proj", "sess.jsonl"), fixture("claude", "sample.jsonl"));
+    const db = openFreshDb(dir);
+    const progress: Array<{
+      scanned: number;
+      ingested: number;
+      skipped: number;
+      failed: number;
+      total: number;
+    }> = [];
+
+    sync(db, config, undefined, (snapshot) => progress.push(snapshot));
+
+    expect(progress).toEqual([
+      { scanned: 0, ingested: 0, skipped: 0, failed: 0, total: 1 },
+      { scanned: 1, ingested: 1, skipped: 0, failed: 0, total: 1 },
+    ]);
+    db.close();
+  });
+
+  test("closes a sync connection cleanly after explicit statement cleanup", () => {
+    const dir = freshCase();
+    const db = openFreshDb(dir);
+    sync(db, stageFixtures(dir));
+
+    expect(() => closeDb(db)).not.toThrow();
   });
 
   test("tallies issues by code and stores the code on every issue row", () => {
@@ -1133,6 +1145,46 @@ describe("sync", () => {
     for (const [name, sql] of Object.entries(ROW_QUERIES)) {
       expect(canonicalizeRows(rows(db, sql), dir), name).toEqual(await golden(`rows/${name}.json`));
     }
+
+    db.exec(`
+      INSERT INTO recommendation
+        (key, kind, title, impact_label_checked, score, status, first_seen_at, updated_at)
+      VALUES
+        ('signal:historical', 'signal', 'Historical signal', 0, 1, 'implemented',
+         '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+    `);
+    db.exec(
+      "UPDATE recommendation SET impact_label = NULL, impact_label_checked = 0 WHERE kind = 'signal'",
+    );
+    db.exec(`
+      UPDATE recommendation
+      SET status = 'implemented', status_source = 'manual'
+      WHERE key = (SELECT key FROM recommendation WHERE kind = 'signal' AND key != 'signal:historical' LIMIT 1)
+    `);
+    const noOpReport = sync(db, config);
+    expect(noOpReport).toMatchObject({ scanned: 8, ingested: 0, skipped: 8, failed: 0 });
+    expect(
+      db
+        .query(
+          `SELECT COUNT(*) AS missing
+             FROM recommendation
+            WHERE kind = 'signal' AND key != 'signal:historical' AND impact_label IS NULL`,
+        )
+        .get(),
+    ).toEqual({ missing: 0 });
+    expect(
+      db
+        .query(
+          "SELECT impact_label, impact_label_checked FROM recommendation WHERE key = 'signal:historical'",
+        )
+        .get(),
+    ).toEqual({ impact_label: null, impact_label_checked: 1 });
+    db.exec("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'");
+    const secondNoOpReport = sync(db, config);
+    expect(secondNoOpReport).toMatchObject({ scanned: 8, ingested: 0, skipped: 8, failed: 0 });
+    expect(
+      db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get(),
+    ).toEqual({ score: 12345 });
     db.close();
   });
 });

@@ -2,8 +2,10 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripGoldenVolatility } from "../scripts/golden-normalize.ts";
 import { runCli } from "../src/cli.ts";
 import { compareCodePoints } from "../src/order.ts";
+import { DECANT_VERSION } from "../src/version.ts";
 
 const workDir = mkdtempSync(join(tmpdir(), "decant-cli-golden-test-"));
 const goldenDir = join(import.meta.dir, "golden");
@@ -33,23 +35,8 @@ function stageFixtures(caseDir: string): { claudeDir: string; codexDir: string }
   return { claudeDir, codexDir };
 }
 
-function stripVolatileIds(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stripVolatileIds);
-  }
-  if (value && typeof value === "object") {
-    const volatileKeys = new Set(["id", "session_id", "block_id"]);
-    return Object.fromEntries(
-      Object.entries(value)
-        .filter(([key]) => !volatileKeys.has(key))
-        .map(([key, child]) => [key, stripVolatileIds(child)]),
-    );
-  }
-  return value;
-}
-
 function normalizeCliGolden(name: string, value: unknown): unknown {
-  const normalized = stripVolatileIds(value);
+  const normalized = stripGoldenVolatility(value, DECANT_VERSION);
   if (name !== "ls" || !Array.isArray(normalized)) {
     return normalized;
   }
@@ -78,6 +65,27 @@ function argsForTs(dbPath: string, command: string[]): string[] {
 }
 
 describe("CLI golden parity", () => {
+  test("normalization replaces only the version field and stabilizes session hrefs", () => {
+    expect(
+      stripGoldenVolatility(
+        {
+          version: "dev",
+          generated_with: "dev",
+          project: "/Users/dev/proj",
+          href: "/sessions/123#message-4",
+          artifact: "Distilled by Decant dev from /Users/dev/proj",
+        },
+        "dev",
+      ),
+    ).toEqual({
+      version: "0.0.0-dev",
+      generated_with: "0.0.0-dev",
+      project: "/Users/dev/proj",
+      href: "/sessions/<ID>#message-4",
+      artifact: "Distilled by Decant 0.0.0-dev from /Users/dev/proj",
+    });
+  });
+
   test("read commands match frozen JSON snapshots", async () => {
     const caseDir = join(workDir, "case");
     const { claudeDir, codexDir } = stageFixtures(caseDir);

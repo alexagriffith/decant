@@ -1,7 +1,7 @@
--- decant:schema_version=17
--- Effective decant schema (migrations 1..17 applied), frozen as the current
--- baseline. v16 is data-only (no DDL changes); v17 adds ingest_issue.code and
--- idx_ingest_issue_source. Do not edit without updating schema tests.
+-- decant:schema_version=18
+-- Effective decant schema (migrations 1..18 applied), frozen as the current
+-- baseline. v18 adds tool-call result metadata and FTS prefix indexes.
+-- Do not edit without updating schema tests.
 CREATE TABLE schema_migrations(
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -116,7 +116,9 @@ CREATE TABLE tool_call (
   tool_base_name TEXT,
   tool_use_id TEXT,
   input TEXT,
+  input_bytes INTEGER,
   is_error INTEGER,
+  has_result INTEGER,
   output_preview TEXT,
   output_bytes INTEGER,
   duration_ms INTEGER,
@@ -182,6 +184,8 @@ CREATE TABLE recommendation (
   link_label     TEXT,
   icon           TEXT,
   tone           TEXT,
+  impact_label   TEXT,
+  impact_label_checked INTEGER NOT NULL DEFAULT 1,
   score          REAL,
   status         TEXT NOT NULL DEFAULT 'open',   -- 'open' | 'implemented'
   status_source  TEXT,               -- 'agent' | 'activity' | 'manual'
@@ -201,6 +205,7 @@ CREATE INDEX idx_block_session ON block(session_id);
 CREATE INDEX idx_block_message ON block(message_id, ordinal);
 CREATE INDEX idx_block_type ON block(type);
 CREATE INDEX idx_block_tool ON block(tool_name);
+CREATE INDEX idx_block_tool_use ON block(session_id, tool_use_id);
 CREATE INDEX idx_toolcall_session ON tool_call(session_id);
 CREATE INDEX idx_toolcall_kind ON tool_call(tool_kind);
 CREATE INDEX idx_toolcall_server ON tool_call(mcp_server);
@@ -217,7 +222,8 @@ CREATE INDEX idx_ingest_source_session ON ingest_source(session_id);
 CREATE INDEX idx_ingest_issue_source ON ingest_issue(source_path);
 CREATE VIRTUAL TABLE block_fts USING fts5(
   text, tool_name, tool_input,
-  content='block', content_rowid='id'
+  content='block', content_rowid='id',
+  prefix='2 3'
 );
 CREATE TRIGGER block_ai AFTER INSERT ON block BEGIN
   INSERT INTO block_fts(rowid, text, tool_name, tool_input)

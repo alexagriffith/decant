@@ -138,9 +138,10 @@ describe("watch mode", () => {
       intervalMs: 0,
       syncOnStart: false,
       onEvent: (event) => events.push(event),
-      runner: (runnerConfig, status) => {
+      runner: (runnerConfig, status, _cancel, onProgress) => {
         runnerCalls.push(runnerConfig.dbPath);
         status.start();
+        onProgress({ scanned: 1, ingested: 1, skipped: 0, failed: 0, total: 3 });
         const report = {
           scanned: 3,
           ingested: 2,
@@ -160,6 +161,46 @@ describe("watch mode", () => {
     expect(runnerCalls).toEqual([config.dbPath]);
     expect(event.report.ingested).toBe(2);
     expect(event.status.last_report).toContain("ingested 2");
+    expect(events).toContainEqual({
+      type: "sync_progress",
+      reason: "manual",
+      progress: { scanned: 1, ingested: 1, skipped: 0, failed: 0, total: 3 },
+      status: expect.objectContaining({ in_progress: true }),
+    });
+    await handle.stop();
+  });
+
+  test("a watcher that joins another owner does not emit duplicate terminal events", async () => {
+    const config = freshConfig();
+    const events: WatchEvent[] = [];
+    const handle = startWatch({
+      config,
+      enableWatch: false,
+      intervalMs: 0,
+      syncOnStart: false,
+      onEvent: (event) => events.push(event),
+      runner: async (_runnerConfig, status) => {
+        status.start();
+        const report = {
+          scanned: 1,
+          ingested: 1,
+          skipped: 0,
+          issues: 0,
+          issuesByCode: {},
+          failed: 0,
+          cancelled: false,
+        };
+        status.finishOk(report);
+        return { report, emitTerminal: false };
+      },
+    });
+
+    handle.trigger("watch");
+    for (let attempt = 0; attempt < 100 && handle.status.snapshot().runs === 0; attempt += 1) {
+      await Bun.sleep(2);
+    }
+    expect(handle.status.snapshot().runs).toBe(1);
+    expect(events.some((event) => event.type === "sync")).toBe(false);
     await handle.stop();
   });
 

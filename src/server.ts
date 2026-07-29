@@ -3,12 +3,12 @@ import { dirname, join } from "node:path";
 import type { Config } from "./config.ts";
 import { contextWindowForSession } from "./context-window.ts";
 import { dateFilterFromSearch } from "./date-filter.ts";
-import { ARCHIVE_DIR_MODE, openDb } from "./db.ts";
+import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
 import { refreshDerivedMetadata } from "./derived.ts";
 import { DECANT_VERSION } from "./distill.ts";
 import { EconomicsCache, type EconomicsCacheOptions } from "./economics-cache.ts";
 import type { Operation } from "./enrich.ts";
-import type { sync as ingestSync } from "./ingest.ts";
+import type { sync as ingestSync, SyncProgress, SyncReport } from "./ingest.ts";
 import { canLaunch, launchAgent, command as launchCommand, openIde } from "./launcher.ts";
 import { exceptionAttributes, logHttpRequest, type StructuredLogger } from "./logging.ts";
 import {
@@ -16,14 +16,22 @@ import {
   getSessionOutline,
   listProjects,
   listSessions,
-  search,
+  listToolCalls,
+  searchPage,
   sessionIngestIssues,
 } from "./query.ts";
 import {
   list as listRecommendations,
   markImplemented,
   parseStatusFilter,
+  STATUS_FILTERS,
 } from "./recommendations.ts";
+import {
+  assembleAnalyticsReport,
+  assembleSessionReport,
+  renderAnalyticsReport,
+  renderSessionReport,
+} from "./report/index.ts";
 import {
   agentOptions,
   dosuSuggestionOptions,
@@ -36,6 +44,7 @@ import {
 import {
   activity as activityStats,
   byDimension,
+  DIMENSIONS,
   dateBounds,
   fileHotspots,
   mcpUsage,
@@ -50,7 +59,13 @@ import { tokenEconomics, tokenEconomicsForSession } from "./token-economics.ts";
 import appleTouchIconPath from "./ui/assets/apple-touch-icon.png" with { type: "file" };
 import faviconPath from "./ui/assets/favicon.ico" with { type: "file" };
 import uiBundle from "./ui/index.html";
-import { type SyncStatusStore, startWatch, type WatchEvent, type WatchHandle } from "./watch.ts";
+import {
+  type SyncRunnerResult,
+  type SyncStatusStore,
+  startWatch,
+  type WatchEvent,
+  type WatchHandle,
+} from "./watch.ts";
 
 export const DEFAULT_SERVE_HOST = "127.0.0.1";
 export const DEFAULT_SERVE_PORT = 3000;
@@ -79,13 +94,79 @@ export interface ServeOptions {
   /** Test seam: override how the economics cache computes vectors, e.g. to
    * simulate a rebuild that is still in flight when the server is stopped. */
   economicsComputeVectors?: EconomicsCacheOptions["computeVectors"];
+  /** Test seam: override the physical sync worker while retaining the server's
+   * serialization and progress-coalescing behavior. */
+  syncRunner?: SyncWorkerRunner;
 }
 
 type Db = ReturnType<typeof openDb>;
 type ServerEvent = { type: string };
+export type SyncWorkerRunner = (
+  config: Config,
+  cancel?: { aborted: boolean },
+  onProgress?: (progress: SyncProgress) => void,
+) => Promise<SyncReport>;
+export interface SyncRunHandle {
+  promise: Promise<SyncReport>;
+  owned: boolean;
+}
+export interface SyncCoordinator {
+  run: SyncWorkerRunner;
+  runWithOwnership(
+    config: Config,
+    cancel?: { aborted: boolean },
+    onProgress?: (progress: SyncProgress) => void,
+  ): SyncRunHandle;
+  close(): Promise<void>;
+}
+export interface SyncCoordinatorOptions {
+  progressEveryFiles?: number;
+  progressEveryMs?: number;
+  now?: () => number;
+}
+export type ApiErrorCode =
+  | "archive_locked"
+  | "cross_origin_write"
+  | "forbidden_host"
+  | "forbidden_remote"
+  | "internal_error"
+  | "invalid_files_query"
+  | "invalid_request"
+  | "invalid_session_id"
+  | "launch_failed"
+  | "launch_unsupported_platform"
+  | "malformed_body"
+  | "not_found"
+  | "query_required"
+  | "recommendation_not_found"
+  | "schema_too_new"
+  | "schema_too_old"
+  | "service_starting"
+  | "session_not_found"
+  | "unknown_dimension"
+  | "unknown_status"
+  | "unsupported_media_type";
+
+interface ApiError {
+  code: ApiErrorCode;
+  message: string;
+  extras?: Record<string, unknown>;
+  status: number;
+}
+
+class RequestBodyError extends Error {
+  constructor() {
+    super("request body must be valid JSON");
+    this.name = "RequestBodyError";
+  }
+}
+
 interface RequestContext {
   db?: Db;
   economics?: EconomicsCache;
+  runSync?: SyncWorkerRunner;
+  syncCoordinator?: SyncCoordinator;
+  launchPlatform?: NodeJS.Platform;
   boundHostname?: string;
   remoteAddress?: string | null;
   trustedPeers?: string[];
@@ -165,14 +246,25 @@ export async function handleRequest(
       }
       const body = await readJson<{ agent?: string; prompt?: string; key?: string }>(request);
       if (body.agent == null || body.prompt == null || body.prompt.trim() === "") {
-        return json({ ok: false, error: "agent and prompt are required" }, 400);
+        return errorResponse(
+          "invalid_request",
+          "agent and prompt are required",
+          { ok: false },
+          400,
+        );
       }
-      const result = launchAgent(body.agent, body.prompt, body.key ?? null, getSettings());
-      return json(
-        result.ok
-          ? result
-          : { ...result, command: result.command ?? launchCommand(body.agent, body.prompt) },
-        result.ok ? 200 : 400,
+      const result = launchAgent(body.agent, body.prompt, body.key ?? null, getSettings(), {
+        platform: context.launchPlatform,
+      });
+      if (result.ok) {
+        return json(result);
+      }
+      const command = result.command ?? launchCommand(body.agent, body.prompt);
+      return errorResponse(
+        isUnsupportedLaunchError(result.error) ? "launch_unsupported_platform" : "launch_failed",
+        result.error ?? "launch failed",
+        { ok: false, ...(command == null ? {} : { command }) },
+        400,
       );
     }
     if (request.method === "POST" && url.pathname === "/api/launch/ide") {
@@ -182,10 +274,19 @@ export async function handleRequest(
       }
       const body = await readJson<{ dir?: string }>(request);
       if (body.dir == null || body.dir.trim() === "") {
-        return json({ ok: false, error: "dir is required" }, 400);
+        return errorResponse("invalid_request", "dir is required", { ok: false }, 400);
       }
-      const result = openIde(body.dir, getSettings());
-      return json(result, result.ok ? 200 : 400);
+      const result = openIde(body.dir, getSettings(), { platform: context.launchPlatform });
+      return result.ok
+        ? json(result)
+        : errorResponse(
+            isUnsupportedLaunchError(result.error)
+              ? "launch_unsupported_platform"
+              : "launch_failed",
+            result.error ?? "launch failed",
+            { ok: false, ...(result.command == null ? {} : { command: result.command }) },
+            400,
+          );
     }
     if (
       request.method === "GET" &&
@@ -201,7 +302,12 @@ export async function handleRequest(
       if (contentTypeFailure != null) {
         return contentTypeFailure;
       }
-      return await syncNow(config, context.economics);
+      return await syncNow(
+        config,
+        context.economics,
+        context.runSync,
+        context.syncCoordinator?.runWithOwnership,
+      );
     }
     if (request.method === "GET" && url.pathname === "/api/sessions") {
       return withDb(config, context, (db) =>
@@ -222,32 +328,42 @@ export async function handleRequest(
     if (request.method === "GET" && url.pathname === "/api/projects") {
       return withDb(config, context, (db) => json(listProjects(db)));
     }
+    const possibleSessionRoute = url.pathname.match(
+      /^\/api\/sessions\/([^/]+)(?:\/(?:token-economics|context-window|outline|issues))?$/,
+    );
+    if (
+      request.method === "GET" &&
+      possibleSessionRoute != null &&
+      !isValidSessionId(possibleSessionRoute[1] ?? "")
+    ) {
+      return errorResponse("invalid_session_id", "invalid session id", {}, 400);
+    }
     const sessionEconomicsMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/token-economics$/);
     if (request.method === "GET" && sessionEconomicsMatch != null) {
       return withDb(config, context, (db) => {
         const economics = tokenEconomicsForSession(db, Number(sessionEconomicsMatch[1]));
-        return economics == null ? json({ error: "session not found" }, 404) : json(economics);
+        return economics == null ? sessionNotFound(db) : json(economics);
       });
     }
     const contextWindowMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/context-window$/);
     if (request.method === "GET" && contextWindowMatch != null) {
       return withDb(config, context, (db) => {
         const timeline = contextWindowForSession(db, Number(contextWindowMatch[1]));
-        return timeline == null ? json({ error: "session not found" }, 404) : json(timeline);
+        return timeline == null ? sessionNotFound(db) : json(timeline);
       });
     }
     const sessionOutlineMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/outline$/);
     if (request.method === "GET" && sessionOutlineMatch != null) {
       return withDb(config, context, (db) => {
         const outline = getSessionOutline(db, Number(sessionOutlineMatch[1]));
-        return outline == null ? json({ error: "session not found" }, 404) : json(outline);
+        return outline == null ? sessionNotFound(db) : json(outline);
       });
     }
     const sessionIssuesMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/issues$/);
     if (request.method === "GET" && sessionIssuesMatch != null) {
       return withDb(config, context, (db) => {
         const issues = sessionIngestIssues(db, Number(sessionIssuesMatch[1]));
-        return issues == null ? json({ error: "session not found" }, 404) : json(issues);
+        return issues == null ? sessionNotFound(db) : json(issues);
       });
     }
     const sessionMatch = url.pathname.match(/^\/api\/sessions\/(\d+)$/);
@@ -258,7 +374,7 @@ export async function handleRequest(
           messageLimit: messageLimit > 0 ? messageLimit : null,
           messageOffset: integerParam(url, "message_offset", 0, true),
         });
-        return detail == null ? json({ error: "session not found" }, 404) : json(detail);
+        return detail == null ? sessionNotFound(db) : json(detail);
       });
     }
     if (request.method === "POST" && url.pathname === "/api/search") {
@@ -266,19 +382,32 @@ export async function handleRequest(
       if (contentTypeFailure != null) {
         return contentTypeFailure;
       }
-      const body = await readJson<{ query?: string; limit?: number }>(request);
-      if (body.query == null || body.query.trim() === "") {
-        return json({ error: "query is required" }, 400);
+      const body = await readJson<{
+        query?: string;
+        tool?: string | null;
+        project?: string | null;
+        include_subagents?: boolean;
+        from?: string | null;
+        to?: string | null;
+        limit?: number;
+        offset?: number;
+      }>(request);
+      if (typeof body.query !== "string" || body.query.trim() === "") {
+        return errorResponse("query_required", "query is required", {}, 400);
       }
+      const query = body.query;
       return withDb(config, context, (db) => {
-        try {
-          return json(search(db, body.query as string, body.limit ?? 30));
-        } catch (error) {
-          if (isSearchSyntaxError(error)) {
-            return json({ error: "invalid search query" }, 400);
-          }
-          throw error;
-        }
+        return json(
+          searchPage(db, query, {
+            tool: body.tool,
+            project: body.project,
+            includeSubagents: body.include_subagents === true,
+            from: body.from,
+            to: body.to,
+            limit: body.limit,
+            offset: body.offset,
+          }),
+        );
       });
     }
     if (request.method === "GET" && url.pathname === "/api/stats/summary") {
@@ -287,7 +416,12 @@ export async function handleRequest(
     if (request.method === "GET" && url.pathname === "/api/stats/by-dimension") {
       const dimension = parseDimension(url.searchParams.get("dim") ?? "");
       if (dimension == null) {
-        return json({ error: "unknown dimension" }, 400);
+        return errorResponse(
+          "unknown_dimension",
+          "unknown dimension",
+          { allowed: DIMENSIONS },
+          400,
+        );
       }
       return withDb(config, context, (db) => json(byDimension(db, dimension, dateFilter)));
     }
@@ -313,6 +447,41 @@ export async function handleRequest(
         }),
       );
     }
+    if (request.method === "GET" && url.pathname === "/api/reports/analytics.html") {
+      return withDb(config, context, (db) =>
+        reportHtmlResponse(
+          renderAnalyticsReport(assembleAnalyticsReport(db, { filter: dateFilter }), {
+            dosuSuggestions: getSettings().dosuSuggestions,
+          }),
+          "decant-analytics-report.html",
+        ),
+      );
+    }
+    const possibleSessionReportRoute = url.pathname.match(
+      /^\/api\/reports\/session\/([^/]+)\.html$/,
+    );
+    if (
+      request.method === "GET" &&
+      possibleSessionReportRoute != null &&
+      !isValidSessionId(possibleSessionReportRoute[1] ?? "")
+    ) {
+      return errorResponse("invalid_session_id", "invalid session id", {}, 400);
+    }
+    const sessionReportMatch = url.pathname.match(/^\/api\/reports\/session\/(\d+)\.html$/);
+    if (request.method === "GET" && sessionReportMatch != null) {
+      return withDb(config, context, (db) => {
+        const report = assembleSessionReport(db, Number(sessionReportMatch[1]));
+        if (report == null) {
+          return sessionNotFound(db);
+        }
+        return reportHtmlResponse(
+          renderSessionReport(report, {
+            dosuSuggestions: getSettings().dosuSuggestions,
+          }),
+          `decant-session-${report.summary.id}-${reportFilenamePart(report.summary.title)}.html`,
+        );
+      });
+    }
     if (
       request.method === "GET" &&
       (url.pathname === "/api/date-bounds" || url.pathname === "/api/metadata/date-bounds")
@@ -323,10 +492,39 @@ export async function handleRequest(
       const group = parseFileGroup(url.searchParams.get("group") ?? "path");
       const op = parseOperation(url.searchParams.get("op"));
       if (group == null || op === false) {
-        return json({ error: "invalid files query" }, 400);
+        return errorResponse("invalid_files_query", "invalid files query", {}, 400);
       }
       return withDb(config, context, (db) =>
         json(fileHotspots(db, group, op, integerParam(url, "limit", 25), dateFilter)),
+      );
+    }
+    if (request.method === "GET" && url.pathname === "/api/tools/calls") {
+      const sessionValue = url.searchParams.get("session");
+      if (sessionValue != null && !isValidSessionId(sessionValue)) {
+        return errorResponse("invalid_request", "session must be a positive integer", {}, 400);
+      }
+      const minMsValue = url.searchParams.get("min_ms");
+      if (minMsValue != null && !isNonNegativeInteger(minMsValue)) {
+        return errorResponse("invalid_request", "min_ms must be a non-negative integer", {}, 400);
+      }
+      const errorsOnlyValue = url.searchParams.get("errors_only");
+      if (errorsOnlyValue != null && errorsOnlyValue !== "true" && errorsOnlyValue !== "false") {
+        return errorResponse("invalid_request", "errors_only must be true or false", {}, 400);
+      }
+      return withDb(config, context, (db) =>
+        json(
+          listToolCalls(db, {
+            tool: url.searchParams.get("tool"),
+            server: url.searchParams.get("server"),
+            errorsOnly: errorsOnlyValue === "true",
+            sessionId: sessionValue == null ? null : Number(sessionValue),
+            project: url.searchParams.get("project"),
+            ...dateFilter,
+            minMs: minMsValue == null ? null : Number(minMsValue),
+            limit: integerParam(url, "limit", 50),
+            offset: integerParam(url, "offset", 0, true),
+          }),
+        ),
       );
     }
     if (request.method === "GET" && url.pathname === "/api/tools/usage") {
@@ -349,7 +547,7 @@ export async function handleRequest(
     if (request.method === "GET" && url.pathname === "/api/recommendations") {
       const status = parseStatusFilter(url.searchParams.get("status") ?? "open");
       if (status == null) {
-        return json({ error: "unknown status" }, 400);
+        return errorResponse("unknown_status", "unknown status", { allowed: STATUS_FILTERS }, 400);
       }
       return withDb(config, context, (db) => json(listRecommendations(db, status)));
     }
@@ -360,27 +558,42 @@ export async function handleRequest(
       }
       const body = await readJson<{ key?: string; source?: string; note?: string }>(request);
       if (body.key == null || body.key.trim() === "") {
-        return json({ error: "key is required" }, 400);
+        return errorResponse("invalid_request", "key is required", {}, 400);
       }
       return withDb(config, context, (db) => {
         const ok = markImplemented(db, body.key as string, body.source ?? "agent", body.note);
         return ok
           ? json({ ok: true, key: body.key, status: "implemented" })
-          : json({ ok: false, key: body.key, error: "recommendation not found" }, 404);
+          : errorResponse(
+              "recommendation_not_found",
+              "recommendation not found",
+              { ok: false, key: body.key },
+              404,
+            );
       });
     }
     if (request.method === "GET" && isUiPath(url.pathname)) {
       return html(indexHtml());
     }
-    return json({ error: "not found" }, 404);
+    return errorResponse("not_found", "not found", {}, 404);
   } catch (error) {
-    context.logger?.error("HTTP request failed.", {
-      "event.name": "http.server.request.exception",
-      "http.request.method": request.method,
-      "url.path": url.pathname,
-      ...exceptionAttributes(error),
-    });
-    return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+    const response = responseForError(error);
+    if (response.status >= 500) {
+      context.logger?.error("HTTP request failed.", {
+        "event.name": "http.server.request.exception",
+        "http.request.method": request.method,
+        "url.path": url.pathname,
+        ...exceptionAttributes(error),
+      });
+    } else {
+      context.logger?.warning("HTTP request rejected.", {
+        "event.name": "http.server.request.rejected",
+        "http.request.method": request.method,
+        "http.response.status_code": response.status,
+        "url.path": url.pathname,
+      });
+    }
+    return response;
   }
 }
 
@@ -398,11 +611,32 @@ function settingsResponse(settings = getSettings()): Record<string, unknown> {
   };
 }
 
-async function syncNow(config: Config, economics?: EconomicsCache): Promise<Response> {
-  syncStatus.in_progress = true;
-  syncStatus.last_error = null;
+async function syncNow(
+  config: Config,
+  economics?: EconomicsCache,
+  runSync: SyncWorkerRunner = runSyncWorker,
+  runWithOwnership?: SyncCoordinator["runWithOwnership"],
+): Promise<Response> {
+  const progress = (update: SyncProgress): void => {
+    publishServerEvent({
+      type: "sync_progress",
+      reason: "manual",
+      progress: update,
+      status: { ...syncStatus },
+    });
+  };
+  const handle =
+    runWithOwnership?.(config, undefined, progress) ??
+    ({ promise: runSync(config, undefined, progress), owned: true } satisfies SyncRunHandle);
+  if (handle.owned) {
+    syncStatus.in_progress = true;
+    syncStatus.last_error = null;
+  }
   try {
-    const report = await runSyncWorker(config);
+    const report = await handle.promise;
+    if (!handle.owned) {
+      return json(report);
+    }
     syncStatus.in_progress = false;
     syncStatus.last_sync_at = new Date().toISOString();
     syncStatus.last_report =
@@ -420,9 +654,11 @@ async function syncNow(config: Config, economics?: EconomicsCache): Promise<Resp
     }
     return json(report);
   } catch (error) {
-    syncStatus.in_progress = false;
-    syncStatus.last_sync_at = new Date().toISOString();
-    syncStatus.last_error = error instanceof Error ? error.message : String(error);
+    if (handle.owned) {
+      syncStatus.in_progress = false;
+      syncStatus.last_sync_at = new Date().toISOString();
+      syncStatus.last_error = error instanceof Error ? error.message : String(error);
+    }
     throw error;
   }
 }
@@ -430,21 +666,29 @@ async function syncNow(config: Config, economics?: EconomicsCache): Promise<Resp
 function runSyncWorker(
   config: Config,
   cancel?: { aborted: boolean },
+  onProgress?: (progress: SyncProgress) => void,
 ): Promise<ReturnType<typeof ingestSync>> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./sync-worker.ts", import.meta.url), { type: "module" });
+    const cancelBuffer =
+      cancel == null ? null : new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+    const cancelView = cancelBuffer == null ? null : new Int32Array(cancelBuffer);
     let cancelPoll: Timer | null = null;
     const settle = (): void => {
       if (cancelPoll != null) {
         clearInterval(cancelPoll);
         cancelPoll = null;
       }
-      worker.terminate();
     };
     worker.addEventListener("message", (event) => {
       const data = event.data as
-        | { ok: true; report: ReturnType<typeof ingestSync> }
-        | { ok: false; error: string };
+        | { type: "progress"; progress: SyncProgress }
+        | { type: "complete"; ok: true; report: ReturnType<typeof ingestSync> }
+        | { type: "complete"; ok: false; error: string };
+      if (data.type === "progress") {
+        onProgress?.(data.progress);
+        return;
+      }
       settle();
       if (data.ok) {
         resolve(data.report);
@@ -457,26 +701,149 @@ function runSyncWorker(
       reject(event.error instanceof Error ? event.error : new Error(String(event.error)));
     });
     if (cancel != null) {
-      // The in-process runner aborts between files; a worker cannot observe the
-      // flag, so poll it and terminate, resolving with the same cancelled-report
-      // shape so shutdown stays prompt instead of waiting out a long ingest.
+      // Share cancellation with the worker so it can stop between files and
+      // close SQLite itself. Terminating a worker while it owns a native
+      // connection can race Bun's SQLite finalizers during server shutdown.
+      if (cancel.aborted && cancelView != null) {
+        Atomics.store(cancelView, 0, 1);
+      }
       cancelPoll = setInterval(() => {
-        if (cancel.aborted) {
-          settle();
-          resolve({
-            scanned: 0,
-            ingested: 0,
-            skipped: 0,
-            issues: 0,
-            issuesByCode: {},
-            failed: 0,
-            cancelled: true,
-          });
+        if (cancel.aborted && cancelView != null) {
+          Atomics.store(cancelView, 0, 1);
         }
       }, 150);
     }
-    worker.postMessage(config);
+    worker.postMessage({ config, cancelBuffer });
   });
+}
+
+/**
+ * Owns the one physical sync worker allowed per server. Overlapping watcher and
+ * manual requests join the same Promise instead of opening competing SQLite
+ * writers. Progress is fanned out at a bounded cadence while retaining the
+ * first update and the final update observed before completion.
+ */
+export function createSyncCoordinator(
+  worker: SyncWorkerRunner = runSyncWorker,
+  options: SyncCoordinatorOptions = {},
+): SyncCoordinator {
+  const progressEveryFiles = Math.max(1, options.progressEveryFiles ?? 25);
+  const progressEveryMs = Math.max(0, options.progressEveryMs ?? 250);
+  const now = options.now ?? (() => performance.now());
+  const ownedCancel = { aborted: false };
+  let closed = false;
+  let active: {
+    promise: Promise<SyncReport>;
+    listeners: Set<(progress: SyncProgress) => void>;
+    cancelSources: Set<{ aborted: boolean }>;
+  } | null = null;
+
+  const start = (
+    config: Config,
+    cancel?: { aborted: boolean },
+    onProgress?: (progress: SyncProgress) => void,
+    listenWhenJoined = true,
+  ): SyncRunHandle => {
+    if (closed) {
+      return {
+        promise: Promise.reject(new Error("sync coordinator is closed")),
+        owned: false,
+      };
+    }
+    if (active != null) {
+      if (cancel != null) {
+        active.cancelSources.add(cancel);
+      }
+      if (listenWhenJoined && onProgress != null) {
+        active.listeners.add(onProgress);
+      }
+      return { promise: active.promise, owned: false };
+    }
+
+    const listeners = new Set<(progress: SyncProgress) => void>();
+    const cancelSources = new Set<{ aborted: boolean }>([ownedCancel]);
+    if (cancel != null) {
+      cancelSources.add(cancel);
+    }
+    if (onProgress != null) {
+      listeners.add(onProgress);
+    }
+    const sharedCancel = {
+      get aborted(): boolean {
+        return [...cancelSources].some((source) => source.aborted);
+      },
+    };
+    let lastEmitted: SyncProgress | null = null;
+    let lastEmittedAt = Number.NEGATIVE_INFINITY;
+    let pending: SyncProgress | null = null;
+
+    const flush = (): void => {
+      if (pending == null) {
+        return;
+      }
+      const progress = pending;
+      pending = null;
+      lastEmitted = progress;
+      lastEmittedAt = now();
+      for (const listener of [...listeners]) {
+        try {
+          listener(progress);
+        } catch {
+          // Progress reporting must never fail the archive sync itself.
+        }
+      }
+    };
+    const forward = (progress: SyncProgress): void => {
+      pending = progress;
+      const first = lastEmitted == null;
+      const terminal = progress.scanned >= progress.total;
+      const advancedEnough =
+        lastEmitted != null && progress.scanned - lastEmitted.scanned >= progressEveryFiles;
+      const waitedEnough = now() - lastEmittedAt >= progressEveryMs;
+      if (first || terminal || advancedEnough || waitedEnough) {
+        flush();
+      }
+    };
+
+    let promise: Promise<SyncReport>;
+    promise = Promise.resolve()
+      .then(() => worker(config, sharedCancel, forward))
+      .then(
+        (report) => {
+          flush();
+          return report;
+        },
+        (error) => {
+          flush();
+          throw error;
+        },
+      )
+      .finally(() => {
+        if (active?.promise === promise) {
+          active = null;
+        }
+      });
+    active = { promise, listeners, cancelSources };
+    return { promise, owned: true };
+  };
+  const run: SyncWorkerRunner = (config, cancel, onProgress) =>
+    start(config, cancel, onProgress).promise;
+  const runWithOwnership: SyncCoordinator["runWithOwnership"] = (config, cancel, onProgress) =>
+    start(config, cancel, onProgress, false);
+
+  const close = async (): Promise<void> => {
+    closed = true;
+    ownedCancel.aborted = true;
+    try {
+      await active?.promise;
+    } catch {
+      // The request or watcher that started the run owns its user-facing
+      // failure. Shutdown only needs to wait until the worker has released its
+      // SQLite connection.
+    }
+  };
+
+  return { run, runWithOwnership, close };
 }
 
 interface EventClient {
@@ -537,36 +904,14 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
   const hostname = options.hostname ?? DEFAULT_SERVE_HOST;
   const port = options.port ?? DEFAULT_SERVE_PORT;
   const trustedPeers = resolveTrustedPeers(options.trustedPeers);
-  mkdirSync(dirname(options.config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
-  const db = openDb(options.config.dbPath);
-  ensureDerivedMetadata(db);
-  const economics = new EconomicsCache({
-    dbPath: options.config.dbPath,
-    db,
-    computeVectors: options.economicsComputeVectors,
-    onRebuilt: () =>
-      publishServerEvent({
-        type: "archive_updated",
-        reason: "stats",
-        last_sync_at: syncStatus.last_sync_at,
-      }),
-  });
-  economics.prewarm();
+  let db: Db | null = null;
+  let economics: EconomicsCache | null = null;
   let watchHandle: WatchHandle | null = null;
-  if (options.watch != null) {
-    const onEvent = options.watch.onEvent;
-    watchHandle = startWatch({
-      config: options.config,
-      intervalMs: options.watch.intervalMs,
-      debounceMs: options.watch.debounceMs,
-      enableWatch: options.watch.enableWatch,
-      runner: workerSyncRunner,
-      onEvent: (event) => {
-        applyWatchEvent(event, economics);
-        onEvent?.(event);
-      },
-    });
-  }
+  const syncCoordinator = createSyncCoordinator(options.syncRunner);
+
+  // Bind before touching the archive or starting background work. A second
+  // `decant serve` should fail with the truthful port-in-use error, not leave a
+  // DB-owning watcher behind and later surface a misleading SQLite lock.
   const server = Bun.serve({
     hostname,
     port,
@@ -587,14 +932,28 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       "/tools": uiBundle,
       "/files": uiBundle,
       "/settings": uiBundle,
+      "/reports/analytics": uiBundle,
+      "/reports/session/:id": uiBundle,
     },
     fetch: async (request, bunServer) => {
       const startedAt = performance.now();
       const requestLogger = options.logger?.with({ "request.id": crypto.randomUUID() });
+      const activeDb = db;
+      const activeEconomics = economics;
+      if (activeDb == null || activeEconomics == null) {
+        return errorResponse(
+          "service_starting",
+          "Decant is still starting. Please try again.",
+          { retryable: true },
+          503,
+        );
+      }
       try {
         const response = await handleRequest(request, options.config, {
-          db,
-          economics,
+          db: activeDb,
+          economics: activeEconomics,
+          runSync: syncCoordinator.run,
+          syncCoordinator,
           boundHostname: hostname,
           remoteAddress: bunServer.requestIP(request)?.address ?? null,
           trustedPeers,
@@ -611,10 +970,7 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
           "url.path": new URL(request.url).pathname,
           ...exceptionAttributes(error),
         });
-        const response = json(
-          { error: error instanceof Error ? error.message : String(error) },
-          500,
-        );
+        const response = responseForError(error);
         if (requestLogger != null) {
           logHttpRequest(requestLogger, request, response, performance.now() - startedAt);
         }
@@ -622,24 +978,81 @@ export function serve(options: ServeOptions): ReturnType<typeof Bun.serve> {
       }
     },
   });
+
+  try {
+    mkdirSync(dirname(options.config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
+    db = openDb(options.config.dbPath);
+    ensureDerivedMetadata(db);
+    economics = new EconomicsCache({
+      dbPath: options.config.dbPath,
+      db,
+      computeVectors: options.economicsComputeVectors,
+      onRebuilt: () =>
+        publishServerEvent({
+          type: "archive_updated",
+          reason: "stats",
+          last_sync_at: syncStatus.last_sync_at,
+        }),
+    });
+    economics.prewarm();
+    if (options.watch != null) {
+      const onEvent = options.watch.onEvent;
+      watchHandle = startWatch({
+        config: options.config,
+        intervalMs: options.watch.intervalMs,
+        debounceMs: options.watch.debounceMs,
+        enableWatch: options.watch.enableWatch,
+        runner: (config, status, cancel, onProgress) =>
+          workerSyncRunner(config, status, cancel, onProgress, syncCoordinator.runWithOwnership),
+        onEvent: (event) => {
+          if (economics != null) {
+            applyWatchEvent(event, economics);
+          }
+          onEvent?.(event);
+        },
+      });
+    }
+  } catch (error) {
+    economics?.dispose();
+    void Promise.allSettled([
+      watchHandle?.stop() ?? Promise.resolve(),
+      syncCoordinator.close(),
+      economics?.settled() ?? Promise.resolve(),
+    ])
+      .then(async () => {
+        if (db != null) {
+          closeDb(db);
+        }
+        await server.stop(true);
+      })
+      .catch(() => {
+        // Preserve the startup failure already being thrown; cleanup failures
+        // must not become a second unhandled rejection.
+      });
+    throw error;
+  }
+
   const stop = server.stop.bind(server);
   let closed = false;
   server.stop = async (closeActiveConnections?: boolean): Promise<void> => {
+    economics?.dispose();
     try {
-      await watchHandle?.stop();
+      await Promise.allSettled([
+        watchHandle?.stop() ?? Promise.resolve(),
+        syncCoordinator.close(),
+        economics?.settled() ?? Promise.resolve(),
+      ]);
     } finally {
-      // Abort any in-flight economics rebuild BEFORE awaiting the native
-      // stop(): forcing TCP connections closed doesn't make an in-flight
-      // request handler's own awaited Promise settle, so a request still
-      // awaiting a multi-second rebuild would otherwise block native stop()
-      // from ever resolving, even with closeActiveConnections=true.
-      economics.dispose();
       try {
         await stop(closeActiveConnections);
       } finally {
         if (!closed) {
           closed = true;
-          db.close();
+          if (db != null) {
+            closeDb(db);
+          }
+          db = null;
+          economics = null;
         }
       }
     }
@@ -653,12 +1066,18 @@ async function workerSyncRunner(
   config: Config,
   status: SyncStatusStore,
   cancel: { aborted: boolean },
-): Promise<ReturnType<typeof ingestSync>> {
+  onProgress: (progress: SyncProgress) => void,
+  runSync: SyncCoordinator["runWithOwnership"] = (workerConfig, workerCancel, workerProgress) => ({
+    promise: runSyncWorker(workerConfig, workerCancel, workerProgress),
+    owned: true,
+  }),
+): Promise<SyncRunnerResult> {
   status.start();
   try {
-    const report = await runSyncWorker(config, cancel);
+    const handle = runSync(config, cancel, onProgress);
+    const report = await handle.promise;
     status.finishOk(report);
-    return report;
+    return { report, emitTerminal: handle.owned };
   } catch (error) {
     status.finishErr(error instanceof Error ? error.message : String(error));
     throw error;
@@ -695,7 +1114,7 @@ function withDb(config: Config, context: RequestContext, callback: (db: Db) => R
     ensureDerivedMetadata(db);
     return callback(db);
   } finally {
-    db.close();
+    closeDb(db);
   }
 }
 
@@ -707,14 +1126,58 @@ function ensureDerivedMetadata(db: Db): void {
   metadataHydrated.add(db);
 }
 
-function isSearchSyntaxError(error: unknown): boolean {
+export function errorResponse(
+  code: ApiErrorCode,
+  message: string,
+  extras: Record<string, unknown> = {},
+  status = 400,
+): Response {
+  return json({ error: message, code, ...extras }, status);
+}
+
+function responseForError(error: unknown): Response {
+  const mapped = classifyError(error);
+  return errorResponse(mapped.code, mapped.message, mapped.extras, mapped.status);
+}
+
+function classifyError(error: unknown): ApiError {
   const message = error instanceof Error ? error.message : String(error);
-  const lower = message.toLowerCase();
+  if (error instanceof RequestBodyError) {
+    return { code: "malformed_body", message, status: 400 };
+  }
+  const normalized = message.toLowerCase();
+  if (normalized.includes("is newer than this build supports")) {
+    return { code: "schema_too_new", message, status: 409 };
+  }
+  if (normalized.includes("predates this build's baseline")) {
+    return { code: "schema_too_old", message, status: 409 };
+  }
+  if (isArchiveLockedError(error, normalized)) {
+    return {
+      code: "archive_locked",
+      message: "Session logs are temporarily busy. Please try again.",
+      extras: { retryable: true },
+      status: 503,
+    };
+  }
+  return {
+    code: "internal_error",
+    message: "Decant could not complete this request.",
+    status: 500,
+  };
+}
+
+function isArchiveLockedError(error: unknown, normalizedMessage: string): boolean {
+  const code =
+    typeof error === "object" && error != null && "code" in error
+      ? String((error as { code?: unknown }).code).toUpperCase()
+      : "";
   return (
-    lower.includes("fts5") ||
-    lower.includes("malformed") ||
-    lower.includes("unterminated") ||
-    lower.includes("syntax")
+    code.startsWith("SQLITE_BUSY") ||
+    code.startsWith("SQLITE_LOCKED") ||
+    normalizedMessage.includes("database is locked") ||
+    normalizedMessage.includes("database table is locked") ||
+    normalizedMessage.includes("database is busy")
   );
 }
 
@@ -734,7 +1197,7 @@ function validateLocalRequest(
     return null;
   }
   if (!isLoopbackHost(url.hostname)) {
-    return json({ error: "forbidden host" }, 403);
+    return errorResponse("forbidden_host", "forbidden host", {}, 403);
   }
   const boundToLoopback = isLoopbackHost(context.boundHostname ?? "127.0.0.1");
   if (
@@ -742,10 +1205,10 @@ function validateLocalRequest(
     !isLoopbackPeer(context.remoteAddress) &&
     !isTrustedPeer(context.remoteAddress, context.trustedPeers ?? [])
   ) {
-    return json({ error: "forbidden remote" }, 403);
+    return errorResponse("forbidden_remote", "forbidden remote", {}, 403);
   }
   if (isMutatingMethod(request.method) && !isAllowedWriteRequest(request, boundToLoopback)) {
-    return json({ error: "cross-origin writes are forbidden" }, 403);
+    return errorResponse("cross_origin_write", "cross-origin writes are forbidden", {}, 403);
   }
   return null;
 }
@@ -1154,7 +1617,7 @@ function requireJsonRequest(request: Request): Response | null {
   const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   return contentType === "application/json"
     ? null
-    : json({ error: "content-type must be application/json" }, 415);
+    : errorResponse("unsupported_media_type", "content-type must be application/json", {}, 415);
 }
 
 /** Shells returned from here deny framing. Note this covers only the fallback
@@ -1171,11 +1634,33 @@ function html(value: string): Response {
   });
 }
 
+function reportHtmlResponse(value: string, filename: string): Response {
+  return new Response(value, {
+    headers: {
+      "content-disposition": `attachment; filename="${filename}"`,
+      "content-security-policy":
+        "default-src 'none'; style-src 'unsafe-inline'; font-src data:; frame-ancestors 'none'",
+      "content-type": "text/html; charset=utf-8",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+function reportFilenamePart(value: string | null): string {
+  const normalized = (value ?? "report")
+    .normalize("NFKD")
+    .replaceAll(/[^a-zA-Z0-9]+/g, "-")
+    .replaceAll(/^-+|-+$/g, "")
+    .toLowerCase()
+    .slice(0, 64);
+  return normalized === "" ? "report" : normalized;
+}
+
 async function readJson<T>(request: Request): Promise<T> {
   try {
     return (await request.json()) as T;
   } catch {
-    return {} as T;
+    throw new RequestBodyError();
   }
 }
 
@@ -1197,19 +1682,43 @@ function parseOperation(value: string | null): Operation | null | false {
     : false;
 }
 
-function isUiPath(pathname: string): boolean {
-  return (
-    pathname === "/" ||
-    pathname === "/projects" ||
-    pathname === "/sessions" ||
-    pathname === "/search" ||
-    pathname === "/analytics" ||
-    pathname === "/insights" ||
-    pathname === "/tools" ||
-    pathname === "/files" ||
-    pathname === "/settings" ||
-    /^\/sessions\/\d+$/.test(pathname)
+function isValidSessionId(value: string): boolean {
+  if (!/^\d+$/.test(value)) {
+    return false;
+  }
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0;
+}
+
+function isNonNegativeInteger(value: string): boolean {
+  if (!/^\d+$/.test(value)) {
+    return false;
+  }
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0;
+}
+
+function sessionNotFound(db: Db): Response {
+  const archiveEmpty =
+    (
+      db.query("SELECT NOT EXISTS (SELECT 1 FROM session LIMIT 1) AS empty").get() as {
+        empty: number;
+      }
+    ).empty === 1;
+  return errorResponse(
+    "session_not_found",
+    "session not found",
+    { archive_empty: archiveEmpty },
+    404,
   );
+}
+
+function isUnsupportedLaunchError(error: string | undefined): boolean {
+  return error?.includes("only supported on macOS") ?? false;
+}
+
+function isUiPath(pathname: string): boolean {
+  return !pathname.startsWith("/api/") && !/\/[^/]*\.[^/]+$/.test(pathname);
 }
 
 function indexHtml(): string {
@@ -1224,7 +1733,7 @@ function indexHtml(): string {
     />
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48 256x256" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
-    <title>decant</title>
+    <title>Decant</title>
   </head>
   <body>
     <div id="root"></div>

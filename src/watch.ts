@@ -2,8 +2,8 @@ import type { Database } from "bun:sqlite";
 import { existsSync, type FSWatcher, mkdirSync, statSync, watch } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "./config.ts";
-import { ARCHIVE_DIR_MODE, openDb } from "./db.ts";
-import { sync as ingestSync, type SyncReport } from "./ingest.ts";
+import { ARCHIVE_DIR_MODE, closeDb, openDb } from "./db.ts";
+import { sync as ingestSync, type SyncProgress, type SyncReport } from "./ingest.ts";
 
 export const DEFAULT_SYNC_INTERVAL_MS = 45_000;
 export const DEFAULT_DEBOUNCE_MS = 1_500;
@@ -26,6 +26,13 @@ export interface SyncEvent {
   status: SyncStatus;
 }
 
+export interface SyncProgressEvent {
+  type: "sync_progress";
+  reason: SyncReason;
+  progress: SyncProgress;
+  status: SyncStatus;
+}
+
 export interface SyncErrorEvent {
   type: "error";
   reason: SyncReason | "watch";
@@ -44,13 +51,25 @@ export interface WatchStoppedEvent {
   status: SyncStatus;
 }
 
-export type WatchEvent = SyncEvent | SyncErrorEvent | WatchReadyEvent | WatchStoppedEvent;
+export type WatchEvent =
+  | SyncEvent
+  | SyncProgressEvent
+  | SyncErrorEvent
+  | WatchReadyEvent
+  | WatchStoppedEvent;
 
 export type SyncRunner = (
   config: Config,
   status: SyncStatusStore,
   cancel: { aborted: boolean },
-) => Promise<SyncReport>;
+  onProgress: (progress: SyncProgress) => void,
+) => Promise<SyncReport | SyncRunnerResult>;
+
+export interface SyncRunnerResult {
+  report: SyncReport;
+  /** False when this watcher joined a run whose terminal events have another owner. */
+  emitTerminal: boolean;
+}
 
 export interface WatchOptions {
   config: Config;
@@ -139,20 +158,23 @@ export function runSyncOnce(
   status: SyncStatusStore = new SyncStatusStore(),
   cancel: { aborted: boolean } = { aborted: false },
   open: (path: string) => Database = openDb,
+  onProgress?: (progress: SyncProgress) => void,
 ): SyncReport {
   status.start();
   let db: Database | null = null;
   try {
     mkdirSync(dirname(config.dbPath), { recursive: true, mode: ARCHIVE_DIR_MODE });
     db = open(config.dbPath);
-    const report = ingestSync(db, config, cancel);
+    const report = ingestSync(db, config, cancel, onProgress);
     status.finishOk(report);
     return report;
   } catch (error) {
     status.finishErr(error instanceof Error ? error.message : String(error));
     throw error;
   } finally {
-    db?.close();
+    if (db != null) {
+      closeDb(db);
+    }
   }
 }
 
@@ -164,7 +186,8 @@ export function startWatch(options: WatchOptions): WatchHandle {
   const open = options.open ?? openDb;
   const runner: SyncRunner =
     options.runner ??
-    (async (config, syncStatus, cancelFlag) => runSyncOnce(config, syncStatus, cancelFlag, open));
+    (async (config, syncStatus, cancelFlag, onProgress) =>
+      runSyncOnce(config, syncStatus, cancelFlag, open, onProgress));
   const enableWatch = options.enableWatch !== false;
   const syncOnStart = options.syncOnStart !== false;
   const cancel = { aborted: false };
@@ -223,8 +246,14 @@ export function startWatch(options: WatchOptions): WatchHandle {
         nextReason = null;
         pendingReason = null;
         try {
-          const report = await runner(options.config, status, cancel);
-          emit({ type: "sync", reason: current, report, status: status.snapshot() });
+          const result = await runner(options.config, status, cancel, (progress) => {
+            emit({ type: "sync_progress", reason: current, progress, status: status.snapshot() });
+          });
+          const { report, emitTerminal } =
+            "report" in result ? result : { report: result, emitTerminal: true };
+          if (emitTerminal) {
+            emit({ type: "sync", reason: current, report, status: status.snapshot() });
+          }
         } catch (error) {
           emit({
             type: "error",
