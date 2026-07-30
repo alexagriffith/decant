@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { withImmediateTransaction } from "./db.ts";
+import { compareCodePoints } from "./order.ts";
 import { byDimension, mcpUsage, toolUsage } from "./stats.ts";
 
 export interface Recommendation {
@@ -61,6 +62,7 @@ const ABANDONED_RATE = 0.25;
 const ABANDONED_MIN_CLASSIFIED = 10;
 const INGEST_HEALTH_MIN_SESSIONS = 15;
 const INGEST_HEALTH_MIN_SHARE = 0.1;
+const WINDOW_DAYS = 30;
 const WINDOW = "s.started_at >= date('now','-30 days')";
 
 function queryOne<T>(db: Database, sql: string): T {
@@ -86,10 +88,12 @@ export function parseStatusFilter(value: string): StatusFilter | null {
 }
 
 export function signals(db: Database): Recommendation[] {
-  const tools = toolUsage(db, false, 500);
-  const mcp = mcpUsage(db, 500);
-  const models = byDimension(db, "model").sort(
-    (left, right) => right.estimated_cost_usd - left.estimated_cost_usd,
+  const recent = { from: recentWindowStart() };
+  const tools = toolUsage(db, false, 500, recent);
+  const mcp = mcpUsage(db, 500, recent);
+  const models = byDimension(db, "model", recent).sort(
+    (left, right) =>
+      right.estimated_cost_usd - left.estimated_cost_usd || compareCodePoints(left.key, right.key),
   );
   const out = [
     ...errorHotspots(tools),
@@ -102,8 +106,12 @@ export function signals(db: Database): Recommendation[] {
     ...abandonedRate(db),
     ...ingestHealth(db),
   ];
-  out.sort((left, right) => right.score - left.score);
+  out.sort((left, right) => right.score - left.score || compareCodePoints(left.key, right.key));
   return out.slice(0, 12);
+}
+
+function recentWindowStart(): string {
+  return new Date(Date.now() - WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
 }
 
 export function catalog(): Recommendation[] {
@@ -222,8 +230,45 @@ export function current(db: Database): Recommendation[] {
 
 export function regenerate(db: Database): void {
   const recs = current(db);
+  // `current()` is capped at twelve signals. Migration attribution must inspect
+  // every eligible hotspot or a same-name sibling just below that cap can make
+  // a legacy name-only identity look uniquely attributable when it is not.
+  const allErrorHotspots = errorHotspots(
+    toolUsage(db, false, Number.MAX_SAFE_INTEGER, { from: recentWindowStart() }),
+  );
   const now = nowRfc3339();
   withImmediateTransaction(db, () => {
+    type LegacyErrorState = {
+      detail: string | null;
+      status: string;
+      status_source: string | null;
+      note: string | null;
+      first_seen_at: string | null;
+      implemented_at: string | null;
+    };
+    const stableErrorsByLegacy = new Map<string, Recommendation[]>();
+    for (const rec of allErrorHotspots) {
+      const legacyKey = legacyErrorHotspotKey(rec.key);
+      if (legacyKey != null) {
+        const stableErrors = stableErrorsByLegacy.get(legacyKey) ?? [];
+        stableErrors.push(rec);
+        stableErrorsByLegacy.set(legacyKey, stableErrors);
+      }
+    }
+    const currentKeys = new Set(recs.map((rec) => rec.key));
+    const legacyErrorStates = new Map<string, LegacyErrorState>();
+    for (const legacyKey of stableErrorsByLegacy.keys()) {
+      const row = db
+        .query(
+          `SELECT detail, status, status_source, note, first_seen_at, implemented_at
+           FROM recommendation
+           WHERE key = ?1`,
+        )
+        .get(legacyKey) as LegacyErrorState | null;
+      if (row != null) {
+        legacyErrorStates.set(legacyKey, row);
+      }
+    }
     const upsert = db.prepare(
       `INSERT INTO recommendation
          (key, kind, category, title, detail, suggestion, prompt, url,
@@ -247,8 +292,44 @@ export function regenerate(db: Database): void {
          impact_label = excluded.impact_label,
          impact_label_checked = 1,
          score = excluded.score,
+         status = CASE
+           WHEN recommendation.status = 'implemented'
+             AND recommendation.status_source = 'activity'
+           THEN 'open'
+           ELSE recommendation.status
+         END,
+         status_source = CASE
+           WHEN recommendation.status = 'implemented'
+             AND recommendation.status_source = 'activity'
+           THEN NULL
+           ELSE recommendation.status_source
+         END,
+         implemented_at = CASE
+           WHEN recommendation.status = 'implemented'
+             AND recommendation.status_source = 'activity'
+           THEN NULL
+           ELSE recommendation.implemented_at
+         END,
          updated_at = excluded.updated_at`,
     );
+    const preserveLegacyFirstSeen = db.prepare(
+      `UPDATE recommendation
+       SET first_seen_at = CASE
+         WHEN first_seen_at IS NULL OR first_seen_at > ?2 THEN ?2
+         ELSE first_seen_at
+       END
+       WHERE key = ?1 AND ?2 IS NOT NULL`,
+    );
+    const preserveDurableLegacyState = db.prepare(
+      `UPDATE recommendation
+       SET status = ?2,
+           status_source = ?3,
+           note = ?4,
+           implemented_at = ?5
+       WHERE key = ?1
+         AND (status_source IS NULL OR status_source = 'activity')`,
+    );
+    const removeLegacyError = db.prepare("DELETE FROM recommendation WHERE key = ?1");
     try {
       for (const rec of recs) {
         upsert.run(
@@ -267,6 +348,32 @@ export function regenerate(db: Database): void {
           rec.score,
           now,
         );
+      }
+
+      for (const [legacyKey, stableErrors] of stableErrorsByLegacy) {
+        const legacy = legacyErrorStates.get(legacyKey);
+        if (legacy == null) {
+          continue;
+        }
+        const durable = legacy.status === "implemented" && legacy.status_source !== "activity";
+        const target = legacyErrorMigrationTarget(legacy.detail, stableErrors);
+        if (target != null && currentKeys.has(target.key)) {
+          preserveLegacyFirstSeen.run(target.key, legacy.first_seen_at);
+          if (durable) {
+            preserveDurableLegacyState.run(
+              target.key,
+              legacy.status,
+              legacy.status_source,
+              legacy.note,
+              legacy.implemented_at,
+            );
+          }
+          removeLegacyError.run(legacyKey);
+        } else if (!durable) {
+          // Open and activity-derived aliases carry no operator-owned state.
+          // The stable current identities have already been opened/upserted.
+          removeLegacyError.run(legacyKey);
+        }
       }
 
       const signalKeys = recs.filter((rec) => rec.kind === "signal").map((rec) => rec.key);
@@ -291,6 +398,9 @@ export function regenerate(db: Database): void {
         WHERE kind = 'signal' AND impact_label_checked = 0
       `);
     } finally {
+      removeLegacyError.finalize();
+      preserveDurableLegacyState.finalize();
+      preserveLegacyFirstSeen.finalize();
       upsert.finalize();
     }
   });
@@ -403,33 +513,70 @@ function serverSuffix(server: string | null): string {
 }
 
 function errorHotspots(tools: ReturnType<typeof toolUsage>): Recommendation[] {
-  return tools.flatMap((tool) => {
-    if (tool.calls < 20 || tool.errors / tool.calls < 0.12) {
-      return [];
-    }
+  const eligible = tools.filter((tool) => tool.calls >= 20 && tool.errors / tool.calls >= 0.12);
+  return eligible.map((tool) => {
     const rate = tool.errors / tool.calls;
     const pct = Math.round(rate * 100);
     const name = quoted(tool.tool_name);
     const suffix = serverSuffix(tool.mcp_server);
-    return [
-      {
-        key: `signal:error:${keySegment(tool.tool_name)}`,
-        kind: "signal",
-        category: null,
-        title: `${name} fails ${pct}% of the time`,
-        detail: `${tool.errors} errors across ${tool.calls} calls${suffix}.`,
-        suggestion:
-          "Codify the recovery path as a Skill (or fix the call sites) so agents stop repeating this failure.",
-        prompt: `The ${name} tool is failing about ${pct}% of the time (${tool.errors} errors in ${tool.calls} calls)${suffix}. Investigate the common failure mode and codify a reusable Skill (or guardrail) so agents handle it consistently. Follow this repo's AGENTS.md and Skill conventions. ${UNTRUSTED_NOTE}`,
-        url: SKILLS_URL,
-        link_label: "Skills guide",
-        icon: "hero-exclamation-triangle",
-        tone: "danger",
-        impact_label: `${pct}% error rate`,
-        score: rate * tool.calls,
-      },
-    ];
+    const baseKey = `signal:error:${keySegment(tool.tool_name)}`;
+    // A hotspot's identity cannot depend on which same-named siblings happen
+    // to cross the threshold today. Always include the complete stats grouping
+    // so state survives siblings appearing, resolving, or falling out of view.
+    const key = `${baseKey}.h${digest(JSON.stringify([tool.tool_kind, tool.mcp_server]))}`;
+    return {
+      key,
+      kind: "signal",
+      category: null,
+      title: `${name} fails ${pct}% of the time`,
+      detail: `${tool.errors} errors across ${tool.calls} calls${suffix}.`,
+      suggestion:
+        "Codify the recovery path as a Skill (or fix the call sites) so agents stop repeating this failure.",
+      prompt: `The ${name} tool is failing about ${pct}% of the time (${tool.errors} errors in ${tool.calls} calls)${suffix}. Investigate the common failure mode and codify a reusable Skill (or guardrail) so agents handle it consistently. Follow this repo's AGENTS.md and Skill conventions. ${UNTRUSTED_NOTE}`,
+      url: SKILLS_URL,
+      link_label: "Skills guide",
+      icon: "hero-exclamation-triangle",
+      tone: "danger",
+      impact_label: `${pct}% error rate`,
+      score: rate * tool.calls,
+    };
   });
+}
+
+function legacyErrorHotspotKey(key: string): string | null {
+  if (!key.startsWith("signal:error:") || !KEY_DIGEST_SUFFIX.test(key)) {
+    return null;
+  }
+  return key.replace(KEY_DIGEST_SUFFIX, "");
+}
+
+function legacyErrorMigrationTarget(
+  legacyDetail: string | null,
+  candidates: Recommendation[],
+): Recommendation | null {
+  if (legacyDetail == null) {
+    return null;
+  }
+  const exact = candidates.filter((candidate) => candidate.detail === legacyDetail);
+  if (exact.length === 1) {
+    return exact[0] ?? null;
+  }
+
+  const legacyIdentity = renderedErrorServerIdentity(legacyDetail);
+  if (legacyIdentity == null) {
+    return null;
+  }
+  const sameServer = candidates.filter((candidate) => {
+    const identity =
+      candidate.detail == null ? null : renderedErrorServerIdentity(candidate.detail);
+    return identity != null && identity.serverLabel === legacyIdentity.serverLabel;
+  });
+  return sameServer.length === 1 ? (sameServer[0] ?? null) : null;
+}
+
+function renderedErrorServerIdentity(detail: string): { serverLabel: string | null } | null {
+  const match = /^\d+ errors across \d+ calls(?: on "([^"]*)")?\.$/.exec(detail);
+  return match == null ? null : { serverLabel: match[1] ?? null };
 }
 
 function heavyServers(mcp: ReturnType<typeof mcpUsage>): Recommendation[] {
@@ -530,7 +677,7 @@ function hotContextFiles(db: Database): Recommendation[] {
        WHERE ${WINDOW} AND f.rel_path IS NOT NULL
        GROUP BY key
        HAVING readers >= ${HOT_CONTEXT_MIN_SESSIONS} AND editors <= ${HOT_CONTEXT_MAX_EDIT_SESSIONS}
-       ORDER BY readers DESC
+       ORDER BY readers DESC, key ASC
        LIMIT 2`,
   );
   return rows.map(({ key: relPath, readers }) => {
@@ -561,7 +708,7 @@ function churnFiles(db: Database): Recommendation[] {
        WHERE ${WINDOW} AND f.rel_path IS NOT NULL AND f.operation IN ('edit','write')
        GROUP BY key
        HAVING editors >= ${CHURN_MIN_SESSIONS}
-       ORDER BY editors DESC
+       ORDER BY editors DESC, key ASC
        LIMIT 2`,
   );
   return rows.map(({ key: relPath, editors }) => {
