@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const main = readFileSync(join(import.meta.dir, "..", "src", "ui", "main.tsx"), "utf8");
+const styles = readFileSync(join(import.meta.dir, "..", "src", "ui", "styles.css"), "utf8");
 
 function sourceBetween(start: string, end: string): string {
   const startIndex = main.indexOf(start);
@@ -33,6 +34,76 @@ describe("UI interaction contracts", () => {
     expect(search).toContain('role="option"');
     expect(search).toContain("aria-activedescendant={activeHitId}");
     expect(search).toContain("aria-selected={index === activeIndex}");
+  });
+
+  test("keeps fast transcript search scoped and settles totals without replacing results", () => {
+    const search = sourceBetween("function SearchView(", "function groupSearchHits(");
+    const fastRequest = search.slice(
+      search.indexOf("include_total: false"),
+      search.indexOf("include_total: true"),
+    );
+
+    expect(search).toContain("searchRequestScope(path, { from: rangeFrom, to: rangeTo })");
+    expect(search).toContain("include_total: false");
+    expect(search).toContain("include_total: true");
+    expect(search).toContain("setTotal(response.total)");
+    expect(fastRequest).not.toContain("setTotal(response.total)");
+    expect(fastRequest).not.toContain("setTotalIsCapped(response.total_is_capped)");
+    expect(search).toContain("A count is supplementary");
+    expect(search).toContain("searchPageMayHaveMore");
+    expect(search).toContain("total: totalRef.current");
+    expect(search).toContain("exactSearchRemaining(total, hits.length, totalIsCapped)");
+    expect(search).not.toContain("total == null || hits.length >= total");
+  });
+
+  test("opens one focus-managed palette from desktop, mobile, and global shortcuts", () => {
+    const app = sourceBetween("function App()", "function renderView(");
+    const palette = sourceBetween(
+      "function CommandPalette(",
+      "function commandPaletteTextMatches(",
+    );
+    const paletteGroups = palette.slice(
+      palette.indexOf("{groups.map("),
+      palette.indexOf('<footer className="command-palette-footer">'),
+    );
+
+    expect(app).toContain("shouldOpenCommandPalette({");
+    expect(app).toContain("setCommandPaletteOpen(true)");
+    expect(app).not.toContain("getClientRects().length === 0");
+    expect(app).toContain('className="topbar-search"');
+    expect(app).toContain('className="icon-button topbar-search-mobile"');
+    expect(palette).toContain("createPortal(");
+    expect(palette).toContain("useDialogFocusTrap(open, dialogRef, requestClose)");
+    expect(palette).toContain('aria-modal="true"');
+    expect(palette).toContain('role="dialog"');
+    expect(palette).toContain('role="combobox"');
+    expect(palette).toContain('role="listbox"');
+    expect(palette).toContain('role="option"');
+    expect(paletteGroups).toContain('role="group"');
+    expect(paletteGroups).toContain("aria-labelledby={labelId}");
+    expect(paletteGroups).toContain('"command-palette-group-label"');
+    expect(paletteGroups).not.toContain("<fieldset");
+    expect(paletteGroups).not.toContain("<legend");
+    expect(palette).toContain('group.label ?? "Transcript search"');
+    expect(palette).toContain("aria-activedescendant={activeDescendant}");
+    expect(palette).toContain("flattenCommandPaletteItems(groups)");
+    expect(palette).toContain("searchRouteHref(recent, locationPath())");
+    expect(palette).toContain("searchRouteHref(normalizedQuery, locationPath())");
+    expect(palette).toContain("dialogRef.current");
+    expect(palette).not.toContain("document\n      .querySelector<HTMLElement>");
+    expect(paletteGroups).not.toContain("onPointerEnter");
+    expect(paletteGroups).toContain("onPointerMove");
+    expect(paletteGroups).toContain("pointerMovementChangesSelection(event)");
+    expect(paletteGroups).not.toContain("onKeyDown");
+    expect(palette).toContain("selectPaletteIndex(index)");
+    expect(palette).toContain("reconcileCommandPaletteActiveIndex");
+    expect(palette).toContain("useLayoutEffect(() =>");
+    expect(palette).toContain("item.highlights?.started_at");
+    expect(palette).not.toContain("dangerouslySetInnerHTML");
+    expect(styles).toContain(".command-palette-group-label {");
+    expect(styles).not.toContain(".command-palette-group legend {");
+    expect(app).toContain('aria-haspopup="dialog"');
+    expect(app).toContain("aria-expanded={commandPaletteOpen}");
   });
 
   test("exposes tool-call details as a focus-managed modal with a keyboard entry point", () => {
