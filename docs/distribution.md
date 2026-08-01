@@ -118,8 +118,15 @@ The `dosu-ai/dosu` tap carries a formula that installs the same prebuilt
 release tarball as every other channel — there is no source build:
 
 ```sh
-brew tap dosu-ai/dosu && brew install decant
-brew install dosu-ai/dosu/decant   # equivalent one-liner, taps on the fly
+brew install dosu-ai/dosu/decant
+```
+
+Or with the tap and short names:
+
+```sh
+brew tap dosu-ai/dosu
+brew trust dosu-ai/dosu   # Homebrew 6.0+ only — skip on older versions
+brew install decant
 ```
 
 The formula is rendered from `packaging/homebrew/decant.rb.template` during the

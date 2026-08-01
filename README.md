@@ -65,7 +65,7 @@ decant serve
 Install it with Homebrew:
 
 ```bash
-brew tap dosu-ai/dosu && brew install decant
+brew install dosu-ai/dosu/decant
 decant serve
 ```
 
@@ -246,8 +246,15 @@ details and per-artifact verification.
 2. **Homebrew** — via the `dosu-ai/dosu` tap:
 
    ```bash
-   brew tap dosu-ai/dosu && brew install decant
-   brew install dosu-ai/dosu/decant   # equivalent one-liner
+   brew install dosu-ai/dosu/decant
+   ```
+
+   Or with the tap and short names:
+
+   ```bash
+   brew tap dosu-ai/dosu
+   brew trust dosu-ai/dosu   # Homebrew 6.0+ only — skip on older versions
+   brew install decant
    ```
 
 3. **Install script** — for machines without Node:
