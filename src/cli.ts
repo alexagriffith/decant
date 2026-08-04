@@ -15,6 +15,7 @@ import {
   renderScript,
   renderSkill,
   replayOps,
+  shellQuote,
   timeline,
 } from "./distill.ts";
 import type { Operation } from "./enrich.ts";
@@ -216,6 +217,16 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         ...archive.config,
         sourcePaths: commandOptions.path,
       });
+      // `options.env` is only populated by tests, so read through to the real
+      // environment the way `shouldSync` and `resolveConfig` do -- otherwise
+      // the hint omits `--db` for anyone running with `DECANT_DB` set.
+      const dbFlag = globals().db ?? (options.env ?? process.env).DECANT_DB;
+      const issuesHint =
+        report.issues > 0
+          ? `inspect affected sessions with: decant ${dbFlag ? `--db ${shellQuote(archive.config.dbPath)} ` : ""}ls --json | ` +
+            "jq '[.[] | select(.ingest_issue_count + .informational_ingest_issue_count > 0)]' " +
+            "(issue detail: GET /api/sessions/:id/issues under `decant serve`)"
+          : undefined;
       const jsonReport = {
         scanned: report.scanned,
         ingested: report.ingested,
@@ -223,6 +234,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         issues: report.issues,
         issues_by_code: report.issuesByCode,
         failed: report.failed,
+        ...(issuesHint != null ? { issues_hint: issuesHint } : {}),
       };
       if (isJson(globals())) {
         io.writeOut(`${JSON.stringify(jsonReport, null, 2)}\n`);
@@ -231,6 +243,9 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           `synced: ${report.scanned} scanned, ${report.ingested} ingested, ` +
             `${report.skipped} skipped, ${report.issues} issues, ${report.failed} failed\n`,
         );
+        if (issuesHint != null) {
+          io.writeErr(`  ${issuesHint}\n`);
+        }
       }
       // Exit 3 means decant dropped source content, which is what an unparsed
       // line is. The other codes are sensors over content that did land, so

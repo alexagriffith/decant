@@ -108,6 +108,7 @@ import {
   sessionPageExhausted,
   shouldShowSessionSkeleton,
 } from "./loading-state.ts";
+import { formatMcpServer, mcpServerLabel, mcpServerLabels } from "./mcp-server.ts";
 import {
   documentTitleFor,
   isKnownRoute,
@@ -3367,7 +3368,10 @@ function mcpSortValue(row: McpRow, key: McpSortKey): SortValue {
     case "p50":
       return row.p50_ms;
     case "server":
-      return row.mcp_server;
+      // The short name on purpose, not the disambiguated label: two
+      // registrations of one server sort adjacently, which is where a reader
+      // expects to find them.
+      return formatMcpServer(row.mcp_server);
     case "tools":
       return row.tools;
   }
@@ -3386,7 +3390,10 @@ function toolSortValue(row: ToolRow, key: ToolSortKey): SortValue {
     case "p50":
       return row.p50_ms;
     case "server":
-      return row.mcp_server;
+      // The short name on purpose, not the disambiguated label: two
+      // registrations of one server sort adjacently, which is where a reader
+      // expects to find them.
+      return formatMcpServer(row.mcp_server);
     case "tool":
       return row.tool_name;
   }
@@ -6855,11 +6862,13 @@ function ToolCallDetail({
   call,
   onClose,
   onTabChange,
+  serverLabel,
   tab,
 }: {
   call: ToolCallRow;
   onClose: () => void;
   onTabChange: (tab: "preview" | "raw") => void;
+  serverLabel: string;
   tab: "preview" | "raw";
 }) {
   const dialogRef = useRef<HTMLElement | null>(null);
@@ -6887,8 +6896,8 @@ function ToolCallDetail({
       >
         <header>
           <div>
-            <span className="section-eyebrow">
-              {call.mcp_server ?? call.tool_kind ?? "Tool call"}
+            <span className="section-eyebrow" title={call.mcp_server ?? undefined}>
+              {serverLabel || call.tool_kind || "Tool call"}
             </span>
             <h2 id={titleId}>{call.tool_name ?? "Unknown tool"}</h2>
           </div>
@@ -6995,6 +7004,19 @@ function ToolsView({
   const toolRows = useMemo(
     () => sortRows(data.tools, toolSort, toolSortValue),
     [data.tools, toolSort],
+  );
+  // Built from every server in view, so two registrations of the same server
+  // (`dosu` and `claude_ai_Dosu`) never render as two identical rows. Both
+  // tables and the filter share one map so a server reads the same everywhere.
+  // The two tables are limited independently, so the union is what is on
+  // screen -- a server in one but not the other still gets a stable label.
+  const serverLabels = useMemo(
+    () =>
+      mcpServerLabels([
+        ...data.mcp.map((row) => row.mcp_server),
+        ...data.tools.map((row) => row.mcp_server),
+      ]),
+    [data.mcp, data.tools],
   );
   const callQuery = useMemo(() => {
     const params = new URLSearchParams();
@@ -7229,12 +7251,14 @@ function ToolsView({
                     <DrilldownTableRow
                       href={href}
                       key={row.mcp_server}
-                      label={`Show calls from MCP server ${row.mcp_server}`}
+                      label={`Show calls from MCP server ${mcpServerLabel(serverLabels, row.mcp_server)}`}
                     >
                       <td className="mono">
                         <span className="icon-cell drilldown-label">
                           <Icon name="cpu" />
-                          <span>{row.mcp_server}</span>
+                          <span title={row.mcp_server ?? undefined}>
+                            {mcpServerLabel(serverLabels, row.mcp_server)}
+                          </span>
                         </span>
                       </td>
                       <td className="numeric muted">{formatInt(row.tools)}</td>
@@ -7357,7 +7381,9 @@ function ToolsView({
                       {row.mcp_server != null && row.mcp_server !== "" ? (
                         <span className="icon-cell">
                           <Icon name="cpu" />
-                          <span>{row.mcp_server}</span>
+                          <span title={row.mcp_server}>
+                            {mcpServerLabel(serverLabels, row.mcp_server)}
+                          </span>
                         </span>
                       ) : (
                         <span className="faint">-</span>
@@ -7414,8 +7440,8 @@ function ToolsView({
             >
               <option value="">All servers</option>
               {data.mcp.map((row) => (
-                <option key={row.mcp_server} value={row.mcp_server}>
-                  {row.mcp_server} ({formatInt(row.calls)})
+                <option key={row.mcp_server} title={row.mcp_server} value={row.mcp_server}>
+                  {mcpServerLabel(serverLabels, row.mcp_server)} ({formatInt(row.calls)})
                 </option>
               ))}
             </select>
@@ -7580,6 +7606,7 @@ function ToolsView({
           call={selectedCall}
           onClose={closeToolDetail}
           onTabChange={setDetailTab}
+          serverLabel={mcpServerLabel(serverLabels, selectedCall.mcp_server)}
           tab={detailTab}
         />
       ) : null}

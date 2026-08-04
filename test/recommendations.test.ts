@@ -132,12 +132,15 @@ describe("recommendations", () => {
       score: 5,
     });
     expect(rows.find((row) => row.key === "signal:heavy-server:svc")).toMatchObject({
-      score: 42.5,
+      // The card names the server the way the Tools & MCP table does. The key
+      // keeps the raw slug, so a marked recommendation still matches.
+      title: 'Heavy reliance on the "Svc" MCP server',
+      score: 2,
       tone: "accent",
       impact_label: "85 calls",
     });
     expect(rows.find((row) => row.key === "signal:heavy-tool:Bash")).toMatchObject({
-      score: 62.5,
+      score: 2,
       tone: "info",
       impact_label: "250 calls",
     });
@@ -147,6 +150,38 @@ describe("recommendations", () => {
       tone: "warning",
       impact_label: "83% of spend",
     });
+    // The Insights UI picks its "hero" as the highest-scored open signal.
+    // A tool being heavily used is not itself a problem, so it must never
+    // outrank a signal that flags a real issue -- like this 20% error rate.
+    const usageVsError = rows
+      .filter((row) => row.key.startsWith("signal:heavy-") || row.key === error?.key)
+      .sort((left, right) => right.score - left.score);
+    expect(usageVsError[0]?.key).toBe(error?.key);
+    // Same rule for every issue signal this fixture produces, so the comment
+    // on USAGE_SIGNAL_SCORE is enforced rather than merely asserted.
+    const isUsage = (key: string) => key.startsWith("signal:heavy-");
+    const scores = (usage: boolean) =>
+      rows.filter((row) => isUsage(row.key) === usage).map((row) => row.score);
+    expect(Math.min(...scores(false))).toBeGreaterThan(Math.max(...scores(true)));
+    db.close();
+  });
+
+  test("heavy-server cards disambiguate two registrations of the same server", () => {
+    const db = base();
+    seedTool(db, "mcp__dosu__read", "mcp", "dosu", 90, 0);
+    seedTool(db, "mcp__claude_ai_Dosu__read", "mcp", "claude_ai_Dosu", 60, 0);
+
+    const rows = signals(db);
+    const local = rows.find((row) => row.key === "signal:heavy-server:dosu");
+    const connector = rows.find((row) => row.key === "signal:heavy-server:claude_ai_Dosu");
+    // Both would read 'the "Dosu" MCP server' without the origin suffix, so
+    // the two cards would be indistinguishable.
+    expect(local?.title).toBe('Heavy reliance on the "Dosu (local)" MCP server');
+    expect(connector?.title).toBe('Heavy reliance on the "Dosu (connector)" MCP server');
+    // The prompt is handed to an agent that has to find the server in a config
+    // file, so it names the raw slug rather than the display label.
+    expect(local?.prompt).toContain('the "dosu" MCP server');
+    expect(connector?.prompt).toContain('the "claude_ai_Dosu" MCP server');
     db.close();
   });
 
