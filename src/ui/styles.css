@@ -1,75 +1,222 @@
+/* ===========================================================================
+ * Fonts
+ *
+ * Bundled from the repo, never fetched from a CDN — invariant 3 keeps this app
+ * offline. Bun resolves these url()s at build time and inlines the woff2 as data
+ * URIs, so the paths point at the files rather than at a route decant serves. A
+ * root-relative /fonts/… URL builds fine under `bun run dev` and then fails
+ * scripts/build-binaries.ts outright, so keep them relative.
+ *
+ * These are the same files the exported report uses (src/report/fonts.ts), which
+ * base64s them itself because a report has to survive as one standalone file.
+ *
+ * Only the Semibold serif is bundled, so it is declared at the weight it
+ * actually is. Declaring it as 400 would make browsers synthesize a bold on top
+ * of an already-semibold face.
+ * =========================================================================== */
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("../report/fonts/SourceSerif4-Semibold.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../report/fonts/IBMPlexMono-Regular-Latin1.woff2") format("woff2");
+}
+
+/* ===========================================================================
+ * Tokens
+ *
+ * Light is the base theme because light is the one that was designed (Figma:
+ * "Dosu x Venice"); dark is derived from it and lives in the two override
+ * blocks below.
+ *
+ * Two rules keep this block safe to edit:
+ *
+ * 1. DO NOT RENAME --fg, --muted, --faint, --line, --surface, --accent, --info,
+ *    --success or --warning. `chartColors()` in main.tsx reads those nine names
+ *    off the computed root style and hands them to ECharts. A rename leaves
+ *    charts silently unstyled — no error, no visual clue except wrong axes.
+ * 2. Keep those nine in a colour grammar zrender can parse, because ECharts gets
+ *    the raw string. Its parser (zrender/lib/tool/color.js) accepts hex — 3, 4,
+ *    6 and 8 digit — plus comma-separated rgb()/rgba()/hsl(), and nothing else.
+ *    So: no `color-mix()`, no `rgba(var(--x), …)` (custom-property substitution
+ *    in getComputedStyle is not something to bet charts on), and no space/slash
+ *    `rgb(0 0 0 / 50%)`, which zrender splits on commas and reads as black.
+ *    Literal `rgba()` here is deliberate; Bun's minifier rewrites it to 8-digit
+ *    hex on the way out, which zrender handles fine.
+ *
+ * --success/--info/--warning/--danger are fill-grade, taken straight from the
+ * design: they are tuned for chart series and badge backgrounds, not for text
+ * on --canvas. Text-on-colour pairings go through the -ink tokens.
+ * =========================================================================== */
 :root {
-  color-scheme: dark;
-  --canvas: #0b0e14;
-  --surface: #11151f;
-  --elevated: #161c28;
-  --overlay: #1b2230;
-  --line: #232b3b;
-  --line-strong: #303a4e;
-  --fg: #e7eaf0;
-  --muted: #9aa6b8;
-  --faint: #6b7689;
-  --accent: #8b5cf6;
-  --accent-hover: #a78bfa;
-  --on-accent: #f5f3ff;
+  color-scheme: light;
+  /* bg/primary — the warm cream the whole app sits on. */
+  --canvas: #e6e3d7;
+  /* bg/card, flattened to an opaque colour: chart tooltips and `chartColors()`
+   * need something real to paint on. The genuinely translucent fill is --card. */
+  --surface: #f2f0ea;
+  /* bg/secondary — tinted table headers and hover states. */
+  --elevated: #e1dfd6;
+  --overlay: #fbfaf6;
+  --card: rgba(255, 255, 255, 0.48);
+  /* bg/components/secondary — buttons sit lighter than card surfaces. */
+  --btn-ghost: rgba(255, 255, 255, 0.28);
+  --btn-ghost-hover: rgba(255, 255, 255, 0.75);
+  /* border/default and a stronger step for focused/active edges. */
+  --line: rgba(26, 26, 26, 0.09);
+  --line-strong: rgba(26, 26, 26, 0.16);
+  /* fg/primary → fg/quaternary: one near-black at four opacities. */
+  --fg: #141414;
+  --muted: rgba(26, 26, 26, 0.69);
+  --faint: rgba(26, 26, 26, 0.48);
+  /* brand/400. Decorative and chart-facing — see --btn-ink for buttons. */
+  --accent: #ee67d1;
+  --accent-hover: #d94ab8;
+  --accent-soft: rgba(238, 103, 209, 0.12);
   --claude: #d97757;
   --claude-strong: #c6613f;
-  --success: #34d399;
-  --warning: #fbbf24;
-  --danger: #f87171;
-  --info: #60a5fa;
+  --success: #65a30d;
+  --warning: #ea580c;
+  --danger: #dc2626;
+  --info: #0ea5e9;
+  /* Dosu sage, light to dark. Brand-locked, so it does not move between themes. */
+  --dosu: #b4bb91;
+  --dosu-mid: #899364;
+  --dosu-strong: #65704b;
+  /* Text-safe counterparts to the fills above, for `color:` on a page surface.
+   * The design's accents are fill-grade — as text on cream they land at 2.1–3.8:1
+   * and miss WCAG AA, so each is pulled toward --fg by the smallest amount that
+   * clears 4.5:1 against the worst surface in BOTH themes. Mixing toward --fg
+   * rather than hardcoding a second palette is what lets one definition serve
+   * light and dark: it darkens on cream and lightens on near-black.
+   *
+   * Measured worst-case ratios (light / dark): accent 4.70/9.83, success
+   * 4.53/12.28, warning 4.56/9.16, danger 4.55/6.93, info 4.69/10.19, claude
+   * 4.59/7.86. Lower a percentage and you drop below AA.
+   *
+   * There is deliberately no --dosu-text: the sage tokens only ever appear inside
+   * color-mix() for borders and shadows, never as `color:`.
+   *
+   * Safe to color-mix here because nothing hands these to ECharts. */
+  --accent-text: color-mix(in oklab, var(--accent) 60%, var(--fg));
+  --success-text: color-mix(in oklab, var(--success) 65%, var(--fg));
+  --warning-text: color-mix(in oklab, var(--warning) 70%, var(--fg));
+  --danger-text: color-mix(in oklab, var(--danger) 85%, var(--fg));
+  --info-text: color-mix(in oklab, var(--info) 60%, var(--fg));
+  --claude-text: color-mix(in oklab, var(--claude) 65%, var(--fg));
+  /* The design's primary button is near-black, not brand pink. Inverted in dark
+   * so it stays a button rather than a hole in the page. */
+  --btn-ink: #09090b;
+  --btn-ink-fg: #fafafa;
+  --btn-ink-hover: #3f3f46;
+  /* The near-black every scrim and drop shadow layers, as bare channels so each
+   * site keeps its own alpha — a slide-over scrim is deliberately lighter than a
+   * modal's. Warm on purpose: these used to be Tailwind slate-900, which laid a
+   * cold blue veil over a warm cream page. */
+  --shade-rgb: 23, 22, 15;
+  /* The design's four-layer button treatment: two drops for lift, two insets for
+   * the top bevel. Defined once because nobody will retype this correctly. */
+  --shadow-button:
+    0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.1), inset 0 -2px 0 #52525b,
+    inset 0 -1px 0 #27272a;
+  --shadow-button-light: inset 0 1px 0 rgba(255, 255, 255, 0.48);
   --radius-lg: 10px;
   --radius-xl: 14px;
+  --radius-full: 9999px;
+  --font-serif: "Source Serif 4", ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-@media (prefers-color-scheme: light) {
+/* The two dark blocks below MUST stay byte-identical. CSS cannot share
+ * declarations between a media query and an attribute selector, so this is two
+ * copies on purpose: the media block serves "system" (no data-theme attribute),
+ * the attribute block serves an explicit choice. Edit both or neither.
+ *
+ * Dark is derived, not designed — the Figma file ships no dark palette. It keeps
+ * light's warm cast so the two read as one product. */
+@media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    color-scheme: light;
-    --canvas: #f6f7f9;
-    --surface: #ffffff;
-    --elevated: #f3f5f8;
-    --overlay: #ffffff;
-    --line: #e4e8ef;
-    --line-strong: #d2d8e2;
-    --fg: #131722;
-    --muted: #5a6473;
-    --faint: #97a1b0;
-    --accent: #7c3aed;
-    --accent-hover: #6d28d9;
-    --on-accent: #ffffff;
-    --success: #059669;
-    --warning: #b45309;
-    --danger: #dc2626;
-    --info: #2563eb;
+    color-scheme: dark;
+    --canvas: #17160f;
+    --surface: #201f16;
+    --elevated: #1f1d14;
+    --overlay: #262418;
+    --card: rgba(255, 255, 255, 0.035);
+    --btn-ghost: rgba(255, 255, 255, 0.06);
+    --btn-ghost-hover: rgba(255, 255, 255, 0.12);
+    --line: rgba(240, 238, 228, 0.1);
+    --line-strong: rgba(240, 238, 228, 0.18);
+    --fg: #f4f2e8;
+    --muted: rgba(244, 242, 232, 0.68);
+    --faint: rgba(244, 242, 232, 0.46);
+    --accent: #f087dd;
+    --accent-hover: #f5a5e6;
+    --accent-soft: rgba(240, 135, 221, 0.16);
+    --success: #a3e635;
+    --warning: #fb923c;
+    --danger: #f87171;
+    --info: #38bdf8;
+    --btn-ink: #f4f2e8;
+    --btn-ink-fg: #17160f;
+    --btn-ink-hover: #d8d5c6;
+    --shade-rgb: 0, 0, 0;
+    --shadow-button:
+      0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(0, 0, 0, 0.5),
+      inset 0 -2px 0 rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.55);
+    --shadow-button-light: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
-}
-
-[data-theme="light"] {
-  color-scheme: light;
-  --canvas: #f6f7f9;
-  --surface: #ffffff;
-  --elevated: #f3f5f8;
-  --overlay: #ffffff;
-  --line: #e4e8ef;
-  --line-strong: #d2d8e2;
-  --fg: #131722;
-  --muted: #5a6473;
-  --faint: #97a1b0;
-  --accent: #7c3aed;
-  --accent-hover: #6d28d9;
-  --on-accent: #ffffff;
-  --success: #059669;
-  --warning: #b45309;
-  --danger: #dc2626;
-  --info: #2563eb;
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
+  --canvas: #17160f;
+  --surface: #201f16;
+  --elevated: #1f1d14;
+  --overlay: #262418;
+  --card: rgba(255, 255, 255, 0.035);
+  --btn-ghost: rgba(255, 255, 255, 0.06);
+  --btn-ghost-hover: rgba(255, 255, 255, 0.12);
+  --line: rgba(240, 238, 228, 0.1);
+  --line-strong: rgba(240, 238, 228, 0.18);
+  --fg: #f4f2e8;
+  --muted: rgba(244, 242, 232, 0.68);
+  --faint: rgba(244, 242, 232, 0.46);
+  --accent: #f087dd;
+  --accent-hover: #f5a5e6;
+  --accent-soft: rgba(240, 135, 221, 0.16);
+  --success: #a3e635;
+  --warning: #fb923c;
+  --danger: #f87171;
+  --info: #38bdf8;
+  --btn-ink: #f4f2e8;
+  --btn-ink-fg: #17160f;
+  --btn-ink-hover: #d8d5c6;
+  --shade-rgb: 0, 0, 0;
+  --shadow-button:
+    0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(0, 0, 0, 0.5), inset 0 -2px 0 rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  --shadow-button-light: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
+/* Light is :root, so forcing light only has to stop the dark media block from
+ * matching — which the [data-theme] attribute already does. */
+[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* ===========================================================================
+ * Reset and base elements
+ * =========================================================================== */
 * {
   box-sizing: border-box;
 }
@@ -126,7 +273,7 @@ svg {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -134,6 +281,9 @@ svg {
   background: color-mix(in oklab, var(--accent) 35%, transparent);
 }
 
+/* ===========================================================================
+ * Shell: sidebar, topbar, workspace
+ * =========================================================================== */
 .app-shell {
   min-height: 100vh;
   background: var(--canvas);
@@ -147,7 +297,7 @@ svg {
   width: 15rem;
   flex-direction: column;
   border-right: 1px solid var(--line);
-  background: var(--surface);
+  background: var(--canvas);
 }
 
 .sidebar-backdrop {
@@ -170,9 +320,10 @@ svg {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: 0;
+  font-family: var(--font-serif);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .brand-icon {
@@ -207,9 +358,10 @@ nav {
   margin: 0 0 7px;
   padding: 0 10px;
   color: var(--faint);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.09em;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.32em;
   text-transform: uppercase;
 }
 
@@ -225,10 +377,14 @@ nav a {
   display: flex;
   align-items: center;
   gap: 10px;
+  border: 1px solid transparent;
   border-radius: 8px;
   color: var(--muted);
-  font-size: 13.5px;
+  font-family: var(--font-mono);
+  font-size: 13px;
   font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
   padding: 8px 10px;
   transition:
     background 0.12s ease,
@@ -254,13 +410,14 @@ nav a:hover svg {
 /* The icon carries the accent and the label goes full-contrast bold. Tinting
    the text accent as well washed it out against the tinted background. */
 nav a[aria-current="page"] {
-  background: color-mix(in oklab, var(--accent) 15%, transparent);
+  border: 1px solid var(--line);
+  background: var(--overlay);
+  box-shadow: var(--shadow-button-light);
   color: var(--fg);
-  font-weight: 640;
 }
 
 nav a[aria-current="page"] svg {
-  color: var(--accent);
+  color: var(--fg);
   opacity: 1;
 }
 
@@ -380,8 +537,9 @@ nav a[aria-current="page"] svg {
   min-width: 220px;
   min-height: 34px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: var(--radius-full);
+  background: var(--card);
+  box-shadow: var(--shadow-button-light);
   color: var(--faint);
   font: inherit;
   font-size: 14px;
@@ -409,7 +567,7 @@ nav a[aria-current="page"] svg {
   border: 1px solid var(--line);
   border-radius: 4px;
   color: var(--faint);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
   padding: 1px 6px;
 }
@@ -418,6 +576,9 @@ nav a[aria-current="page"] svg {
   display: none;
 }
 
+/* ===========================================================================
+ * Command palette
+ * =========================================================================== */
 .command-palette-backdrop {
   position: fixed;
   inset: 0;
@@ -425,7 +586,7 @@ nav a[aria-current="page"] svg {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  background: rgb(0 0 0 / 58%);
+  background: rgba(var(--shade-rgb), 0.58);
   padding: min(12vh, 104px) 20px 20px;
   backdrop-filter: blur(5px);
 }
@@ -439,7 +600,7 @@ nav a[aria-current="page"] svg {
   border: 1px solid var(--line-strong);
   border-radius: 14px;
   background: var(--surface);
-  box-shadow: 0 24px 80px rgb(0 0 0 / 38%);
+  box-shadow: 0 24px 80px rgba(var(--shade-rgb), 0.38);
   flex-direction: column;
 }
 
@@ -583,7 +744,7 @@ nav a[aria-current="page"] svg {
   border-radius: 4px;
   background: var(--canvas);
   color: var(--faint);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
   padding: 1px 5px;
 }
@@ -597,7 +758,7 @@ nav a[aria-current="page"] svg {
 }
 
 .command-palette-state.is-error {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .command-palette-footer {
@@ -616,14 +777,18 @@ nav a[aria-current="page"] svg {
   gap: 4px;
 }
 
+/* ===========================================================================
+ * Controls: icon buttons, toggles, date range
+ * =========================================================================== */
 .icon-button {
   display: inline-grid;
   width: 34px;
   height: 34px;
   place-items: center;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: var(--radius-full);
+  background: var(--card);
+  box-shadow: var(--shadow-button-light);
   color: var(--muted);
   padding: 0;
   transition:
@@ -647,8 +812,8 @@ nav a[aria-current="page"] svg {
   display: flex;
   align-items: center;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: var(--radius-full);
+  background: var(--card);
   padding: 2px;
 }
 
@@ -694,8 +859,8 @@ nav a[aria-current="page"] svg {
   align-items: center;
   gap: 2px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: var(--radius-full);
+  background: var(--card);
   padding: 2px;
 }
 
@@ -705,12 +870,12 @@ nav a[aria-current="page"] svg {
   height: 28px;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--muted);
   font-size: 13px;
   font-weight: 600;
-  padding: 0 8px;
+  padding: 0 10px;
 }
 
 .date-range-buttons button:hover {
@@ -719,7 +884,8 @@ nav a[aria-current="page"] svg {
 }
 
 .date-range-buttons button[aria-pressed="true"] {
-  background: var(--elevated);
+  background: var(--overlay);
+  box-shadow: var(--shadow-button-light);
   color: var(--fg);
 }
 
@@ -733,6 +899,9 @@ nav a[aria-current="page"] svg {
   height: 14px;
 }
 
+/* ===========================================================================
+ * Content shell and page headings
+ * =========================================================================== */
 .content {
   flex: 1;
   min-width: 0;
@@ -767,8 +936,21 @@ nav a[aria-current="page"] svg {
 }
 
 .page-heading h1 {
-  font-size: 20px;
-  font-weight: 650;
+  font-family: var(--font-serif);
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.14;
+  letter-spacing: -0.01em;
+}
+
+/* Analytics, Sessions, Tools and Files wrap the title and subtitle in a div next
+ * to their actions, so the baseline row goes on that wrapper. Insights keeps a
+ * stacked heading: its eyebrow is a sibling of the h1, not a child of a wrapper. */
+.inline-heading > div:first-child {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .page-heading p,
@@ -784,6 +966,7 @@ nav a[aria-current="page"] svg {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -796,6 +979,7 @@ nav a[aria-current="page"] svg {
 .page-heading-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -805,7 +989,7 @@ nav a[aria-current="page"] svg {
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgb(15 23 42 / 46%);
+  background: rgba(var(--shade-rgb), 0.46);
   padding: 24px;
 }
 
@@ -815,7 +999,7 @@ nav a[aria-current="page"] svg {
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--surface);
-  box-shadow: 0 24px 80px rgb(15 23 42 / 28%);
+  box-shadow: 0 24px 80px rgba(var(--shade-rgb), 0.28);
 }
 
 .report-review-sheet > header,
@@ -871,8 +1055,10 @@ nav a[aria-current="page"] svg {
   white-space: nowrap;
 }
 
+/* ===========================================================================
+ * Panels, cards and stat grids
+ * =========================================================================== */
 .panel,
-.stat-card,
 .signal-hero,
 .signal-list,
 .catalog-card {
@@ -931,7 +1117,7 @@ nav a[aria-current="page"] svg {
   height: 52px;
   border-radius: 14px;
   background: color-mix(in oklab, var(--accent) 12%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .first-run-icon svg {
@@ -973,7 +1159,10 @@ nav a[aria-current="page"] svg {
 
 .stat-grid {
   display: grid;
-  gap: 12px;
+  gap: 1px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--line);
 }
 
 .sessions-stat-grid,
@@ -982,21 +1171,25 @@ nav a[aria-current="page"] svg {
 }
 
 .analytics-stat-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
 }
 
 .stat-card {
   display: flex;
+  flex-direction: row-reverse;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px 18px;
+  justify-content: flex-end;
+  gap: 10px;
+  background: var(--canvas);
+  padding: 18px 20px;
 }
 
 .stat-card span {
   color: var(--muted);
+  font-family: var(--font-mono);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
+  letter-spacing: 0.32em;
   text-transform: uppercase;
 }
 
@@ -1011,18 +1204,25 @@ nav a[aria-current="page"] svg {
 
 .stat-icon {
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 20px;
+  height: 20px;
   place-items: center;
-  border-radius: 8px;
-  background: var(--elevated);
 }
 
 .stat-icon svg {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
 }
 
+/* Two classes, so this outranks the single-class .tone-* colour without
+ * needing to sit after it in the file. */
+.stat-card .stat-icon {
+  color: var(--muted);
+}
+
+/* ===========================================================================
+ * Tables
+ * =========================================================================== */
 .table-scroll {
   overflow-x: auto;
 }
@@ -1068,7 +1268,7 @@ table {
 }
 
 .clickable-row a:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .drilldown-row {
@@ -1081,7 +1281,7 @@ table {
 }
 
 .drilldown-row:hover .drilldown-label {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .drilldown-row:focus-visible {
@@ -1122,7 +1322,7 @@ table {
 
 .tool-error-toggle input {
   min-height: auto;
-  accent-color: var(--accent);
+  accent-color: var(--accent-text);
 }
 
 .tool-calls-heading > span {
@@ -1161,7 +1361,7 @@ table {
 
 .tool-call-detail-button:hover,
 .tool-call-detail-button:focus-visible {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -1171,7 +1371,7 @@ table {
   z-index: 80;
   inset: 0;
   border: 0;
-  background: rgb(15 23 42 / 28%);
+  background: rgba(var(--shade-rgb), 0.28);
   cursor: default;
 }
 
@@ -1187,7 +1387,7 @@ table {
   overflow-y: auto;
   border-left: 1px solid var(--line);
   background: var(--surface);
-  box-shadow: -18px 0 50px rgb(15 23 42 / 18%);
+  box-shadow: -18px 0 50px rgba(var(--shade-rgb), 0.18);
 }
 
 .tool-detail-panel > header,
@@ -1428,7 +1628,7 @@ table {
 th,
 td {
   border-bottom: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
-  padding: 10px 16px;
+  padding: 14px 16px;
   text-align: left;
   vertical-align: middle;
 }
@@ -1456,11 +1656,12 @@ tbody tr:hover {
 }
 
 th {
+  background: var(--elevated);
   color: var(--muted);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 500;
   letter-spacing: 0;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 .data-table td,
@@ -1529,7 +1730,7 @@ td a {
 }
 
 td a:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .numeric {
@@ -1543,7 +1744,9 @@ td a:hover {
 }
 
 .table-skeleton-line {
-  height: 16px;
+  /* Tracks the tallest real cell content (a badge) so the table does not jolt
+   * when loading finishes. Grew with the badge's new 1px border. */
+  height: 18px;
 }
 
 .table-skeleton-line.tool {
@@ -1666,9 +1869,9 @@ td a:hover {
   flex: 0 0 auto;
   align-items: center;
   gap: 5px;
-  border: 1px solid color-mix(in oklab, #b4bb91 45%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--dosu) 45%, var(--line));
   border-radius: 999px;
-  background: color-mix(in oklab, #b4bb91 12%, var(--surface));
+  background: color-mix(in oklab, var(--dosu) 12%, var(--surface));
   color: var(--muted);
   font-size: 11px;
   font-weight: 650;
@@ -1678,7 +1881,7 @@ td a:hover {
 
 .dosu-provenance-badge:hover,
 .dosu-provenance-badge:focus-visible {
-  border-color: color-mix(in oklab, #b4bb91 72%, var(--line-strong));
+  border-color: color-mix(in oklab, var(--dosu) 72%, var(--line-strong));
   color: var(--fg);
 }
 
@@ -1729,7 +1932,7 @@ td a:hover {
 .subagent-source svg {
   width: 14px;
   height: 14px;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .path-stack,
@@ -1782,7 +1985,7 @@ td a:hover {
 }
 
 .mono {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -1847,7 +2050,7 @@ select {
   height: 14px;
   min-height: 0;
   margin: 0;
-  accent-color: var(--accent);
+  accent-color: var(--accent-text);
   padding: 0;
 }
 
@@ -1866,6 +2069,9 @@ select {
   -webkit-appearance: none;
 }
 
+/* ===========================================================================
+ * Buttons
+ * =========================================================================== */
 .secondary-button {
   display: inline-flex;
   align-items: center;
@@ -1873,12 +2079,16 @@ select {
   gap: 6px;
   min-height: 30px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: var(--radius-full);
+  background: var(--btn-ghost);
+  box-shadow: var(--shadow-button-light);
   color: var(--fg);
+  font-family: var(--font-mono);
   font-size: 13px;
-  font-weight: 550;
-  padding: 0 10px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 0 12px;
 }
 
 .primary-button {
@@ -1887,19 +2097,21 @@ select {
   justify-content: center;
   gap: 7px;
   min-height: 36px;
-  border: 1px solid color-mix(in oklab, var(--accent) 78%, var(--line));
-  border-radius: 9px;
-  background: var(--accent);
-  box-shadow: 0 8px 22px -14px color-mix(in oklab, var(--accent) 80%, transparent);
-  color: var(--on-accent);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: var(--btn-ink);
+  box-shadow: var(--shadow-button);
+  color: var(--btn-ink-fg);
+  font-family: var(--font-mono);
   font-size: 13px;
-  font-weight: 680;
-  padding: 0 14px;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 0 16px;
 }
 
 .primary-button:hover {
-  border-color: var(--accent-hover);
-  background: var(--accent-hover);
+  background: var(--btn-ink-hover);
 }
 
 .primary-button:disabled {
@@ -1948,7 +2160,7 @@ select {
 }
 
 .secondary-button:hover {
-  background: var(--elevated);
+  background: var(--btn-ghost-hover);
 }
 
 .secondary-button:disabled {
@@ -1971,12 +2183,16 @@ select {
   }
 }
 
+/* ===========================================================================
+ * Badges and tones
+ * =========================================================================== */
 .badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  border-radius: 6px;
-  background: var(--elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  background: var(--card);
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
@@ -1986,7 +2202,7 @@ select {
 }
 
 .badge.is-mono {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
 }
 
 .badge svg {
@@ -2013,27 +2229,27 @@ select {
 }
 
 .tone-accent {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .tone-success {
-  color: var(--success);
+  color: var(--success-text);
 }
 
 .tone-warning {
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .tone-danger {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .tone-info {
-  color: var(--info);
+  color: var(--info-text);
 }
 
 .tone-claude {
-  color: var(--claude);
+  color: var(--claude-text);
 }
 
 .tone-openai {
@@ -2041,42 +2257,35 @@ select {
 }
 
 .badge.tone-accent,
-.signal-icon.tone-accent,
-.stat-icon.tone-accent {
+.signal-icon.tone-accent {
   background: color-mix(in oklab, var(--accent) 13%, transparent);
 }
 
 .badge.tone-success,
-.signal-icon.tone-success,
-.stat-icon.tone-success {
+.signal-icon.tone-success {
   background: color-mix(in oklab, var(--success) 12%, transparent);
 }
 
 .badge.tone-warning,
-.signal-icon.tone-warning,
-.stat-icon.tone-warning {
+.signal-icon.tone-warning {
   background: color-mix(in oklab, var(--warning) 12%, transparent);
 }
 
 .badge.tone-danger,
-.signal-icon.tone-danger,
-.stat-icon.tone-danger {
+.signal-icon.tone-danger {
   background: color-mix(in oklab, var(--danger) 12%, transparent);
 }
 
 .badge.tone-info,
-.signal-icon.tone-info,
-.stat-icon.tone-info {
+.signal-icon.tone-info {
   background: color-mix(in oklab, var(--info) 12%, transparent);
 }
 
-.badge.tone-claude,
-.stat-icon.tone-claude {
+.badge.tone-claude {
   background: color-mix(in oklab, var(--claude) 12%, transparent);
 }
 
-.badge.tone-openai,
-.stat-icon.tone-openai {
+.badge.tone-openai {
   background: var(--elevated);
 }
 
@@ -2096,7 +2305,7 @@ select {
 .notice.danger {
   border-color: color-mix(in oklab, var(--danger) 35%, var(--line));
   background: color-mix(in oklab, var(--danger) 10%, transparent);
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .slice-load-notice {
@@ -2126,6 +2335,9 @@ select {
   width: min(100%, 42rem);
 }
 
+/* ===========================================================================
+ * Search
+ * =========================================================================== */
 .search-form {
   position: relative;
 }
@@ -2145,7 +2357,7 @@ select {
   min-height: 48px;
   border-radius: 12px;
   padding-left: 44px;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 12%);
+  box-shadow: 0 1px 2px rgba(var(--shade-rgb), 0.12);
 }
 
 .result-caption {
@@ -2390,7 +2602,7 @@ mark {
   place-items: center;
   border-radius: 8px;
   background: color-mix(in oklab, var(--danger) 12%, transparent);
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .error-state h3 {
@@ -2424,7 +2636,7 @@ mark {
   display: block;
   width: 100%;
   height: 16rem;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .chart-share-button {
@@ -2460,7 +2672,7 @@ mark {
   display: grid;
   place-items: center;
   overflow-y: auto;
-  background: rgb(0 0 0 / 72%);
+  background: rgba(var(--shade-rgb), 0.72);
   padding: 24px;
   backdrop-filter: blur(8px);
 }
@@ -2472,7 +2684,7 @@ mark {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-xl);
   background: var(--surface);
-  box-shadow: 0 24px 80px rgb(0 0 0 / 44%);
+  box-shadow: 0 24px 80px rgba(var(--shade-rgb), 0.44);
 }
 
 .share-review-sheet > header,
@@ -2821,7 +3033,7 @@ mark {
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--overlay);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 30%);
+  box-shadow: 0 12px 32px rgba(var(--shade-rgb), 0.3);
   color: var(--fg);
   font-size: 12px;
   line-height: 1.45;
@@ -2897,11 +3109,11 @@ mark {
 .sparkline {
   width: 112px;
   height: 24px;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .sparkline.tone-claude {
-  color: var(--claude);
+  color: var(--claude-text);
 }
 
 .sparkline.tone-openai {
@@ -2978,10 +3190,13 @@ mark {
 
 .segmented-control button[aria-pressed="true"] {
   background: color-mix(in oklab, var(--accent) 12%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 650;
 }
 
+/* ===========================================================================
+ * Insights and signals
+ * =========================================================================== */
 .insights-stack {
   gap: 36px;
 }
@@ -2994,7 +3209,7 @@ mark {
 
 .page-eyebrow,
 .section-eyebrow {
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 11px;
   font-weight: 720;
   letter-spacing: 0.06em;
@@ -3003,7 +3218,7 @@ mark {
 
 .insights-heading h1 {
   font-size: 28px;
-  font-weight: 680;
+  font-weight: 600;
   line-height: 1.15;
 }
 
@@ -3079,9 +3294,9 @@ mark {
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px;
-  border: 1px solid color-mix(in oklab, #b4bb91 34%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--dosu) 34%, var(--line));
   border-radius: 10px;
-  background: color-mix(in oklab, #b4bb91 8%, var(--surface));
+  background: color-mix(in oklab, var(--dosu) 8%, var(--surface));
   padding: 12px 14px;
 }
 
@@ -3122,23 +3337,23 @@ mark {
 }
 
 .signal-hero.tone-accent {
-  border-left-color: var(--accent);
+  border-left-color: var(--accent-text);
 }
 
 .signal-hero.tone-success {
-  border-left-color: var(--success);
+  border-left-color: var(--success-text);
 }
 
 .signal-hero.tone-warning {
-  border-left-color: var(--warning);
+  border-left-color: var(--warning-text);
 }
 
 .signal-hero.tone-danger {
-  border-left-color: var(--danger);
+  border-left-color: var(--danger-text);
 }
 
 .signal-hero.tone-info {
-  border-left-color: var(--info);
+  border-left-color: var(--info-text);
 }
 
 .signal-hero.tone-neutral {
@@ -3243,11 +3458,11 @@ mark {
 }
 
 .ingest-issue-row.is-warning {
-  border-left-color: var(--warning);
+  border-left-color: var(--warning-text);
 }
 
 .ingest-issue-row.is-informational {
-  border-left-color: var(--info);
+  border-left-color: var(--info-text);
 }
 
 .signal-row-summary {
@@ -3278,7 +3493,7 @@ mark {
 }
 
 .signal-row-title:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .signal-row-rationale {
@@ -3428,7 +3643,7 @@ mark {
   border: 1px solid var(--line-strong);
   border-radius: 9px;
   background: var(--surface);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 32%);
+  box-shadow: 0 12px 32px rgba(var(--shade-rgb), 0.32);
   padding: 4px;
 }
 
@@ -3458,7 +3673,7 @@ mark {
 }
 
 .overflow-menu-popover :where(a, button).is-danger {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .overflow-menu-popover button svg {
@@ -3504,9 +3719,9 @@ mark {
 }
 
 .insights-dosu-list {
-  border-color: color-mix(in oklab, #b4bb91 38%, var(--line));
-  background: color-mix(in oklab, #b4bb91 7%, var(--surface));
-  box-shadow: 0 12px 28px -26px color-mix(in oklab, #65704b 48%, transparent);
+  border-color: color-mix(in oklab, var(--dosu) 38%, var(--line));
+  background: color-mix(in oklab, var(--dosu) 7%, var(--surface));
+  box-shadow: 0 12px 28px -26px color-mix(in oklab, var(--dosu-strong) 48%, transparent);
 }
 
 .dosu-insights-row {
@@ -3576,6 +3791,9 @@ mark {
   padding-top: 16px;
 }
 
+/* ===========================================================================
+ * Settings
+ * =========================================================================== */
 .settings-form {
   display: grid;
   padding: 8px 0;
@@ -3683,6 +3901,9 @@ mark {
   padding-left: 12px;
 }
 
+/* ===========================================================================
+ * Session detail and transcript
+ * =========================================================================== */
 .session-detail {
   display: grid;
   width: 100%;
@@ -3739,6 +3960,7 @@ mark {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -3786,7 +4008,7 @@ mark {
   max-width: 18rem;
   overflow: hidden;
   color: var(--muted);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3985,7 +4207,7 @@ mark {
 
 .toc a.is-loading {
   background: color-mix(in oklab, var(--accent) 9%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .toc a.is-current {
@@ -4042,7 +4264,7 @@ mark {
 }
 
 .toc-icon.is-dosu {
-  background: color-mix(in oklab, #b4bb91 16%, transparent);
+  background: color-mix(in oklab, var(--dosu) 16%, transparent);
 }
 
 .toc a.is-dosu {
@@ -4051,12 +4273,12 @@ mark {
 
 .toc a.is-dosu:hover .toc-icon,
 .toc a.is-dosu.is-current .toc-icon {
-  background: color-mix(in oklab, #b4bb91 25%, transparent);
+  background: color-mix(in oklab, var(--dosu) 25%, transparent);
 }
 
 .toc a:hover .toc-icon {
   background: color-mix(in oklab, var(--accent) 10%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .toc a > span:nth-child(2) {
@@ -4072,7 +4294,7 @@ mark {
 
 .toc em {
   align-self: center;
-  border: 1px solid color-mix(in oklab, #b4bb91 40%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--dosu) 40%, var(--line));
   border-radius: 999px;
   color: var(--faint);
   font-size: 9px;
@@ -4209,7 +4431,7 @@ mark {
 }
 
 .transcript-markdown a {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -4218,7 +4440,7 @@ mark {
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--elevated);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.9em;
   padding: 1px 4px;
 }
@@ -4254,7 +4476,7 @@ mark {
 }
 
 .transcript-code-content {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -4283,7 +4505,7 @@ mark {
   place-items: center;
   border-radius: 8px;
   background: color-mix(in oklab, var(--info) 12%, var(--surface));
-  color: var(--info);
+  color: var(--info-text);
 }
 
 .transcript-attachment-icon svg {
@@ -4354,7 +4576,7 @@ mark {
 
 .tool-call-header .tool-call-name {
   overflow: hidden;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4407,7 +4629,7 @@ mark {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4429,7 +4651,7 @@ mark {
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--canvas);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 
@@ -4469,11 +4691,11 @@ mark {
 }
 
 .tool-call.is-dosu {
-  border-color: color-mix(in oklab, #b4bb91 58%, var(--line));
-  background: color-mix(in oklab, #b4bb91 9%, var(--surface));
+  border-color: color-mix(in oklab, var(--dosu) 58%, var(--line));
+  background: color-mix(in oklab, var(--dosu) 9%, var(--surface));
   box-shadow:
-    inset 3px 0 0 color-mix(in oklab, #899364 70%, transparent),
-    0 12px 28px -22px color-mix(in oklab, #65704b 65%, transparent);
+    inset 3px 0 0 color-mix(in oklab, var(--dosu-mid) 70%, transparent),
+    0 12px 28px -22px color-mix(in oklab, var(--dosu-strong) 65%, transparent);
   padding-left: 12px;
 }
 
@@ -4483,7 +4705,7 @@ mark {
   height: 24px;
   place-items: center;
   border-radius: 6px;
-  background: color-mix(in oklab, #b4bb91 18%, transparent);
+  background: color-mix(in oklab, var(--dosu) 18%, transparent);
 }
 
 .dosu-tool-mark img {
@@ -4492,7 +4714,7 @@ mark {
 }
 
 .dosu-tool-badge {
-  border: 1px solid color-mix(in oklab, #b4bb91 48%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--dosu) 48%, var(--line));
   border-radius: 999px;
   color: var(--muted);
   font-size: 10px;
@@ -4531,7 +4753,7 @@ mark {
   place-items: center;
   border-radius: 7px;
   background: color-mix(in oklab, var(--accent) 14%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .special-icon svg {
@@ -4548,7 +4770,7 @@ mark {
 .special-block.is-realtime-ended .special-icon,
 .special-block.is-realtime-handoff .special-icon {
   background: color-mix(in oklab, var(--info) 14%, transparent);
-  color: var(--info);
+  color: var(--info-text);
 }
 
 .special-block.is-collaboration,
@@ -4592,7 +4814,7 @@ mark {
   border: 1px solid var(--line);
   border-radius: 5px;
   color: var(--faint);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   overflow-wrap: anywhere;
   padding: 2px 6px;
@@ -4671,7 +4893,7 @@ mark {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 12px;
   font-weight: 650;
 }
@@ -4752,7 +4974,7 @@ mark {
 }
 
 .transcript-window-start-error {
-  color: var(--danger);
+  color: var(--danger-text);
   min-width: 0;
 }
 
@@ -4790,7 +5012,7 @@ pre {
   max-width: 100%;
   margin: 8px 0 0;
   color: var(--muted);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -4815,6 +5037,9 @@ pre {
   word-break: break-word;
 }
 
+/* ===========================================================================
+ * Responsive. Breakpoint order is asserted by test/ui-responsive-styles.test.ts
+ * =========================================================================== */
 @media (max-width: 1200px) {
   .transcript-layout {
     grid-template-columns: 1fr;
@@ -4844,7 +5069,7 @@ pre {
     inset: 0;
     z-index: 30;
     display: block;
-    background: rgb(0 0 0 / 58%);
+    background: rgba(var(--shade-rgb), 0.58);
     backdrop-filter: blur(4px);
   }
 
@@ -5141,6 +5366,9 @@ pre {
   overflow: hidden;
 }
 
+/* ===========================================================================
+ * Context window strip
+ * =========================================================================== */
 .ctx-strip {
   display: block;
   /* The base stylesheet sizes every svg at 1em for icons. The intrinsic
@@ -5361,7 +5589,7 @@ a:focus-visible .ctx-strip-compaction-marker rect {
   margin-top: 7px;
   border-radius: 5px;
   background: color-mix(in oklab, var(--warning) 13%, transparent);
-  color: var(--warning);
+  color: var(--warning-text);
   font-size: 11px;
   line-height: 1.35;
   padding: 5px 7px;
@@ -5399,7 +5627,7 @@ a:focus-visible .ctx-strip-compaction-marker rect {
 }
 
 .ctx-chip.is-hot {
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .ctx-chip.is-hot .ctx-chip-bar i {
@@ -5456,15 +5684,15 @@ a:focus-visible .ctx-strip-compaction-marker rect {
 }
 
 .session-context-peak {
-  color: var(--info);
+  color: var(--info-text);
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
 
 .session-context-peak.is-warm {
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .session-context-peak.is-hot {
-  color: var(--danger);
+  color: var(--danger-text);
 }
