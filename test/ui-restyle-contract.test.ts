@@ -61,6 +61,27 @@ describe("restyle contract", () => {
     expect(th).not.toContain("var(--font-mono)");
   });
 
+  test("persistent sticky headers stay opaque during scrolling", () => {
+    for (const selector of ["topbar", "thread-header"]) {
+      const block = new RegExp(`^\\s*\\.${selector}\\s*\\{([^}]*)\\}`, "m").exec(styles)?.[1] ?? "";
+      expect(block).toContain("position: sticky");
+      expect(block).toContain("background: var(--canvas)");
+      expect(block).not.toContain("backdrop-filter");
+    }
+
+    for (const selector of ["header", "footer"]) {
+      const blocks = [
+        ...styles.matchAll(
+          new RegExp(`^\\s*\\.share-review-sheet\\s*>\\s*${selector}\\s*\\{([^}]*)\\}`, "gm"),
+        ),
+      ];
+      const block = blocks.find((match) => match[1]?.includes("position: sticky"))?.[1] ?? "";
+      expect(block).toContain("position: sticky");
+      expect(block).toContain("background: var(--surface)");
+      expect(block).not.toContain("backdrop-filter");
+    }
+  });
+
   test("the display serif is only asked for a weight that ships", () => {
     const weightTokens = new Map(
       [...styles.matchAll(/--font-weight-(\w+):\s*(\d+);/g)].map((match) => [

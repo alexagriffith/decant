@@ -905,9 +905,8 @@ nav a[aria-current="page"] svg {
   gap: 12px;
   height: 56px;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in oklab, var(--canvas) 84%, transparent);
+  background: var(--canvas);
   padding: 0 24px;
-  backdrop-filter: blur(14px);
 }
 
 .topbar h1 {
@@ -1568,6 +1567,20 @@ nav a[aria-current="page"] svg {
   padding: 12px 16px;
 }
 
+.session-pagination {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+}
+
+.session-pagination > span {
+  min-width: 7.5rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
 .stat-grid {
   display: grid;
   gap: 1px;
@@ -1922,6 +1935,11 @@ table {
   min-width: 1280px;
 }
 
+.sessions-panel {
+  contain: layout paint;
+  overflow-anchor: none;
+}
+
 .sessions-table .col-session-tool {
   width: 9%;
 }
@@ -2074,6 +2092,10 @@ tr:last-child td {
 
 tbody tr {
   transition: background var(--duration-hover) ease;
+}
+
+.sessions-table tbody tr {
+  transition: none;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -2524,11 +2546,6 @@ select {
   padding: 0;
 }
 
-.infinite-sentinel {
-  width: 1px;
-  height: 1px;
-}
-
 input::placeholder {
   color: var(--faint);
 }
@@ -2710,6 +2727,12 @@ select {
 
 .sync-button.is-syncing svg {
   animation: sync-spin 0.9s linear infinite;
+}
+
+.sync-button.has-update:not(:disabled) {
+  border-color: color-mix(in oklab, var(--accent) 35%, var(--line));
+  background: var(--accent-soft);
+  color: var(--accent-text);
 }
 
 @keyframes sync-spin {
@@ -3256,8 +3279,7 @@ mark {
   top: 0;
   z-index: 2;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in oklab, var(--surface) 92%, transparent);
-  backdrop-filter: blur(12px);
+  background: var(--surface);
 }
 
 .share-review-sheet > header span {
@@ -3351,8 +3373,7 @@ mark {
   bottom: 0;
   align-items: flex-end;
   border-top: 1px solid var(--line);
-  background: color-mix(in oklab, var(--surface) 92%, transparent);
-  backdrop-filter: blur(12px);
+  background: var(--surface);
 }
 
 .share-actions {
@@ -4511,9 +4532,8 @@ mark {
   z-index: 10;
   margin: -24px -32px 0;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in oklab, var(--canvas) 86%, transparent);
+  background: var(--canvas);
   padding: 12px 32px;
-  backdrop-filter: blur(14px);
 }
 
 .thread-header-inner {
