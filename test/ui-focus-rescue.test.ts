@@ -70,15 +70,43 @@ describe("disabled focus rescue wiring", () => {
   });
 
   test("retries from later disabled mutations instead of racing a fixed timer", () => {
-    expect(hook).toContain("let pendingControl: WeakRef<HTMLElement> | null = null");
-    expect(hook).toContain("pendingControl = new WeakRef(control)");
-    expect(hook).toContain("const control = pendingControl?.deref()");
+    expect(hook).toContain("let pendingRescue: WeakRef<HTMLElement> | null = null");
+    expect(hook).toContain("pendingRescue = new WeakRef(control)");
+    expect(hook).toContain("const control = pendingRescue?.deref()");
     expect(hook).toContain("control.isConnected");
     expect(hook).toContain("retryPending();");
     expect(hook).not.toContain("settleWindowMs");
   });
 
-  test("abandons a pending rescue when the reader takes another action", () => {
+  test("hands focus back only while focus remains at the rescue landing", () => {
+    const recordRestore = hook.indexOf("pendingRestore = {");
+    const moveFocus = hook.indexOf("next.focus();", recordRestore);
+    expect(recordRestore).toBeGreaterThan(-1);
+    expect(recordRestore).toBeLessThan(moveFocus);
+    expect(hook).toContain("const restoreControl = pendingRestore?.control.deref()");
+    expect(hook).toContain("const restoreLanding = pendingRestore?.landed.deref()");
+    expect(hook).toContain("document.activeElement !== restoreLanding");
+    expect(hook).toContain('!restoreControl.matches(":disabled")');
+    expect(hook).toContain("restoreControl.focus()");
+  });
+
+  test("restores directly if the original re-enables before a landing is available", () => {
+    const reenabled = hook.indexOf('if (!control.matches(":disabled"))');
+    expect(reenabled).toBeGreaterThan(-1);
+    expect(hook.indexOf("control.focus();", reenabled)).toBeGreaterThan(reenabled);
+  });
+
+  test("does not pin controls that never re-enable", () => {
+    expect(hook).toContain("pendingRescue: WeakRef<HTMLElement>");
+    expect(hook).toContain("control: WeakRef<HTMLElement>");
+    expect(hook).toContain("landed: WeakRef<HTMLElement>");
+    expect(hook).toContain("pendingRestore?.control.deref()");
+    expect(hook).toContain("pendingRestore?.landed.deref()");
+  });
+
+  test("abandons pending rescue and restore state when the reader takes another action", () => {
+    expect(hook).toContain("pendingRescue = null");
+    expect(hook).toContain("pendingRestore = null");
     expect(hook).toContain('document.addEventListener("keydown", cancelPending, true)');
     expect(hook).toContain('document.addEventListener("pointerdown", cancelPending, true)');
     expect(hook).toContain('document.removeEventListener("keydown", cancelPending, true)');

@@ -3614,10 +3614,21 @@ function useDialogFocusTrap(
 function useDisabledFocusRescue() {
   useEffect(() => {
     let lastFocused: HTMLElement | null = null;
-    let pendingControl: WeakRef<HTMLElement> | null = null;
+    let pendingRescue: WeakRef<HTMLElement> | null = null;
+    // A busy control may come back, while a redundant control (for example,
+    // Next on the last page) may never re-enable. Keep both elements weak so a
+    // pending restore cannot retain a detached subtree for the life of the app.
+    let pendingRestore: {
+      control: WeakRef<HTMLElement>;
+      landed: WeakRef<HTMLElement>;
+    } | null = null;
     const remember = (event: FocusEvent) => {
-      pendingControl = null;
-      lastFocused = event.target instanceof HTMLElement ? event.target : null;
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      pendingRescue = null;
+      if (pendingRestore?.landed.deref() !== target) {
+        pendingRestore = null;
+      }
+      lastFocused = target;
     };
     const focusNeedsRescue = (control: HTMLElement) => {
       const landed = document.activeElement;
@@ -3648,18 +3659,48 @@ function useDisabledFocusRescue() {
       return null;
     };
     const retryPending = () => {
-      const control = pendingControl?.deref();
+      const control = pendingRescue?.deref();
       if (control == null || !control.isConnected || !focusNeedsRescue(control)) {
-        pendingControl = null;
+        pendingRescue = null;
+        return;
+      }
+      // If the original control re-enabled before the rest of its group offered
+      // a safe landing place, it is itself the least surprising destination.
+      if (!control.matches(":disabled")) {
+        pendingRescue = null;
+        control.focus();
         return;
       }
       const next = rescueTarget(control);
       if (next != null) {
-        pendingControl = null;
+        // Set this before focus(): focusin fires synchronously and must recognize
+        // the landing as ours rather than treating it as reader navigation.
+        pendingRestore = {
+          control: new WeakRef(control),
+          landed: new WeakRef(next),
+        };
         next.focus();
+        if (document.activeElement !== next) {
+          pendingRestore = null;
+        }
       }
     };
     const observer = new MutationObserver((records) => {
+      const restoreControl = pendingRestore?.control.deref();
+      const restoreLanding = pendingRestore?.landed.deref();
+      if (
+        restoreControl == null ||
+        restoreLanding == null ||
+        !restoreControl.isConnected ||
+        !restoreLanding.isConnected ||
+        document.activeElement !== restoreLanding
+      ) {
+        pendingRestore = null;
+      } else if (!restoreControl.matches(":disabled")) {
+        pendingRestore = null;
+        restoreControl.focus();
+      }
+
       for (const record of records) {
         const control = record.target;
         if (
@@ -3671,7 +3712,7 @@ function useDisabledFocusRescue() {
           continue;
         }
         lastFocused = null;
-        pendingControl = new WeakRef(control);
+        pendingRescue = new WeakRef(control);
         break;
       }
       // A pagination group can remain entirely disabled for longer than any
@@ -3691,7 +3732,8 @@ function useDisabledFocusRescue() {
       }
     };
     const cancelPending = () => {
-      pendingControl = null;
+      pendingRescue = null;
+      pendingRestore = null;
     };
     document.addEventListener("focusin", remember);
     document.addEventListener("focusout", forget);
