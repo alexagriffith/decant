@@ -173,14 +173,21 @@ describe("runCli", () => {
 
     const excluded = await runCli([...base, "tokens", "--exclude-mcp-server", "github"]);
     expect(excluded.code).toBe(0);
+    interface PhaseAmountsJson {
+      generation_tokens: number;
+      context_window_tokens: number;
+      estimated_cost_usd: number;
+      active_ms: number;
+    }
     const jsonExcluded = JSON.parse(excluded.stdout) as {
       totals: {
-        phases: { orientation: { estimated_cost_usd: number } };
+        estimated_cost_usd: number;
+        phases: { orientation: PhaseAmountsJson };
         retrieval: {
           excluded_servers: string[];
           by_server: Record<string, unknown>;
-          attributed: { orientation: { estimated_cost_usd: number } };
-          remainder: { orientation: { estimated_cost_usd: number } };
+          attributed: { orientation: PhaseAmountsJson };
+          remainder: { orientation: PhaseAmountsJson };
         };
       };
     };
@@ -194,6 +201,32 @@ describe("runCli", () => {
       0,
     );
 
+    // Exact reconciliation is asserted on the PAYLOAD, never on the rendered
+    // table. docs/analytics-methodology.md ("Which denominator each cost_share
+    // uses") states that cost, time and percent are each rounded per row, so a
+    // printed pair can differ from the printed parent by one unit in its last
+    // displayed place. Asserting a printed-cost or printed-time sum would
+    // contradict the documentation and is a landmine on any other archive --
+    // do not re-add one. The two token columns are checked below, where the
+    // guarantee is real.
+    const wholeJson = jsonExcluded.totals.phases.orientation;
+    const attributedJson = jsonExcluded.totals.retrieval.attributed.orientation;
+    const remainderJson = jsonExcluded.totals.retrieval.remainder.orientation;
+    for (const field of ["generation_tokens", "context_window_tokens", "active_ms"] as const) {
+      expect(attributedJson[field] + remainderJson[field]).toBe(wholeJson[field]);
+    }
+    expect(attributedJson.estimated_cost_usd + remainderJson.estimated_cost_usd).toBeCloseTo(
+      wholeJson.estimated_cost_usd,
+      12,
+    );
+    // The percent column the table prints is cost over the archive total, so
+    // its exact form reconciles here too.
+    const archiveShare = (cost: number): number => cost / jsonExcluded.totals.estimated_cost_usd;
+    expect(
+      archiveShare(attributedJson.estimated_cost_usd) +
+        archiveShare(remainderJson.estimated_cost_usd),
+    ).toBeCloseTo(archiveShare(wholeJson.estimated_cost_usd), 12);
+
     const humanExcluded = await runCli([
       "--db",
       dbPath,
@@ -206,7 +239,10 @@ describe("runCli", () => {
     // All-in is NOT reprinted as its own row: the `orientation` row already is
     // that number, and printing it twice reads as a narrower measurement.
     expect(humanExcluded.stdout).not.toContain("orientation_all_in");
-    const numericRow = (label: string): number[] => {
+    // Captures all five columns but returns only the two token ones. The cost,
+    // time and percent groups are matched so the row shape stays pinned, and
+    // deliberately not summed -- see the payload assertions above.
+    const tokenColumns = (label: string): number[] => {
       const match = new RegExp(
         `^${label}\\t(\\d+)\\t(\\d+)\\t([\\d.]+)\\t(.+?)\\t([\\d.]+)%$`,
         "m",
@@ -214,20 +250,17 @@ describe("runCli", () => {
       if (match == null) {
         throw new Error(`${label} row missing from:\n${humanExcluded.stdout}`);
       }
-      return [match[1], match[2], match[3], match[5]].map((part) => Number(part));
+      return [match[1], match[2]].map((part) => Number(part));
     };
-    const orientation = numericRow("orientation");
-    const attributed = numericRow("orientation_retrieval");
-    const remainder = numericRow("orientation_remainder");
-    expect(attributed[2]).toBeGreaterThan(0);
-    // Every printed column is a decomposition of the `orientation` row above:
-    // generation, context window, cost, and percent all add back to it. That is
-    // what makes the two rows self-evidently a split rather than a subset.
-    for (const column of [0, 1, 2, 3]) {
-      expect((attributed[column] ?? 0) + (remainder[column] ?? 0)).toBeCloseTo(
-        orientation[column] ?? 0,
-        column === 2 ? 4 : 1,
-      );
+    const orientation = tokenColumns("orientation");
+    const attributed = tokenColumns("orientation_retrieval");
+    const remainder = tokenColumns("orientation_remainder");
+    // The printed token columns reconcile digit for digit, and not by luck:
+    // phasesFor rounds these to integers before printing, the integers sum
+    // exactly, and formatNumber is String(Math.round(...)) over an already
+    // integral value. Exact equality, not a tolerance.
+    for (const column of [0, 1]) {
+      expect((attributed[column] ?? 0) + (remainder[column] ?? 0)).toBe(orientation[column] ?? 0);
     }
     // The new labels must not be read as phase rows by anything parsing this.
     expect([
