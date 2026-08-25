@@ -2373,9 +2373,21 @@ components:
         Every MCP tool is bucketed `context`, so a retrieval server that runs at
         session start lands in orientation. `phases` is unchanged by this block
         and still means all spend in that phase; `attributed` plus `remainder`
-        add back to it. Each block normalizes `cost_share` within itself, so
-        `remainder.orientation.cost_share` is the orientation share with the
-        named servers removed from both halves.
+        add back to it.
+
+
+        Each of the three blocks normalizes `cost_share` against its OWN total,
+        the way a bucket's `phases.*.cost_share` is normalized within that
+        bucket rather than against the archive. Read the denominator before
+        publishing a percentage: `attributed.orientation.cost_share` answers
+        "what fraction of the retrieval slice was orientation", NOT "what
+        fraction of the archive was retrieval" -- on an archive where all
+        retrieval is pre-edit it is 1.0. The archive-wide retrieval percentage
+        a study wants is
+        `attributed.orientation.estimated_cost_usd / totals.estimated_cost_usd`.
+        `remainder.orientation.cost_share` is directly comparable to
+        `totals.phases.orientation.cost_share`: it is the same orientation
+        share with the named servers removed from both halves.
       required:
         - excluded_servers
         - by_server

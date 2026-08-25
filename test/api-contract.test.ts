@@ -25,6 +25,19 @@ interface ContractCase {
   mediaType?: "application/json" | "text/event-stream" | "text/html";
   requestValid?: boolean;
   response?: () => Response | Promise<Response>;
+  /** Behavioural check on the decoded body, for cases where the response
+   * schema cannot see whether a request parameter reached the handler. */
+  assert?: (value: unknown) => void;
+}
+
+interface RetrievalBody {
+  totals: {
+    retrieval: {
+      excluded_servers: string[];
+      by_server: Record<string, unknown>;
+      attributed: { orientation: { estimated_cost_usd: number } };
+    };
+  };
 }
 
 interface OpenApiOperation {
@@ -56,7 +69,7 @@ describe("local API OpenAPI contract", () => {
     const priorConfigDir = process.env.DECANT_CONFIG_DIR;
     process.env.DECANT_CONFIG_DIR = join(root, "config");
     const config = fixtureConfig(root);
-    seed(config);
+    const mcpSessionId = seed(config);
     const server = serve({
       config,
       hostname: "127.0.0.1",
@@ -251,16 +264,36 @@ describe("local API OpenAPI contract", () => {
       ];
       // Extra requests against operations `cases` already covers, so the
       // operationKeys equality below stays one entry per operation.
+      //
+      // These carry behavioural assertions because Ajv cannot see whether
+      // exclude_mcp_server reached the handler at all: `excluded_servers: []`
+      // and `["github"]` are both schema-valid, and an all-zero `attributed`
+      // is schema-valid too. Replacing either route's wiring with a literal
+      // `[]` leaves the whole schema-only suite green.
+      //
+      // Two parameters, with the volume-bearing slug SECOND, so a regression
+      // from getAll() to get() -- which yields a bare string, iterated as
+      // characters -- fails both assertions rather than neither.
+      const assertExclusionApplied =
+        (expected: string[]) =>
+        (value: unknown): void => {
+          const retrieval = (value as RetrievalBody).totals.retrieval;
+          expect(retrieval.excluded_servers).toEqual(expected);
+          expect(retrieval.attributed.orientation.estimated_cost_usd).toBeGreaterThan(0);
+          expect(Object.keys(retrieval.by_server)).toContain("github");
+        };
       const variantCases: ContractCase[] = [
         {
           path: "/api/analytics/token-economics",
           method: "get",
-          url: "/api/analytics/token-economics?exclude_mcp_server=dosu&exclude_mcp_server=claude_ai_Dosu",
+          url: "/api/analytics/token-economics?exclude_mcp_server=claude_ai_Dosu&exclude_mcp_server=github",
+          assert: assertExclusionApplied(["claude_ai_Dosu", "github"]),
         },
         {
           path: "/api/sessions/{id}/token-economics",
           method: "get",
-          url: `/api/sessions/${sessionId}/token-economics?exclude_mcp_server=github`,
+          url: `/api/sessions/${mcpSessionId}/token-economics?exclude_mcp_server=claude_ai_Dosu&exclude_mcp_server=github`,
+          assert: assertExclusionApplied(["claude_ai_Dosu", "github"]),
         },
       ];
       const errorCases: ContractCase[] = [
@@ -443,6 +476,7 @@ describe("local API OpenAPI contract", () => {
             : expectedMediaType === "text/event-stream"
               ? await firstStreamChunk(response)
               : await response.text();
+        contractCase.assert?.(value);
         if (contractCase.expectedCode != null) {
           expect(value).toMatchObject({ code: contractCase.expectedCode });
         }
@@ -506,7 +540,9 @@ function fixtureConfig(root: string): Config {
   };
 }
 
-function seed(config: Config): void {
+/** Returns the row id of the MCP-bearing session, which is the only one whose
+ * economics carry a non-zero retrieval slice. */
+function seed(config: Config): number {
   const db = openDb(config.dbPath);
   const fixture = (tool: "claude" | "codex", name: string): string =>
     readFileSync(join(import.meta.dir, "..", "fixtures", tool, name), "utf8");
@@ -528,7 +564,7 @@ function seed(config: Config): void {
   );
   // Gives totals.retrieval.by_server real entries: an empty map satisfies its
   // additionalProperties schema without ever exercising it.
-  upsertSession(
+  const mcpSessionId = upsertSession(
     db,
     parseClaudeSession("contract-claude-mcp", fixture("claude", "mcp.jsonl")),
     "/synthetic/claude-mcp.jsonl",
@@ -538,6 +574,7 @@ function seed(config: Config): void {
   );
   regenerate(db);
   db.close();
+  return mcpSessionId;
 }
 
 async function fetchJson(url: string): Promise<unknown> {

@@ -135,9 +135,40 @@ remove. `totals.retrieval` decomposes that number rather than redefining it:
   names it, so `totals.phases` is exactly what it was before this block
   existed, and `attributed` is zero.
 
-Each of the three blocks normalizes `cost_share` within itself, so
-`remainder.orientation.cost_share` is the orientation share with the named
-servers taken out of both halves -- the corrected form of the headline number.
+#### Which denominator each `cost_share` uses
+
+Each of the three blocks normalizes `cost_share` against its **own** total, the
+way a bucket's `phases.*.cost_share` is normalized within that bucket rather
+than against the archive. That makes `remainder.orientation.cost_share`
+directly comparable to `totals.phases.orientation.cost_share` -- the same
+orientation share with the named servers removed from both halves, which is the
+corrected form of the headline number.
+
+It also means **`attributed.orientation.cost_share` is not the number a study
+wants**. It answers "what fraction of the retrieval slice was orientation", not
+"what fraction of the archive was retrieval", and on an archive where all
+retrieval happens pre-edit it is exactly 1.0. Compute the archive-wide
+retrieval percentage explicitly:
+
+```
+retrieval share = totals.retrieval.attributed.orientation.estimated_cost_usd
+                / totals.estimated_cost_usd
+```
+
+`decant tokens --exclude-mcp-server <slug>` already does this: the percentages
+in its `orientation_all_in` / `orientation_retrieval` / `orientation_remainder`
+rows are all taken against `totals.estimated_cost_usd`, so they add up in the
+column. The same command's `--json` output reports the within-block
+`cost_share` instead. The two are different quantities under one field name, so
+take the percentage from the row that names its denominator, or divide the
+`estimated_cost_usd` values yourself. Worked example from a fixture archive
+with `--exclude-mcp-server dosu --exclude-mcp-server github`:
+
+| Quantity | Within-block `cost_share` | Share of archive cost |
+| --- | --- | --- |
+| orientation all-in | 70.28% | 70.28% |
+| orientation retrieval | 100.00% | **2.12%** |
+| orientation remainder | 69.63% | 68.15% |
 
 A study should pre-register and publish **all three**: orientation all-in
 (`totals.phases.orientation`), the retrieval slice

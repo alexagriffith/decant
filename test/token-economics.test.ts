@@ -489,8 +489,16 @@ describe("token economics", () => {
     expect(retrieval.attributed.orientation).toEqual(
       retrieval.by_server.dosu?.orientation as PhaseAmounts,
     );
-    // The unqualified Codex namespace is a different tool, not another
-    // registration of dosu, so it is not swept in by the slug.
+    // The unqualified Codex namespace (`dosu__unqualified_tool`, no `mcp__`
+    // prefix) is a builtin, not another registration of dosu. Pinning exact
+    // volume is what makes that load-bearing: a naive `split("__")[0]` parser
+    // yields the key "dosu" too, so an absent-key assertion cannot fail under
+    // either implementation, and the window cannot discriminate because that
+    // call has no output bytes. Its 1000ms of latency is the only witness.
+    //   window: (16 + 57) result bytes / 4 chars-per-token = 18
+    //   active: the two mcp__dosu__read_knowledge calls only, not 6000
+    expect(retrieval.by_server.dosu?.orientation.context_window_tokens).toBe(18);
+    expect(retrieval.by_server.dosu?.orientation.active_ms).toBe(5000);
     expect(Object.keys(retrieval.by_server)).not.toContain("dosu__unqualified_tool");
     expect(retrieval.by_server.exa?.orientation.context_window_tokens).toBeGreaterThan(0);
     db.close();
@@ -710,6 +718,25 @@ describe("token economics", () => {
           content: [{ type: "output_text", text: "Context checked." }],
         },
       }),
+      // Without this the session has no output tokens, and the Codex
+      // generation path below never runs -- the test would pin window and
+      // latency only, and silently pass with generation attribution removed.
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-05-08T09:00:09.000Z",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 900,
+              cached_input_tokens: 300,
+              output_tokens: 400,
+              reasoning_output_tokens: 40,
+              total_tokens: 1340,
+            },
+          },
+        },
+      }),
     ].join("\n");
     upsertSession(
       db,
@@ -729,13 +756,26 @@ describe("token economics", () => {
     // parser that reads Claude names attributes it.
     expect(Object.keys(retrieval.by_server)).toEqual(["dosu"]);
     expect(retrieval.attributed.orientation.active_ms).toBeGreaterThan(0);
-    // The one MCP result is this run's whole context-window footprint, so it
-    // is also the whole orientation window: full attribution, nothing left.
-    expect(retrieval.attributed.orientation.context_window_tokens).toBe(
-      phases.orientation.context_window_tokens,
-    );
     expect(retrieval.attributed.orientation.context_window_tokens).toBeGreaterThan(0);
-    expect(retrieval.remainder.orientation.context_window_tokens).toBe(0);
+    // Codex takes a different generation path from Claude: allocateGeneration
+    // short-circuits on session.tool === "codex" and routes the aggregate lump
+    // through distribute(), so distributeVisible() -- the path the Claude tests
+    // cover -- never runs here. Without this assertion, dropping server
+    // attribution from distribute() leaves the whole suite green while Codex
+    // MCP generation silently reports zero.
+    expect(retrieval.attributed.orientation.generation_tokens).toBeGreaterThan(0);
+    // The assistant's own text is not retrieval, so both sides stay non-zero.
+    expect(retrieval.remainder.orientation.generation_tokens).toBeGreaterThan(0);
+    for (const phase of ["orientation", "implementation"] as const) {
+      expect(
+        retrieval.attributed[phase].generation_tokens +
+          retrieval.remainder[phase].generation_tokens,
+      ).toBe(phases[phase].generation_tokens);
+      expect(
+        retrieval.attributed[phase].context_window_tokens +
+          retrieval.remainder[phase].context_window_tokens,
+      ).toBe(phases[phase].context_window_tokens);
+    }
     db.close();
   });
 
