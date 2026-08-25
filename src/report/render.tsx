@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { mcpServerLabel, mcpServerLabels } from "../mcp-names.ts";
-import type { TokenEconomics, TokenEconomicsBucket } from "../token-economics.ts";
+import type { PhaseAmounts, TokenEconomics, TokenEconomicsBucket } from "../token-economics.ts";
 import { DECANT_VERSION } from "../version.ts";
 import {
   renderContextWindowChart,
@@ -317,6 +317,9 @@ function DimensionTable({
 }
 
 function EconomicsSection({ economics }: { economics: TokenEconomics }) {
+  // Older archives and the session fixtures can arrive without a phase split,
+  // so the second table is opt-in rather than assumed.
+  const phases = economics.totals.phases;
   return (
     <section className="section">
       <h2>Token economics</h2>
@@ -337,6 +340,27 @@ function EconomicsSection({ economics }: { economics: TokenEconomics }) {
           ))}
         </tbody>
       </table>
+      {phases == null ? null : (
+        <>
+          <h3>Orientation vs implementation</h3>
+          <table className="compact">
+            <thead>
+              <tr>
+                <th>Phase</th>
+                <th className="number">Share of cost</th>
+                <th className="number">Cost</th>
+                <th className="number">Active time</th>
+                <th className="number">Generation</th>
+                <th className="number">Context</th>
+              </tr>
+            </thead>
+            <tbody>
+              <PhaseRow amounts={phases.orientation} label="Orientation" />
+              <PhaseRow amounts={phases.implementation} label="Implementation" />
+            </tbody>
+          </table>
+        </>
+      )}
     </section>
   );
 }
@@ -350,6 +374,19 @@ function EconomicsRow({ bucket }: { bucket: TokenEconomicsBucket }) {
       <td className="number">{formatInteger(bucket.tool_calls)}</td>
       <td className="number">{formatDuration(Math.round(bucket.active_ms / 1000))}</td>
       <td className="number">{formatCurrency(bucket.estimated_cost_usd)}</td>
+    </tr>
+  );
+}
+
+function PhaseRow({ amounts, label }: { amounts: PhaseAmounts; label: string }) {
+  return (
+    <tr>
+      <td>{label}</td>
+      <td className="number">{formatShare(amounts.cost_share)}</td>
+      <td className="number">{formatCurrency(amounts.estimated_cost_usd)}</td>
+      <td className="number">{formatDuration(Math.round(amounts.active_ms / 1000))}</td>
+      <td className="number">{formatCompact(amounts.generation_tokens)}</td>
+      <td className="number">{formatCompact(amounts.context_window_tokens)}</td>
     </tr>
   );
 }
@@ -489,6 +526,12 @@ function formatPercent(value: number): string {
     style: "percent",
     maximumFractionDigits: 0,
   }).format(value);
+}
+
+/** A 0-1 share at the CLI's precision. `formatPercent` rounds to whole percent,
+ * which reads as a tie for any split near even. */
+function formatShare(share: number): string {
+  return `${(share * 100).toFixed(1)}%`;
 }
 
 function formatDuration(seconds: number | null): string {

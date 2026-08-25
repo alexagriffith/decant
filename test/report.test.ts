@@ -62,6 +62,36 @@ const economics = {
   },
 };
 
+/** The module-level `economics` fixture deliberately carries no `phases`, so the
+ * phase table has to be opted into by the tests that assert on it. */
+function analyticsWithPhases(): AnalyticsReportData {
+  return {
+    ...analytics,
+    economics: {
+      ...economics,
+      totals: {
+        ...economics.totals,
+        phases: {
+          orientation: {
+            generation_tokens: 60,
+            context_window_tokens: 180,
+            estimated_cost_usd: 0.0481,
+            active_ms: 9_000,
+            cost_share: 0.481,
+          },
+          implementation: {
+            generation_tokens: 40,
+            context_window_tokens: 120,
+            estimated_cost_usd: 0.0519,
+            active_ms: 6_000,
+            cost_share: 0.519,
+          },
+        },
+      },
+    },
+  };
+}
+
 const firstDay = {
   key: "2026-07-27",
   sessions: 1,
@@ -507,6 +537,18 @@ describe("static report rendering", () => {
     expect(html.indexOf("<h2>Token economics</h2>")).toBeLessThan(
       html.indexOf("<h2>Activity over time</h2>"),
     );
+  });
+
+  test("reports the orientation and implementation split", () => {
+    const html = renderAnalyticsReport(analyticsWithPhases());
+    expect(html).toContain("<h3>Orientation vs implementation</h3>");
+    expect(html).toContain("48.1%");
+    expect(html).toContain("51.9%");
+  });
+
+  test("omits the phase split when economics carry no phases", () => {
+    const html = renderAnalyticsReport(analytics);
+    expect(html).not.toContain("Orientation vs implementation");
   });
 });
 
