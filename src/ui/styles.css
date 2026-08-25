@@ -1647,6 +1647,15 @@ nav a[aria-current="page"] svg {
   color: var(--muted);
 }
 
+/* One semantic state is allowed through that muting: a non-zero error rate.
+ * Three classes here and two-plus-an-element below, so both outrank the muted
+ * default. The value already states the problem, so the colour is redundant
+ * emphasis rather than the only carrier of meaning. */
+.stat-card[data-alert] .stat-icon,
+.stat-card[data-alert] strong {
+  color: var(--danger-text);
+}
+
 /* ===========================================================================
  * Tables
  * =========================================================================== */

@@ -99,6 +99,7 @@ import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "./dosu-cta.ts";
 import { dosuLink } from "./dosu-links.ts";
 import { dosuToolDisplayName, isDosuToolName } from "./dosu-tool.ts";
 import { effortDisplayLabel, effortTooltip } from "./effort.ts";
+import { errorRateDisplay } from "./error-rate.ts";
 import { nearestUsableIndex } from "./focus-rescue.ts";
 import { isFramed } from "./frame-guard.ts";
 import {
@@ -5653,9 +5654,24 @@ type IconName =
   | "upload"
   | "x";
 
-function StatCard({ icon, label, value }: { icon: IconName; label: string; value: string }) {
+function StatCard({
+  alert = false,
+  icon,
+  label,
+  value,
+}: {
+  /** Renders the value and icon in the danger colour. Redundant emphasis on a
+   * number that already states the problem, so colour never carries meaning
+   * alone. Deliberately narrow: stat icons are muted by design (see the
+   * `.stat-card .stat-icon` note in styles.css), so this is a semantic state,
+   * not a reopening of decorative tones. */
+  alert?: boolean;
+  icon: IconName;
+  label: string;
+  value: string;
+}) {
   return (
-    <div className="stat-card">
+    <div className="stat-card" data-alert={alert ? "true" : undefined}>
       <div>
         <span>{label}</span>
         <strong>{value}</strong>
@@ -7321,6 +7337,7 @@ function ToolsView({
   };
   const clearedCallFilters = clearToolCallFilters(locationFilters);
   const clearedFiltersHref = toolFiltersHref(clearedCallFilters);
+  const errorRate = errorRateDisplay(aggregate.totalCalls, aggregate.errorRate);
 
   return (
     <div className="view-stack">
@@ -7343,11 +7360,7 @@ function ToolsView({
 
       <section aria-label="Tool call summary" className="stat-grid tool-stat-grid">
         <StatCard icon="tools" label="Total calls" value={formatInt(aggregate.totalCalls)} />
-        <StatCard
-          icon="info"
-          label="Error rate"
-          value={aggregate.totalCalls === 0 ? "—" : `${aggregate.errorRate.toFixed(1)}%`}
-        />
+        <StatCard alert={errorRate.alert} icon="info" label="Error rate" value={errorRate.label} />
         <StatCard
           icon="clock"
           label="Median / p95 elapsed"
