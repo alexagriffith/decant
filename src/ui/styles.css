@@ -1594,8 +1594,11 @@ nav a[aria-current="page"] svg {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+/* Six cards, so every column count below divides six exactly. auto-fit would
+ * pick whatever fits -- five columns between 980px and 1151px -- and strand the
+ * sixth card alone against an empty row. */
 .analytics-stat-grid {
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .stat-card {
@@ -5687,6 +5690,10 @@ pre {
  * Responsive. Breakpoint order is asserted by test/ui-responsive-styles.test.ts
  * =========================================================================== */
 @media (max-width: 1200px) {
+  .analytics-stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .mobile-only {
     display: inline-grid;
   }
@@ -5738,9 +5745,12 @@ pre {
 @media (max-width: 980px) {
   .sessions-stat-grid,
   .projects-stat-grid,
-  .analytics-stat-grid,
   .split {
     grid-template-columns: 1fr;
+  }
+
+  .analytics-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .signal-row-summary {

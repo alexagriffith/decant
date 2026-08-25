@@ -31,6 +31,26 @@ describe("restyle contract", () => {
     expect(styles).toMatch(new RegExp(`^\\.${className}[\\s,{:]`, "m"));
   });
 
+  test("the analytics stat grid never strands a card on a short row", () => {
+    // Six cards, so every column count it declares must divide six exactly.
+    // `auto-fit` used to pick whatever fitted -- five columns anywhere between
+    // 980px and 1151px -- which left the sixth card alone against an empty row.
+    const markup = main.slice(main.indexOf('"stat-grid analytics-stat-grid"'));
+    const grid = markup.slice(0, markup.indexOf("\n      </div>"));
+    const cards = grid.match(/<StatCard/g)?.length ?? 0;
+    expect(cards).toBe(6);
+
+    expect(styles).not.toMatch(/\.analytics-stat-grid \{[^}]*auto-fit/);
+
+    const declared = [...styles.matchAll(/\.analytics-stat-grid \{([^}]*)\}/g)];
+    expect(declared.length).toBeGreaterThan(1);
+    for (const declaration of declared) {
+      const repeat = /repeat\((\d+),/.exec(declaration[1] ?? "");
+      const columns = repeat == null ? 1 : Number(repeat[1]);
+      expect(cards % columns).toBe(0);
+    }
+  });
+
   test("stat cells are ruled by the grid gap, not by adjacency", () => {
     // `.stat-card + .stat-card { border-left }` follows DOM order, which stops
     // matching visual position the moment a grid wraps — Analytics renders six
