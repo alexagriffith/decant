@@ -129,6 +129,7 @@ import {
   sessionsPageHref,
   titleFor,
 } from "./navigation.ts";
+import { phaseSplitRows } from "./phase-split.ts";
 import { exactSearchRemaining, searchPageMayHaveMore } from "./search-pagination.ts";
 import { searchRequestScope, searchRouteHref } from "./search-request.ts";
 import { searchSnippetParts, visuallyOrderedSearchHits } from "./search-results.ts";
@@ -304,7 +305,17 @@ type DateBounds = {
 
 type ActivityBucket = "context" | "planning" | "code" | "communicating";
 
-type TokenEconomics = {
+// The server always sends `phases`, but `getJson` casts rather than validates,
+// so an older archive would leave the field absent with no runtime error.
+type PhaseAmounts = {
+  generation_tokens: number;
+  context_window_tokens: number;
+  estimated_cost_usd: number;
+  active_ms: number;
+  cost_share: number;
+};
+
+export type TokenEconomics = {
   buckets: {
     bucket: ActivityBucket;
     generation_tokens: number;
@@ -314,6 +325,7 @@ type TokenEconomics = {
     sessions: number;
     cost_share: number;
     active_ms: number;
+    phases?: Record<"orientation" | "implementation", PhaseAmounts>;
   }[];
   totals: {
     generation_tokens: number;
@@ -324,6 +336,7 @@ type TokenEconomics = {
     active_ms: number;
     waiting_on_user_ms: number;
     attributed_ms: number;
+    phases?: Record<"orientation" | "implementation", PhaseAmounts>;
   };
 };
 
@@ -4552,6 +4565,8 @@ function TokenEconomicsPanel({
   const totalCost = economics?.totals.estimated_cost_usd ?? 0;
   const totalActiveMs = economics?.totals.active_ms ?? 0;
   const showAgentRuns = !isCompact;
+  const phaseRows = phaseSplitRows(economics);
+  const orientationShare = phaseRows[0]?.costShare ?? 0;
   return (
     <section className={`panel token-economics-panel${isCompact ? " is-compact" : ""}`}>
       <div className="panel-heading">
@@ -4577,6 +4592,12 @@ function TokenEconomicsPanel({
               <strong>{duration(economics.totals.waiting_on_user_ms)}</strong>
               waiting
             </span>
+            {phaseRows.length === 0 ? null : (
+              <span>
+                <strong>{Math.round(orientationShare * 100)}%</strong>
+                orientation
+              </span>
+            )}
             {isCompact && subagentRuns > 0 ? (
               <span>
                 <strong>1 root + {formatInt(subagentRuns)}</strong>
@@ -4595,111 +4616,208 @@ function TokenEconomicsPanel({
           />
         </div>
       ) : (
-        <div className="activity-table-wrap">
-          <table className="activity-table" aria-label="Activity token economics">
-            <colgroup>
-              <col className="col-activity" />
-              <col className="col-share" />
-              <col className="col-activity-number" />
-              <col className="col-share" />
-              <col className="col-activity-number" />
-              <col className="col-activity-number" />
-              <col className="col-activity-number" />
-              {showAgentRuns ? <col className="col-activity-number" /> : null}
-            </colgroup>
-            <thead>
-              <tr className="activity-table-head">
-                <th scope="col">Activity</th>
-                <th scope="col">Cost share</th>
-                <th className="numeric activity-number" scope="col">
-                  Cost
-                </th>
-                <th scope="col">Time spent</th>
-                <th className="numeric activity-number" scope="col">
-                  Time
-                </th>
-                <th className="numeric activity-number" scope="col">
-                  Generated
-                </th>
-                <th className="numeric activity-number" scope="col">
-                  Window
-                </th>
-                {showAgentRuns ? (
+        <>
+          <div className="activity-table-wrap">
+            <table className="activity-table" aria-label="Activity token economics">
+              <colgroup>
+                <col className="col-activity" />
+                <col className="col-share" />
+                <col className="col-activity-number" />
+                <col className="col-share" />
+                <col className="col-activity-number" />
+                <col className="col-activity-number" />
+                <col className="col-activity-number" />
+                {showAgentRuns ? <col className="col-activity-number" /> : null}
+              </colgroup>
+              <thead>
+                <tr className="activity-table-head">
+                  <th scope="col">Activity</th>
+                  <th scope="col">Cost share</th>
                   <th className="numeric activity-number" scope="col">
-                    <span title="Root sessions and nested subagent runs contributing to this activity">
-                      Agent runs
-                    </span>
+                    Cost
                   </th>
-                ) : null}
-              </tr>
-            </thead>
-            <tbody>
-              {buckets.map((bucket) => {
-                const tone = activityTone(bucket.bucket);
-                const share = Math.max(0, Math.min(1, bucket.cost_share));
-                const timeShare = totalActiveMs > 0 ? bucket.active_ms / totalActiveMs : 0;
-                return (
-                  <Tooltip content={activityDescription(bucket.bucket)} key={bucket.bucket}>
-                    {(tooltipProps) => (
-                      <tr className="activity-table-row" {...tooltipProps}>
-                        <td className="activity-name">
-                          <span className="activity-name-inner">
-                            <span className={`activity-swatch tone-${tone}`} />
-                            <span className="activity-label-text">
-                              {activityLabel(bucket.bucket)}
-                              <span aria-hidden="true" className="info-tooltip">
-                                <Icon name="info" />
+                  <th scope="col">Time spent</th>
+                  <th className="numeric activity-number" scope="col">
+                    Time
+                  </th>
+                  <th className="numeric activity-number" scope="col">
+                    Generated
+                  </th>
+                  <th className="numeric activity-number" scope="col">
+                    Window
+                  </th>
+                  {showAgentRuns ? (
+                    <th className="numeric activity-number" scope="col">
+                      <span title="Root sessions and nested subagent runs contributing to this activity">
+                        Agent runs
+                      </span>
+                    </th>
+                  ) : null}
+                </tr>
+              </thead>
+              <tbody>
+                {buckets.map((bucket) => {
+                  const tone = activityTone(bucket.bucket);
+                  const share = Math.max(0, Math.min(1, bucket.cost_share));
+                  const timeShare = totalActiveMs > 0 ? bucket.active_ms / totalActiveMs : 0;
+                  return (
+                    <Tooltip content={activityDescription(bucket.bucket)} key={bucket.bucket}>
+                      {(tooltipProps) => (
+                        <tr className="activity-table-row" {...tooltipProps}>
+                          <td className="activity-name">
+                            <span className="activity-name-inner">
+                              <span className={`activity-swatch tone-${tone}`} />
+                              <span className="activity-label-text">
+                                {activityLabel(bucket.bucket)}
+                                <span aria-hidden="true" className="info-tooltip">
+                                  <Icon name="info" />
+                                </span>
                               </span>
                             </span>
-                          </span>
-                        </td>
-                        <td className="activity-share">
-                          <span className="activity-share-inner">
-                            <span className="activity-bar">
-                              <span
-                                className={`tone-${tone}`}
-                                style={{ width: `${share * 100}%` }}
-                              />
-                            </span>
-                            <small>{Math.round(share * 100)}%</small>
-                          </span>
-                        </td>
-                        <td className="numeric activity-number">
-                          {money(bucket.estimated_cost_usd)}
-                        </td>
-                        <td className="activity-share">
-                          <span className="activity-share-inner">
-                            <span className="activity-bar">
-                              <span
-                                className={`tone-${tone}`}
-                                style={{ width: `${timeShare * 100}%` }}
-                              />
-                            </span>
-                            <small>{Math.round(timeShare * 100)}%</small>
-                          </span>
-                        </td>
-                        <td className="numeric muted activity-number">
-                          {duration(bucket.active_ms)}
-                        </td>
-                        <td className="numeric muted activity-number">
-                          {compact(bucket.generation_tokens)}
-                        </td>
-                        <td className="numeric muted activity-number">
-                          {compact(bucket.context_window_tokens)}
-                        </td>
-                        {showAgentRuns ? (
-                          <td className="numeric muted activity-number">
-                            {formatInt(bucket.sessions)}
                           </td>
-                        ) : null}
-                      </tr>
-                    )}
-                  </Tooltip>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                          <td className="activity-share">
+                            <span className="activity-share-inner">
+                              <span className="activity-bar">
+                                <span
+                                  className={`tone-${tone}`}
+                                  style={{ width: `${share * 100}%` }}
+                                />
+                              </span>
+                              <small>{Math.round(share * 100)}%</small>
+                            </span>
+                          </td>
+                          <td className="numeric activity-number">
+                            {money(bucket.estimated_cost_usd)}
+                          </td>
+                          <td className="activity-share">
+                            <span className="activity-share-inner">
+                              <span className="activity-bar">
+                                <span
+                                  className={`tone-${tone}`}
+                                  style={{ width: `${timeShare * 100}%` }}
+                                />
+                              </span>
+                              <small>{Math.round(timeShare * 100)}%</small>
+                            </span>
+                          </td>
+                          <td className="numeric muted activity-number">
+                            {duration(bucket.active_ms)}
+                          </td>
+                          <td className="numeric muted activity-number">
+                            {compact(bucket.generation_tokens)}
+                          </td>
+                          <td className="numeric muted activity-number">
+                            {compact(bucket.context_window_tokens)}
+                          </td>
+                          {showAgentRuns ? (
+                            <td className="numeric muted activity-number">
+                              {formatInt(bucket.sessions)}
+                            </td>
+                          ) : null}
+                        </tr>
+                      )}
+                    </Tooltip>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {phaseRows.length === 0 ? null : (
+            <div className="activity-table-wrap">
+              <table className="activity-table" aria-label="Orientation and implementation split">
+                {/* Same column shape as the activity table minus agent runs, so the
+                  two line up under the shared min-width instead of stretching. */}
+                <colgroup>
+                  <col className="col-activity" />
+                  <col className="col-share" />
+                  <col className="col-activity-number" />
+                  <col className="col-share" />
+                  <col className="col-activity-number" />
+                  <col className="col-activity-number" />
+                  <col className="col-activity-number" />
+                </colgroup>
+                <thead>
+                  <tr className="activity-table-head">
+                    <th scope="col">Phase</th>
+                    <th scope="col">Cost share</th>
+                    <th className="numeric activity-number" scope="col">
+                      Cost
+                    </th>
+                    <th scope="col">Time spent</th>
+                    <th className="numeric activity-number" scope="col">
+                      Time
+                    </th>
+                    <th className="numeric activity-number" scope="col">
+                      Generated
+                    </th>
+                    <th className="numeric activity-number" scope="col">
+                      Window
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {phaseRows.map((row) => {
+                    const costShare = Math.max(0, Math.min(1, row.costShare));
+                    const timeShare = Math.max(0, Math.min(1, row.timeShare));
+                    return (
+                      <Tooltip content={phaseDescription(row.phase)} key={row.phase}>
+                        {(tooltipProps) => (
+                          <tr className="activity-table-row" {...tooltipProps}>
+                            <td className="activity-name">
+                              <span className="activity-name-inner">
+                                <span className={`activity-swatch tone-${row.tone}`} />
+                                <span className="activity-label-text">
+                                  {row.label}
+                                  <span aria-hidden="true" className="info-tooltip">
+                                    <Icon name="info" />
+                                  </span>
+                                </span>
+                              </span>
+                            </td>
+                            <td className="activity-share">
+                              <span className="activity-share-inner">
+                                <span className="activity-bar">
+                                  <span
+                                    className={`tone-${row.tone}`}
+                                    style={{ width: `${costShare * 100}%` }}
+                                  />
+                                </span>
+                                <small>{Math.round(costShare * 100)}%</small>
+                              </span>
+                            </td>
+                            <td className="numeric activity-number">
+                              {money(row.estimated_cost_usd)}
+                            </td>
+                            <td className="activity-share">
+                              <span className="activity-share-inner">
+                                <span className="activity-bar">
+                                  <span
+                                    className={`tone-${row.tone}`}
+                                    style={{ width: `${timeShare * 100}%` }}
+                                  />
+                                </span>
+                                <small>{Math.round(timeShare * 100)}%</small>
+                              </span>
+                            </td>
+                            <td className="numeric muted activity-number">
+                              {duration(row.active_ms)}
+                            </td>
+                            <td className="numeric muted activity-number">
+                              {compact(row.generation_tokens)}
+                            </td>
+                            <td className="numeric muted activity-number">
+                              {compact(row.context_window_tokens)}
+                            </td>
+                          </tr>
+                        )}
+                      </Tooltip>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </section>
   );
@@ -5589,6 +5707,12 @@ function activityLabel(bucket: ActivityBucket): string {
     case "code":
       return "Code";
   }
+}
+
+function phaseDescription(phase: "orientation" | "implementation"): string {
+  return phase === "orientation"
+    ? "Everything before the first detected file edit: reading, searching, and planning how to change the code."
+    : "The first detected file edit and everything after it.";
 }
 
 function activityDescription(bucket: ActivityBucket): string {

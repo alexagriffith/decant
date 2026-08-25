@@ -97,7 +97,7 @@ decant ls                      # list sessions
 decant show 1                  # render a transcript
 decant search "auth bug"       # full-text search
 decant stats --by model        # usage and cost rollups
-decant economics               # token, cost, and time breakdowns
+decant economics               # cost and time by activity, orientation vs implementation
 decant files --group ext       # file hotspots
 decant tool stats              # tool usage
 decant mcp stats               # MCP server usage

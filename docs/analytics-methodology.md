@@ -95,6 +95,17 @@ high-confidence patterns such as `git apply`, `sed -i`, and explicit file-write
 APIs. The classifier prefers missing a weak signal over moving the boundary
 forward on a false positive.
 
+Each phase carries a `cost_share`: its fraction of the enclosing object's
+`estimated_cost_usd`, on a 0-1 scale like `TokenEconomicsBucket.cost_share`.
+Inside a bucket it is that phase's share of that bucket; inside `totals` it is
+that phase's share of the archive or session total. An edit-free session
+reports an orientation share of 1.
+
+The split is reported by `decant economics`, which appends `orientation` and
+`implementation` rows after the bucket rows, by the generated report's
+"Orientation vs implementation" table, and by the Activity breakdown panel in
+the local UI.
+
 ## Active time and user wait
 
 Active time is an attribution from message timestamps, not stopwatch time. The
