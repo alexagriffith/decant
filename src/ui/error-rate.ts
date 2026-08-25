@@ -12,7 +12,18 @@ export interface ErrorRateDisplay {
   alert: boolean;
 }
 
+/** The single formatter. Both the displayed label and the quiet-state
+ * comparison run through it, so changing the precision here — or making it
+ * locale-aware, where a decimal comma would break a hardcoded "0.0%" — moves
+ * both sides together and cannot strand the comparison. */
+function formatRate(rate: number): string {
+  return `${rate.toFixed(1)}%`;
+}
+
 export function errorRateDisplay(totalCalls: number, errorRate: number): ErrorRateDisplay {
-  const label = totalCalls === 0 ? "—" : `${errorRate.toFixed(1)}%`;
-  return { label, alert: label !== "—" && label !== "0.0%" };
+  if (totalCalls === 0) {
+    return { label: "—", alert: false };
+  }
+  const label = formatRate(errorRate);
+  return { label, alert: label !== formatRate(0) };
 }

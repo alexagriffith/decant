@@ -1648,11 +1648,16 @@ nav a[aria-current="page"] svg {
 }
 
 /* One semantic state is allowed through that muting: a non-zero error rate.
- * Three classes here and two-plus-an-element below, so both outrank the muted
- * default. The value already states the problem, so the colour is redundant
- * emphasis rather than the only carrier of meaning. */
-.stat-card[data-alert] .stat-icon,
-.stat-card[data-alert] strong {
+ * The `.stat-grid` prefix is load-bearing, not decoration -- without it the
+ * `strong` rule ties with `.tool-stat-grid .stat-card strong` below, which sits
+ * later and would win. That rule sets no colour today, but it governs the one
+ * grid this alert actually appears in, so a colour added there later would
+ * silently mute the value and leave a red icon beside it.
+ * The value already states the problem, so the colour is redundant emphasis
+ * rather than the only carrier of meaning -- it survives forced-colors mode,
+ * where the hue is dropped and "3.2%" still reads differently from "0.0%". */
+.stat-grid .stat-card[data-alert] .stat-icon,
+.stat-grid .stat-card[data-alert] strong {
   color: var(--danger-text);
 }
 

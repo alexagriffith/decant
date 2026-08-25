@@ -25,19 +25,25 @@ describe("tool error rate display", () => {
     expect(errorRateDisplay(7, 100)).toEqual({ label: "100.0%", alert: true });
   });
 
-  test("the alert tracks the label, not the underlying rate", () => {
-    // Every alert=true case must show something other than a zero, and every
-    // quiet case must show a zero or a dash. This is the whole contract.
-    for (const [calls, rate] of [
-      [0, 0],
-      [10, 0],
-      [10, 0.04],
-      [10, 0.05],
-      [10, 50],
-      [10, 100],
-    ] as const) {
-      const { label, alert } = errorRateDisplay(calls, rate);
-      expect(alert).toBe(label !== "—" && label !== "0.0%");
+  test("is quiet exactly while the rate displays as a zero, and never flips back", () => {
+    // A real property rather than a restatement of the implementation: sweep the
+    // rate and assert the alert turns on once, at the point the rendered value
+    // stops being a zero, and stays on. Independent of how the rule is written.
+    let sawAlert = false;
+    let flips = 0;
+    for (let hundredths = 0; hundredths <= 500; hundredths += 1) {
+      const rate = hundredths / 100;
+      const { label, alert } = errorRateDisplay(1000, rate);
+      if (alert !== sawAlert) {
+        flips += 1;
+        sawAlert = alert;
+      }
+      // The number shown is the thing a reader judges, so the colour must agree
+      // with it: a displayed zero is never red, a displayed non-zero always is.
+      expect(alert).toBe(!/^0\.0%$/.test(label));
     }
+    expect(flips).toBe(1);
+    expect(sawAlert).toBe(true);
+    expect(errorRateDisplay(1000, 0.05).label).toBe("0.1%");
   });
 });
