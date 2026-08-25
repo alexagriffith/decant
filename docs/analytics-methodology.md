@@ -159,9 +159,13 @@ retrieval share = totals.retrieval.attributed.orientation.estimated_cost_usd
 `decant tokens --exclude-mcp-server <slug>` already does this: it appends
 `orientation_retrieval` and `orientation_remainder` rows whose percentages are
 taken against `totals.estimated_cost_usd`, the same denominator the
-`orientation` row above them uses. Every column in those two rows -- tokens,
-context window, cost, time, and percent -- adds back to the `orientation` row,
-so all three numbers a study publishes are readable from one invocation:
+`orientation` row above them uses. Every column in those two rows is a split of
+the `orientation` row, and the underlying values sum to it exactly. In the
+printed table only the two token columns reconcile digit for digit: cost, time,
+and percent are each rounded independently per row, so a printed pair can differ
+from the parent row by one unit in its last displayed place -- a second,
+$0.0001, or 0.1%. Read exact figures from `--json` rather than from the table.
+All three numbers a study publishes are still readable from one invocation:
 all-in is the `orientation` row itself, and the two rows below split it. The
 all-in figure is deliberately not reprinted under its own label.
 
