@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { bashBucket, blockBucket, isCodeEditTool, toolBucket } from "../src/buckets.ts";
+import {
+  bashBucket,
+  blockBucket,
+  countSearches,
+  isCodeEditTool,
+  toolBucket,
+} from "../src/buckets.ts";
 
 describe("activity bucket classifier", () => {
   test("classifies fixed tool families", () => {
@@ -75,5 +81,35 @@ describe("activity bucket classifier", () => {
     for (const cmd of benign) {
       expect(isCodeEditTool("Bash", { command: cmd })).toBe(false);
     }
+  });
+
+  describe("search counting", () => {
+    test("countSearches: structured search tools count once", () => {
+      expect(countSearches("Grep", null)).toBe(1);
+      expect(countSearches("Glob", null)).toBe(1);
+      expect(countSearches("Read", null)).toBe(0);
+    });
+
+    test("countSearches: shell command heads count as searches", () => {
+      expect(countSearches("Bash", '{"command":"rg auth src"}')).toBe(1);
+      expect(countSearches("Bash", '{"command":"/usr/bin/grep -rn foo"}')).toBe(1);
+      expect(countSearches("exec_command", '"{\\"cmd\\":\\"rg TODO\\"}"')).toBe(1);
+      expect(countSearches("Bash", '{"command":"cat README.md"}')).toBe(0);
+    });
+
+    test("countSearches: compound statements count each search", () => {
+      expect(countSearches("Bash", '{"command":"grep -n a src; echo ---; grep -n b src"}')).toBe(2);
+      expect(countSearches("Bash", '{"command":"cd src && rg handler"}')).toBe(1);
+    });
+
+    test("countSearches: pipeline filters do not count", () => {
+      expect(countSearches("Bash", '{"command":"ps aux | grep node"}')).toBe(0);
+      expect(countSearches("Bash", '{"command":"rg foo src | head -20"}')).toBe(1);
+    });
+
+    test("countSearches: MCP tools named like shells do not count", () => {
+      expect(countSearches("mcp__posthog__exec", '{"command":"rg foo"}')).toBe(0);
+      expect(countSearches("mcp__codex_apps__x.shell", '{"command":"rg foo"}')).toBe(0);
+    });
   });
 });
