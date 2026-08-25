@@ -84,7 +84,10 @@ provider charges.
 
 ### Search counting
 
-A search is a `Grep` or `Glob` tool call, or a shell statement whose leading
+This defines the search count behind the "discovery is expensive"
+recommendation signal (`signal:search-heavy`); it is not an activity-bucket
+rule, and it does not change how shell commands are bucketed above. A search
+is a `Grep` or `Glob` tool call, or a shell statement whose leading
 command is a search binary such as `rg`, `grep`, or `find`. Compound commands
 are split on `;`, `&&`, `||`, and newlines, so `cd src && rg handler` counts.
 Pipelines are not split: `ps aux | grep node` filters output rather than
