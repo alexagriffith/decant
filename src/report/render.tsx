@@ -382,7 +382,7 @@ function PhaseRow({ amounts, label }: { amounts: PhaseAmounts; label: string }) 
   return (
     <tr>
       <td>{label}</td>
-      <td className="number">{formatShare(amounts.cost_share)}</td>
+      <td className="number">{formatPercent(amounts.cost_share, 1)}</td>
       <td className="number">{formatCurrency(amounts.estimated_cost_usd)}</td>
       <td className="number">{formatDuration(Math.round(amounts.active_ms / 1000))}</td>
       <td className="number">{formatCompact(amounts.generation_tokens)}</td>
@@ -521,17 +521,14 @@ function formatCurrency(value: number): string {
   }).format(value);
 }
 
-function formatPercent(value: number): string {
+/** Whole percent by default. The phase table passes 1, because rounding a near-even
+ * split to whole percent reads as a tie; `decant economics` prints it the same way. */
+function formatPercent(value: number, digits = 0): string {
   return new Intl.NumberFormat("en-US", {
     style: "percent",
-    maximumFractionDigits: 0,
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
   }).format(value);
-}
-
-/** A 0-1 share at the CLI's precision. `formatPercent` rounds to whole percent,
- * which reads as a tie for any split near even. */
-function formatShare(share: number): string {
-  return `${(share * 100).toFixed(1)}%`;
 }
 
 function formatDuration(seconds: number | null): string {

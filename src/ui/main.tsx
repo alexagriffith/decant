@@ -315,7 +315,7 @@ type PhaseAmounts = {
   cost_share: number;
 };
 
-export type TokenEconomics = {
+type TokenEconomics = {
   buckets: {
     bucket: ActivityBucket;
     generation_tokens: number;
@@ -4725,8 +4725,10 @@ function TokenEconomicsPanel({
           {phaseRows.length === 0 ? null : (
             <div className="activity-table-wrap">
               <table className="activity-table" aria-label="Orientation and implementation split">
-                {/* Same column shape as the activity table minus agent runs, so the
-                  two line up under the shared min-width instead of stretching. */}
+                {/* `table-layout: fixed` scales the declared widths up to fill the
+                  table, so a colgroup summing to 91% would offset every column from
+                  its namesake above. The trailing spacer mirrors the activity
+                  table's own conditional Agent runs column to reach 100%. */}
                 <colgroup>
                   <col className="col-activity" />
                   <col className="col-share" />
@@ -4735,6 +4737,7 @@ function TokenEconomicsPanel({
                   <col className="col-activity-number" />
                   <col className="col-activity-number" />
                   <col className="col-activity-number" />
+                  {showAgentRuns ? <col className="col-activity-number" /> : null}
                 </colgroup>
                 <thead>
                   <tr className="activity-table-head">

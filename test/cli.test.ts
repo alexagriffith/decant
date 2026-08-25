@@ -139,6 +139,9 @@ describe("runCli", () => {
       totals: { phases: { orientation: { cost_share: number } } };
     };
     expect(jsonTokens.totals.phases.orientation.cost_share).toBeTypeOf("number");
+    // The wire value is a 0-1 fraction, permanently. NaN fails both bounds.
+    expect(jsonTokens.totals.phases.orientation.cost_share).toBeGreaterThan(0);
+    expect(jsonTokens.totals.phases.orientation.cost_share).toBeLessThanOrEqual(1);
     // Asserted first: toMatchObject substitutes asymmetric matchers into the
     // received value, so `totals` is no longer readable after the next call.
     expect(jsonTokens).toMatchObject({
@@ -156,6 +159,14 @@ describe("runCli", () => {
     expect(humanTokens.stdout).toContain("waiting_on_user\t-\t-\t-");
     expect(humanTokens.stdout).toContain("orientation\t");
     expect(humanTokens.stdout).toMatch(/^implementation\t.*%$/m);
+    const phasePercents = [
+      ...humanTokens.stdout.matchAll(/^(?:orientation|implementation)\t.*\t([\d.]+)%$/gm),
+    ].map((match) => Number(match[1]));
+    expect(phasePercents).toHaveLength(2);
+    // Pins the 0-100 display scale against the 0-1 wire value. Dropping the x100
+    // in formatPercent still prints a plausible "0.7%", so only the magnitude of
+    // the sum catches it.
+    expect((phasePercents[0] ?? 0) + (phasePercents[1] ?? 0)).toBeCloseTo(100, 1);
 
     const search = await runCli([...base, "search", "auth", "--limit", "5"]);
     expect(search.code).toBe(0);

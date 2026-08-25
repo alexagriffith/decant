@@ -15,12 +15,11 @@ const totals = {
 };
 
 function economicsWithoutPhases(): Economics {
-  return { buckets: [], totals };
+  return { totals };
 }
 
 function economicsWithPhases(): Economics {
   return {
-    buckets: [],
     totals: {
       ...totals,
       phases: {
@@ -45,7 +44,6 @@ function economicsWithPhases(): Economics {
 
 function editFreeEconomics(): Economics {
   return {
-    buckets: [],
     totals: {
       ...totals,
       phases: {

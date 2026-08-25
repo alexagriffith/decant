@@ -99,7 +99,10 @@ Each phase carries a `cost_share`: its fraction of the enclosing object's
 `estimated_cost_usd`, on a 0-1 scale like `TokenEconomicsBucket.cost_share`.
 Inside a bucket it is that phase's share of that bucket; inside `totals` it is
 that phase's share of the archive or session total. An edit-free session
-reports an orientation share of 1.
+reports an orientation share of 1. Where there is no cost to divide -- an empty
+archive, or a bucket that recorded no spend -- both shares are 0 rather than
+summing to 1, so read the pair as a split of a total, not as a partition that
+always adds up.
 
 The split is reported by `decant economics`, which appends `orientation` and
 `implementation` rows after the bucket rows, by the generated report's
