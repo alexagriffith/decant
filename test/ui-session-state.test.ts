@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   archiveActionFor,
   DELETE_SESSION_EXPLANATION,
+  DELETE_SESSION_EYEBROW,
   sessionStateRequest,
 } from "../src/ui/session-state.ts";
 
@@ -34,5 +35,13 @@ describe("session state UI", () => {
     // "permanently" without saying that is wrong where it matters most.
     expect(DELETE_SESSION_EXPLANATION).not.toContain("permanently");
     expect(DELETE_SESSION_EXPLANATION).toContain("decant db vacuum");
+  });
+
+  test("delete confirmation header says what the body says", () => {
+    // The eyebrow sat directly above body copy that had "permanently" removed
+    // from it. Deletion IS irreversible -- there is no un-delete -- but it does
+    // not erase the bytes, so the header claims irreversibility, not erasure.
+    expect(DELETE_SESSION_EYEBROW).not.toContain("Permanent");
+    expect(DELETE_SESSION_EYEBROW).toBe("Cannot be undone");
   });
 });

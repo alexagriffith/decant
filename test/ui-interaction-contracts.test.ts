@@ -208,6 +208,7 @@ describe("UI interaction contracts", () => {
     expect(dialog).toContain("aria-describedby={descriptionId}");
     expect(dialog).toContain("event.target === event.currentTarget && !pending");
     expect(dialog).toContain("DELETE_SESSION_EXPLANATION");
+    expect(dialog).toContain("DELETE_SESSION_EYEBROW");
     expect(dialog).toContain("Delete from Decant");
     expect(main).toContain("dialog.focus()");
   });
