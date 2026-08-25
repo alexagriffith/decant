@@ -2318,7 +2318,12 @@ components:
       additionalProperties: false
     PhaseAmounts:
       type: object
-      required: [generation_tokens, context_window_tokens, estimated_cost_usd, active_ms]
+      required:
+        - generation_tokens
+        - context_window_tokens
+        - estimated_cost_usd
+        - active_ms
+        - cost_share
       properties:
         generation_tokens:
           type: number
@@ -2330,6 +2335,9 @@ components:
           type: number
           minimum: 0
         active_ms:
+          type: number
+          minimum: 0
+        cost_share:
           type: number
           minimum: 0
       additionalProperties: false

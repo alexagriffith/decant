@@ -138,6 +138,105 @@ describe("token economics", () => {
     db.close();
   });
 
+  test("reports a cost share for each phase that sums to one", () => {
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl")),
+      "/x/claude.jsonl",
+      1,
+      2,
+      "claude",
+    );
+
+    const economics = tokenEconomics(db);
+    const phases = economics.totals.phases;
+    expect(phases).toBeDefined();
+    const orientation = phases?.orientation.cost_share ?? 0;
+    const implementation = phases?.implementation.cost_share ?? 0;
+    expect(orientation + implementation).toBeCloseTo(1, 12);
+    // Totals carry the archive-wide share, not the sum of the per-bucket ones.
+    expect(orientation).toBeLessThanOrEqual(1);
+    for (const row of economics.buckets) {
+      const bucketShares =
+        (row.phases?.orientation.cost_share ?? 0) + (row.phases?.implementation.cost_share ?? 0);
+      // A bucket with no spend has no share to divide, so it stays at zero.
+      expect(bucketShares).toBeCloseTo(row.estimated_cost_usd > 0 ? 1 : 0, 12);
+    }
+    db.close();
+  });
+
+  test("gives an edit-free session a full orientation share", () => {
+    const db = freshDb();
+    // Hand-written: a session that only reads, so the first-edit boundary is
+    // never crossed and every dollar stays in orientation.
+    const content = [
+      JSON.stringify({
+        type: "user",
+        uuid: "u1",
+        parentUuid: null,
+        timestamp: "2026-05-06T09:00:00.000Z",
+        message: { role: "user", content: "Explain the auth module" },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        uuid: "a1",
+        parentUuid: "u1",
+        timestamp: "2026-05-06T09:00:30.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          stop_reason: "tool_use",
+          usage: { input_tokens: 800, output_tokens: 120 },
+          content: [
+            { type: "text", text: "Reading the module." },
+            {
+              type: "tool_use",
+              id: "toolu_read",
+              name: "Read",
+              input: { file_path: "/Users/dev/proj/src/auth.rs" },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        uuid: "u2",
+        parentUuid: "a1",
+        timestamp: "2026-05-06T09:00:50.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_read", content: "fn auth() {}" }],
+        },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        uuid: "a2",
+        parentUuid: "u2",
+        timestamp: "2026-05-06T09:01:20.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          usage: { input_tokens: 950, output_tokens: 300 },
+          content: [{ type: "text", text: "It authenticates the caller and returns a bool." }],
+        },
+      }),
+    ].join("\n");
+    upsertSession(
+      db,
+      parseClaudeSession("sess-no-edit", `${content}\n`),
+      "/x/no-edit.jsonl",
+      1,
+      2,
+      "claude",
+    );
+
+    const phases = tokenEconomics(db).totals.phases;
+    expect(phases?.orientation.cost_share).toBeCloseTo(1, 12);
+    expect(phases?.implementation.cost_share).toBeCloseTo(0, 12);
+    db.close();
+  });
+
   test("attributes wall-clock time to activity buckets and phases", () => {
     const db = freshDb();
     const sessionId = upsertSession(

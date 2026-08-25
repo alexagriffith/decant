@@ -35,6 +35,8 @@ export interface PhaseAmounts {
   estimated_cost_usd: number;
   // Wall-clock time attributed to this phase, from capped inter-message gaps.
   active_ms: number;
+  // This phase's share of the enclosing object's estimated_cost_usd, 0-1.
+  cost_share: number;
 }
 
 export interface TokenEconomicsBucket {
@@ -1042,12 +1044,14 @@ function phasesFor(entry: MutableBucket | undefined): Record<Phase, PhaseAmounts
       context_window_tokens: Math.round(winO),
       estimated_cost_usd: costO,
       active_ms: Math.round(activeO),
+      cost_share: share(costO, cost),
     },
     implementation: {
       generation_tokens: Math.round(gen - genO),
       context_window_tokens: Math.round(win - winO),
       estimated_cost_usd: cost - costO,
       active_ms: Math.round(active - activeO),
+      cost_share: share(cost - costO, cost),
     },
   };
 }
@@ -1086,10 +1090,13 @@ function finish(
     waiting_on_user_ms: waitingMs,
     attributed_ms: activeMs + waitingMs,
   };
-  totals.phases = {
-    orientation: sumPhase(rows, "orientation"),
-    implementation: sumPhase(rows, "implementation"),
-  };
+  const orientationTotal = sumPhase(rows, "orientation");
+  const implementationTotal = sumPhase(rows, "implementation");
+  // sumPhase cannot see the grand total, so the shares it accumulated are
+  // per-bucket fractions. Rescale them against the archive/session total.
+  orientationTotal.cost_share = share(orientationTotal.estimated_cost_usd, totalCost);
+  implementationTotal.cost_share = share(implementationTotal.estimated_cost_usd, totalCost);
+  totals.phases = { orientation: orientationTotal, implementation: implementationTotal };
   return { buckets: rows, totals };
 }
 
@@ -1099,6 +1106,7 @@ function sumPhase(rows: TokenEconomicsBucket[], phase: Phase): PhaseAmounts {
     context_window_tokens: 0,
     estimated_cost_usd: 0,
     active_ms: 0,
+    cost_share: 0,
   };
   for (const row of rows) {
     const p = row.phases?.[phase];
