@@ -239,10 +239,7 @@ describe("runCli", () => {
     // All-in is NOT reprinted as its own row: the `orientation` row already is
     // that number, and printing it twice reads as a narrower measurement.
     expect(humanExcluded.stdout).not.toContain("orientation_all_in");
-    // Captures all five columns but returns only the two token ones. The cost,
-    // time and percent groups are matched so the row shape stays pinned, and
-    // deliberately not summed -- see the payload assertions above.
-    const tokenColumns = (label: string): number[] => {
+    const printedRow = (label: string): { tokens: number[]; cost: string; pct: string } => {
       const match = new RegExp(
         `^${label}\\t(\\d+)\\t(\\d+)\\t([\\d.]+)\\t(.+?)\\t([\\d.]+)%$`,
         "m",
@@ -250,18 +247,34 @@ describe("runCli", () => {
       if (match == null) {
         throw new Error(`${label} row missing from:\n${humanExcluded.stdout}`);
       }
-      return [match[1], match[2]].map((part) => Number(part));
+      return {
+        tokens: [match[1], match[2]].map((part) => Number(part)),
+        cost: match[3] as string,
+        pct: `${match[5]}%`,
+      };
     };
-    const orientation = tokenColumns("orientation");
-    const attributed = tokenColumns("orientation_retrieval");
-    const remainder = tokenColumns("orientation_remainder");
+    const orientation = printedRow("orientation");
+    const attributed = printedRow("orientation_retrieval");
+    const remainder = printedRow("orientation_remainder");
     // The printed token columns reconcile digit for digit, and not by luck:
     // phasesFor rounds these to integers before printing, the integers sum
     // exactly, and formatNumber is String(Math.round(...)) over an already
     // integral value. Exact equality, not a tolerance.
     for (const column of [0, 1]) {
-      expect((attributed[column] ?? 0) + (remainder[column] ?? 0)).toBe(orientation[column] ?? 0);
+      expect((attributed.tokens[column] ?? 0) + (remainder.tokens[column] ?? 0)).toBe(
+        orientation.tokens[column] ?? 0,
+      );
     }
+    // Cost and percent are pinned per row, each against ITS OWN payload field's
+    // formatted form. This is a rendering-fidelity check, not a reconciliation
+    // claim: it sums nothing across rows, so it asserts none of the digit-level
+    // agreement the methodology withdraws, while still catching a renderer slip
+    // that prints another row's figure in this row's cell.
+    const printedPercent = (cost: number): string => `${(100 * archiveShare(cost)).toFixed(1)}%`;
+    expect(attributed.cost).toBe(attributedJson.estimated_cost_usd.toFixed(4));
+    expect(remainder.cost).toBe(remainderJson.estimated_cost_usd.toFixed(4));
+    expect(attributed.pct).toBe(printedPercent(attributedJson.estimated_cost_usd));
+    expect(remainder.pct).toBe(printedPercent(remainderJson.estimated_cost_usd));
     // The new labels must not be read as phase rows by anything parsing this.
     expect([
       ...humanExcluded.stdout.matchAll(/^(?:orientation|implementation)\t.*\t([\d.]+)%$/gm),
