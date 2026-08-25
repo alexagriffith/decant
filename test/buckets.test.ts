@@ -14,6 +14,16 @@ describe("activity bucket classifier", () => {
     expect(toolBucket("UnknownFutureTool")).toBe("context");
   });
 
+  test("keeps every MCP tool in context so retrieval accounting stays additive", () => {
+    // Retrieval cost is reported by server in totals.retrieval, which subtracts
+    // from the phase totals. That only works while MCP volume is inside a
+    // bucket rather than beside one, so these stay context on purpose.
+    expect(toolBucket("mcp__dosu__read_knowledge")).toBe("context");
+    expect(toolBucket("mcp__claude_ai_Dosu__read_knowledge")).toBe("context");
+    expect(blockBucket("tool_use", "mcp__dosu__read_knowledge")).toBe("context");
+    expect(blockBucket("tool_result", "mcp__dosu__read_knowledge")).toBe("context");
+  });
+
   test("classifies Bash by command head and git subcommand", () => {
     expect(bashBucket("rg auth src")).toBe("context");
     expect(bashBucket("/bin/cat README.md")).toBe("context");

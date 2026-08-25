@@ -98,6 +98,11 @@ The same date query works on the analytical endpoints:
 ```sh
 curl --fail --silent --show-error \
   "$BASE/api/analytics/token-economics?from=$FROM&to=$TO"
+# Repeat exclude_mcp_server to report those servers' volume as retrieval. The
+# response always carries totals.retrieval.by_server, so any other allowlist can
+# be re-derived from a saved payload.
+curl --fail --silent --show-error \
+  "$BASE/api/analytics/token-economics?exclude_mcp_server=dosu&exclude_mcp_server=claude_ai_Dosu"
 curl --fail --silent --show-error \
   "$BASE/api/analytics/activity?from=$FROM&to=$TO"
 curl --fail --silent --show-error \

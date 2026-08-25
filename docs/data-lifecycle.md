@@ -84,6 +84,12 @@ archives migrate to the current baseline on open; older archives are
 rebuild-only. The next sync backfills persisted economics, parser enrichments,
 and context rollups when required.
 
+When the economics vector format changes, that backfill rewrites every
+session's vector once; later syncs are idempotent. A read-only archive cannot
+run it, and the served `/api/analytics/token-economics` reads only persisted
+vectors, so it reports zeros until the archive is writable and one sync has
+run. CLI reads recompute live and are correct immediately.
+
 Costs are materialized at ingest. A rebuild uses the pricing table in the new
 Decant version and can therefore change historical estimates even when the
 source logs did not change.

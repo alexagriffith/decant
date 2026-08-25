@@ -522,6 +522,8 @@ paths:
       tags: [Sessions]
       operationId: getSessionTokenEconomics
       summary: Read token, cost, and activity economics for one session
+      parameters:
+        - $ref: "#/components/parameters/ExcludeMcpServer"
       responses:
         "200":
           description: Session economics
@@ -746,6 +748,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/FromDate"
         - $ref: "#/components/parameters/ToDate"
+        - $ref: "#/components/parameters/ExcludeMcpServer"
       responses:
         "200":
           description: Archive economics
@@ -1106,6 +1109,20 @@ components:
       schema:
         type: string
         format: date
+    ExcludeMcpServer:
+      name: exclude_mcp_server
+      in: query
+      description: >-
+        Raw MCP server slug whose tool volume is reported as retrieval instead
+        of phase spend. Repeatable; unknown slugs contribute nothing. Omitting
+        it leaves every other reported number unchanged.
+      required: false
+      style: form
+      explode: true
+      schema:
+        type: array
+        items:
+          type: string
     Tool:
       name: tool
       in: query
@@ -2349,6 +2366,43 @@ components:
         implementation:
           $ref: "#/components/schemas/PhaseAmounts"
       additionalProperties: false
+    RetrievalEconomics:
+      type: object
+      description: >-
+        MCP retrieval volume decomposed out of the phase totals it sits inside.
+        Every MCP tool is bucketed `context`, so a retrieval server that runs at
+        session start lands in orientation. `phases` is unchanged by this block
+        and still means all spend in that phase; `attributed` plus `remainder`
+        add back to it. Each block normalizes `cost_share` within itself, so
+        `remainder.orientation.cost_share` is the orientation share with the
+        named servers removed from both halves.
+      required:
+        - excluded_servers
+        - by_server
+        - attributed
+        - remainder
+      properties:
+        excluded_servers:
+          type: array
+          description: >-
+            Raw MCP server slugs the request named, echoed back so a published
+            figure carries its own exclusion set. Empty by default.
+          items:
+            type: string
+        by_server:
+          type: object
+          description: >-
+            Phase split per MCP server, keyed by the raw slug. Always present
+            and independent of `excluded_servers`, so any allowlist can be
+            re-derived from a stored response. A slug is not a display name:
+            `dosu` and `claude_ai_Dosu` are distinct keys.
+          additionalProperties:
+            $ref: "#/components/schemas/PhaseMap"
+        attributed:
+          $ref: "#/components/schemas/PhaseMap"
+        remainder:
+          $ref: "#/components/schemas/PhaseMap"
+      additionalProperties: false
     TokenEconomicsBucket:
       type: object
       required:
@@ -2433,6 +2487,8 @@ components:
               minimum: 0
             phases:
               $ref: "#/components/schemas/PhaseMap"
+            retrieval:
+              $ref: "#/components/schemas/RetrievalEconomics"
           additionalProperties: true
       additionalProperties: true
     NowAnalytics:

@@ -58,6 +58,12 @@ export function toolBucket(
   if (CODE_TOOLS.has(normalized)) {
     return "code";
   }
+  // The mcp__ test is redundant with the fallthrough below and is kept only to
+  // state the intent: every MCP tool is context. That is also why this is not
+  // where MCP retrieval cost is separated out -- the bucket erases which server
+  // produced the volume. Retrieval is attributed by server in
+  // token-economics.ts (totals.retrieval), which decomposes the phase totals
+  // without moving anything out of this bucket.
   if (CONTEXT_TOOLS.has(normalized) || name.startsWith("mcp__")) {
     return "context";
   }

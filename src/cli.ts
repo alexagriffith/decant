@@ -43,7 +43,7 @@ import {
   toolUsage,
   totals,
 } from "./stats.ts";
-import { tokenEconomics } from "./token-economics.ts";
+import { type TokenEconomics, tokenEconomics } from "./token-economics.ts";
 import {
   DEFAULT_DEBOUNCE_MS,
   DEFAULT_SYNC_INTERVAL_MS,
@@ -909,11 +909,18 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       "break tokens, cost, agent time, and user wait into context, planning, code, and " +
         "communicating, then into orientation and implementation",
     )
-    .action(() =>
+    .option(
+      "--exclude-mcp-server <slug>",
+      "report this MCP server's tool volume as retrieval instead of phase spend (repeatable)",
+      collectOption,
+      [] as string[],
+    )
+    .action((commandOptions: { excludeMcpServer?: string[] }) =>
       run(() => {
         const archive = readArchive();
+        const excludeMcpServers = commandOptions.excludeMcpServer ?? [];
         try {
-          const row = tokenEconomics(archive.db);
+          const row = tokenEconomics(archive.db, null, { excludeMcpServers });
           output(row, () =>
             row.buckets
               .map(
@@ -948,7 +955,10 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
                         );
                       })
                       .join(""),
-              ),
+              )
+              // Only when a set was named: with none, retrieval is zero and
+              // these rows would repeat the orientation row for no reason.
+              .concat(retrievalRows(row, excludeMcpServers)),
           );
         } finally {
           closeDb(archive.db);
@@ -1247,6 +1257,32 @@ function parseNumber(value: string): number {
 
 function optionalInteger(value: string | undefined): number | undefined {
   return value == null ? undefined : parseInteger(value);
+}
+
+/** The three numbers a study has to publish together: orientation all-in, the
+ * named servers' slice of it, and what is left. Reporting any one alone either
+ * flatters or penalizes the retrieval tool. All three are shares of the same
+ * archive total, so the last two add back to the first. */
+function retrievalRows(economics: TokenEconomics, excluded: string[]): string {
+  const retrieval = economics.totals.retrieval;
+  if (excluded.length === 0 || retrieval == null) {
+    return "";
+  }
+  const total = economics.totals.estimated_cost_usd;
+  const allIn = economics.totals.phases?.orientation.estimated_cost_usd ?? 0;
+  return (
+    [
+      ["orientation_all_in", allIn] as const,
+      ["orientation_retrieval", retrieval.attributed.orientation.estimated_cost_usd] as const,
+      ["orientation_remainder", retrieval.remainder.orientation.estimated_cost_usd] as const,
+    ] as const
+  )
+    .map(
+      ([label, cost]) =>
+        `${label}\t-\t-\t${cost.toFixed(4)}\t-\t` +
+        `${formatPercent(total > 0 ? cost / total : 0)}\n`,
+    )
+    .join("");
 }
 
 function collectOption(value: string, previous: string[]): string[] {

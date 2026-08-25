@@ -91,6 +91,14 @@ does not restore the session. Neither operation modifies the source JSONL file.
 Report operations return self-contained, zero-JavaScript HTML. Session reports
 omit transcript content by design.
 
+`exclude_mcp_server` on the two token-economics operations is the only
+repeatable query parameter in the API: pass it once per MCP server slug. It
+adds `totals.retrieval` and changes nothing else, and omitting it leaves every
+other reported number unchanged. The response's `totals.retrieval.by_server` is
+always present and independent of the set that was passed, so a saved payload
+supports any other allowlist without a second request. See
+[Retrieval attribution](../analytics-methodology.md#retrieval-attribution).
+
 ### Session listing and command-palette index
 
 `GET /api/sessions` returns a bare newest-first array, not an envelope with a

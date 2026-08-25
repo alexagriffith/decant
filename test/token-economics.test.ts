@@ -9,6 +9,7 @@ import { upsertSession } from "../src/ingest.ts";
 import { setSessionUserState } from "../src/session-user-state.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
+import type { PhaseAmounts, TokenEconomics } from "../src/token-economics.ts";
 import {
   aggregateEconomicsVectors,
   computeSessionEconomicsVectors,
@@ -300,6 +301,444 @@ describe("token economics", () => {
     db.close();
   });
 
+  test("an empty exclusion set leaves every reported number unchanged", () => {
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseClaudeSession("sess-mcp-claude", fixture("claude", "mcp.jsonl")),
+      "/x/mcp.jsonl",
+      1,
+      2,
+      "claude",
+    );
+    upsertSession(
+      db,
+      parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl")),
+      "/x/claude.jsonl",
+      1,
+      2,
+      "claude",
+    );
+
+    const before = tokenEconomics(db);
+    const after = tokenEconomics(db, null, { excludeMcpServers: [] });
+    // The default exclusion set is empty, so the headline numbers a report
+    // already prints must not move when a caller opts into the parameter.
+    expect(after.totals.phases).toEqual(before.totals.phases);
+    expect(after.buckets).toEqual(before.buckets);
+    // by_server ships regardless, so any reader can re-derive the split for an
+    // allowlist Decant did not pick.
+    expect(after.totals.retrieval?.excluded_servers).toEqual([]);
+    expect(before.totals.retrieval?.excluded_servers).toEqual([]);
+    expect(Object.keys(after.totals.retrieval?.by_server ?? {})).toContain("github");
+    db.close();
+  });
+
+  test("reports orientation retrieval separately without moving it out of context", () => {
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseClaudeSession("sess-mcp-claude", fixture("claude", "mcp.jsonl")),
+      "/x/mcp.jsonl",
+      1,
+      2,
+      "claude",
+    );
+
+    const plain = tokenEconomics(db);
+    const split = tokenEconomics(db, null, { excludeMcpServers: ["github"] });
+    // The MCP call still lives in context, and orientation still means all
+    // pre-edit spend. Only the extra block below reports the slice.
+    expect(split.buckets).toEqual(plain.buckets);
+    expect(split.totals.phases).toEqual(plain.totals.phases);
+    const retrieval = split.totals.retrieval as NonNullable<typeof split.totals.retrieval>;
+    expect(retrieval.attributed.orientation.estimated_cost_usd).toBeGreaterThan(0);
+    expect(retrieval.attributed.orientation.context_window_tokens).toBeGreaterThan(0);
+    expect(retrieval.remainder.orientation.estimated_cost_usd).toBeGreaterThan(0);
+    // The retrieval slice is a subset of context, never an extra bucket.
+    const context = split.buckets.find((row) => row.bucket === "context");
+    expect(retrieval.attributed.orientation.context_window_tokens).toBeLessThanOrEqual(
+      context?.phases?.orientation.context_window_tokens ?? 0,
+    );
+    db.close();
+  });
+
+  test("primary, retrieval, and net orientation reconcile", () => {
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseClaudeSession("sess-mcp-claude", fixture("claude", "mcp.jsonl")),
+      "/x/mcp.jsonl",
+      1,
+      2,
+      "claude",
+    );
+    upsertSession(
+      db,
+      parseCodexSession("sess-mcp-codex", fixture("codex", "mcp.jsonl"), new Map()),
+      "/x/codex-mcp.jsonl",
+      1,
+      2,
+      "codex",
+    );
+    upsertSession(
+      db,
+      parseClaudeSession("sess-enr-claude", fixture("claude", "enriched.jsonl")),
+      "/x/claude.jsonl",
+      1,
+      2,
+      "claude",
+    );
+
+    const economics = tokenEconomics(db, null, {
+      excludeMcpServers: ["github", "dosu", "context7"],
+    });
+    const { phases, retrieval } = economics.totals as {
+      phases: NonNullable<TokenEconomics["totals"]["phases"]>;
+      retrieval: NonNullable<TokenEconomics["totals"]["retrieval"]>;
+    };
+    for (const phase of ["orientation", "implementation"] as const) {
+      const whole = phases[phase];
+      const part = retrieval.attributed[phase];
+      const rest = retrieval.remainder[phase];
+      expect(part.generation_tokens + rest.generation_tokens).toBe(whole.generation_tokens);
+      expect(part.context_window_tokens + rest.context_window_tokens).toBe(
+        whole.context_window_tokens,
+      );
+      expect(part.active_ms + rest.active_ms).toBe(whole.active_ms);
+      expect(part.estimated_cost_usd + rest.estimated_cost_usd).toBeCloseTo(
+        whole.estimated_cost_usd,
+        12,
+      );
+    }
+    // remainder's cost_share is the corrected headline: the orientation share
+    // once the named servers' spend is taken out of both halves.
+    expect(retrieval.remainder.orientation.cost_share).toBeLessThan(phases.orientation.cost_share);
+    expect(
+      retrieval.remainder.orientation.cost_share + retrieval.remainder.implementation.cost_share,
+    ).toBeCloseTo(1, 12);
+    db.close();
+  });
+
+  test("decomposes retrieval by server so any exclusion set can be re-derived", () => {
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseClaudeSession("sess-mcp-claude", fixture("claude", "mcp.jsonl")),
+      "/x/mcp.jsonl",
+      1,
+      2,
+      "claude",
+    );
+    upsertSession(
+      db,
+      parseCodexSession("sess-mcp-codex", fixture("codex", "mcp.jsonl"), new Map()),
+      "/x/codex-mcp.jsonl",
+      1,
+      2,
+      "codex",
+    );
+
+    // by_server ships whether or not anything was named, and does not move when
+    // the exclusion set changes -- that is what makes an outside allowlist
+    // derivable from a published payload.
+    const none = tokenEconomics(db).totals.retrieval as NonNullable<
+      TokenEconomics["totals"]["retrieval"]
+    >;
+    const some = tokenEconomics(db, null, { excludeMcpServers: ["exa"] }).totals
+      .retrieval as NonNullable<TokenEconomics["totals"]["retrieval"]>;
+    expect(some.by_server).toEqual(none.by_server);
+    expect(Object.keys(none.by_server).sort()).toEqual([
+      "codex_apps",
+      "context7",
+      "dosu",
+      "exa",
+      "github",
+      "node_repl",
+    ]);
+    expect(none.attributed.orientation.estimated_cost_usd).toBe(0);
+
+    const chosen = ["dosu", "github", "context7"];
+    const reported = tokenEconomics(db, null, { excludeMcpServers: chosen }).totals
+      .retrieval as NonNullable<TokenEconomics["totals"]["retrieval"]>;
+    const rederived = chosen.reduce(
+      (sum, server) => sum + (none.by_server[server]?.orientation.estimated_cost_usd ?? 0),
+      0,
+    );
+    expect(reported.attributed.orientation.estimated_cost_usd).toBeCloseTo(rederived, 12);
+    db.close();
+  });
+
+  test("excludes only the named servers", () => {
+    const db = freshDb();
+    upsertSession(
+      db,
+      parseCodexSession("sess-mcp-codex", fixture("codex", "mcp.jsonl"), new Map()),
+      "/x/codex-mcp.jsonl",
+      1,
+      2,
+      "codex",
+    );
+
+    const retrieval = tokenEconomics(db, null, {
+      excludeMcpServers: ["dosu", "dosu", "", "not-installed"],
+    }).totals.retrieval as NonNullable<TokenEconomics["totals"]["retrieval"]>;
+    // Duplicates and blanks collapse, an unknown slug contributes nothing, and
+    // the set is echoed back so a published figure carries it.
+    expect(retrieval.excluded_servers).toEqual(["dosu", "not-installed"]);
+    expect(retrieval.attributed.orientation).toEqual(
+      retrieval.by_server.dosu?.orientation as PhaseAmounts,
+    );
+    // The unqualified Codex namespace is a different tool, not another
+    // registration of dosu, so it is not swept in by the slug.
+    expect(Object.keys(retrieval.by_server)).not.toContain("dosu__unqualified_tool");
+    expect(retrieval.by_server.exa?.orientation.context_window_tokens).toBeGreaterThan(0);
+    db.close();
+  });
+
+  test("attributes retrieval that happens after the first edit to implementation", () => {
+    const db = freshDb();
+    const content = [
+      JSON.stringify({
+        type: "assistant",
+        uuid: "a1",
+        parentUuid: null,
+        sessionId: "sess-mcp-phases",
+        timestamp: "2026-05-07T09:00:00.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          usage: { input_tokens: 400, output_tokens: 100 },
+          content: [
+            { type: "tool_use", id: "toolu_mcp_a", name: "mcp__dosu__read_knowledge", input: {} },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        uuid: "u1",
+        parentUuid: "a1",
+        sessionId: "sess-mcp-phases",
+        timestamp: "2026-05-07T09:00:10.000Z",
+        message: {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_mcp_a", content: "prior decisions here" },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        uuid: "a2",
+        parentUuid: "u1",
+        sessionId: "sess-mcp-phases",
+        timestamp: "2026-05-07T09:00:20.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          usage: { input_tokens: 500, output_tokens: 120 },
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_edit",
+              name: "Edit",
+              input: { file_path: "/proj/src/auth.rs", old_string: "a", new_string: "b" },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        uuid: "u2",
+        parentUuid: "a2",
+        sessionId: "sess-mcp-phases",
+        timestamp: "2026-05-07T09:00:30.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_edit", content: "ok" }],
+        },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        uuid: "a3",
+        parentUuid: "u2",
+        sessionId: "sess-mcp-phases",
+        timestamp: "2026-05-07T09:00:40.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          usage: { input_tokens: 600, output_tokens: 140 },
+          content: [
+            { type: "tool_use", id: "toolu_mcp_b", name: "mcp__dosu__read_knowledge", input: {} },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "user",
+        uuid: "u3",
+        parentUuid: "a3",
+        sessionId: "sess-mcp-phases",
+        timestamp: "2026-05-07T09:00:50.000Z",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_mcp_b",
+              content: "a much longer follow-up answer than the first one",
+            },
+          ],
+        },
+      }),
+    ].join("\n");
+    upsertSession(
+      db,
+      parseClaudeSession("sess-mcp-phases", `${content}\n`),
+      "/x/mcp-phases.jsonl",
+      1,
+      2,
+      "claude",
+    );
+
+    const retrieval = tokenEconomics(db, null, { excludeMcpServers: ["dosu"] }).totals
+      .retrieval as NonNullable<TokenEconomics["totals"]["retrieval"]>;
+    // The phase split is real: the same server lands on both sides of the
+    // first edit, so retrieval is not silently all-orientation.
+    expect(retrieval.attributed.orientation.context_window_tokens).toBeGreaterThan(0);
+    expect(retrieval.attributed.implementation.context_window_tokens).toBeGreaterThan(0);
+    expect(retrieval.attributed.orientation.generation_tokens).toBeGreaterThan(0);
+    expect(retrieval.attributed.implementation.generation_tokens).toBeGreaterThan(0);
+    db.close();
+  });
+
+  test("per-session retrieval reconciles against the billed-input window", () => {
+    const db = freshDb();
+    const sessionId = upsertSession(
+      db,
+      parseClaudeSession("sess-mcp-claude", fixture("claude", "mcp.jsonl")),
+      "/x/mcp.jsonl",
+      1,
+      2,
+      "claude",
+    );
+
+    const scoped = tokenEconomicsForSession(db, sessionId, {
+      excludeMcpServers: ["github"],
+    }) as TokenEconomics;
+    const { phases, retrieval } = scoped.totals as {
+      phases: NonNullable<TokenEconomics["totals"]["phases"]>;
+      retrieval: NonNullable<TokenEconomics["totals"]["retrieval"]>;
+    };
+    for (const phase of ["orientation", "implementation"] as const) {
+      expect(
+        retrieval.attributed[phase].context_window_tokens +
+          retrieval.remainder[phase].context_window_tokens,
+      ).toBe(phases[phase].context_window_tokens);
+      expect(
+        retrieval.attributed[phase].estimated_cost_usd +
+          retrieval.remainder[phase].estimated_cost_usd,
+      ).toBeCloseTo(phases[phase].estimated_cost_usd, 12);
+    }
+    // A session panel inflates every window by its share of the run's billed
+    // input. If the retrieval slice skipped that allocation it would be priced
+    // against a smaller window than the phases it decomposes, and this ratio
+    // would collapse toward the un-inflated archive-wide one.
+    const archive = tokenEconomics(db, null, { excludeMcpServers: ["github"] }).totals
+      .retrieval as NonNullable<TokenEconomics["totals"]["retrieval"]>;
+    const scopedWindow = retrieval.attributed.orientation.context_window_tokens;
+    const archiveWindow = archive.attributed.orientation.context_window_tokens;
+    expect(scopedWindow).toBeGreaterThan(archiveWindow);
+    expect(scopedWindow / phases.orientation.context_window_tokens).toBeCloseTo(
+      archiveWindow /
+        (tokenEconomics(db).totals.phases as NonNullable<TokenEconomics["totals"]["phases"]>)
+          .orientation.context_window_tokens,
+      2,
+    );
+    db.close();
+  });
+
+  test("attributes Codex MCP calls to their server", () => {
+    const db = freshDb();
+    // Codex reports MCP work as event-only mcp_tool_call_end records with no
+    // matching response_item, so this path is the only one a Codex archive has.
+    const content = [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-05-08T09:00:00.000Z",
+        payload: {
+          id: "sess-codex-event-mcp",
+          cwd: "/Users/dev/proj",
+          originator: "codex_cli_rs",
+          cli_version: "0.116.0",
+          source: "cli",
+          model_provider: "openai",
+        },
+      }),
+      JSON.stringify({
+        type: "turn_context",
+        timestamp: "2026-05-08T09:00:01.000Z",
+        payload: { cwd: "/Users/dev/proj", model: "gpt-5.4", effort: "medium" },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-05-08T09:00:02.000Z",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Check durable project context" }],
+        },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-05-08T09:00:06.000Z",
+        payload: {
+          type: "mcp_tool_call_end",
+          call_id: "77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+          invocation: { server: "dosu", tool: "read_knowledge", arguments: { query: "synthetic" } },
+          duration: { secs: 2, nanos: 0 },
+          result: {
+            Ok: { content: [{ type: "text", text: "synthetic knowledge for the event path" }] },
+          },
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-05-08T09:00:08.000Z",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Context checked." }],
+        },
+      }),
+    ].join("\n");
+    upsertSession(
+      db,
+      parseCodexSession("sess-codex-event-mcp", `${content}\n`, new Map()),
+      "/x/codex-event-mcp.jsonl",
+      1,
+      2,
+      "codex",
+    );
+
+    const economics = tokenEconomics(db, null, { excludeMcpServers: ["dosu"] });
+    const { phases, retrieval } = economics.totals as {
+      phases: NonNullable<TokenEconomics["totals"]["phases"]>;
+      retrieval: NonNullable<TokenEconomics["totals"]["retrieval"]>;
+    };
+    // Codex normalizes the invocation to mcp__<server>__<tool>, so the same
+    // parser that reads Claude names attributes it.
+    expect(Object.keys(retrieval.by_server)).toEqual(["dosu"]);
+    expect(retrieval.attributed.orientation.active_ms).toBeGreaterThan(0);
+    // The one MCP result is this run's whole context-window footprint, so it
+    // is also the whole orientation window: full attribution, nothing left.
+    expect(retrieval.attributed.orientation.context_window_tokens).toBe(
+      phases.orientation.context_window_tokens,
+    );
+    expect(retrieval.attributed.orientation.context_window_tokens).toBeGreaterThan(0);
+    expect(retrieval.remainder.orientation.context_window_tokens).toBe(0);
+    db.close();
+  });
+
   test("persists versioned vectors and serves economics without scanning transcript rows", () => {
     const db = freshDb();
     const sessionId = upsertSession(
@@ -310,8 +749,19 @@ describe("token economics", () => {
       2,
       "claude",
     );
+    upsertSession(
+      db,
+      parseClaudeSession("sess-mcp-claude", fixture("claude", "mcp.jsonl")),
+      "/x/mcp.jsonl",
+      1,
+      2,
+      "claude",
+    );
     const expected = tokenEconomicsForSession(db, sessionId);
     const expectedAggregate = tokenEconomics(db);
+    const expectedRetrieval = tokenEconomics(db, null, { excludeMcpServers: ["github"] }).totals
+      .retrieval;
+    expect(expectedRetrieval?.attributed.orientation.estimated_cost_usd).toBeGreaterThan(0);
     const stored = db
       .query(
         "SELECT format_version, json_valid(vector_json) AS valid FROM session_economics WHERE session_id = ?1",
@@ -327,6 +777,11 @@ describe("token economics", () => {
     `);
     expect(tokenEconomicsForSession(db, sessionId)).toEqual(expected);
     expect(tokenEconomics(db)).toEqual(expectedAggregate);
+    // The per-server slice is genuinely persisted, not re-derived from the
+    // tool_call rows this test just deleted.
+    expect(tokenEconomics(db, null, { excludeMcpServers: ["github"] }).totals.retrieval).toEqual(
+      expectedRetrieval as NonNullable<typeof expectedRetrieval>,
+    );
     db.close();
   });
 
@@ -390,6 +845,12 @@ describe("token economics", () => {
 
     db.query(
       "UPDATE session_economics SET vector_json = json_remove(vector_json, '$.billed_input_tokens') WHERE session_id = ?1",
+    ).run(sessionId);
+    expect(materializeMissingSessionEconomics(db)).toBe(1);
+    expect(tokenEconomicsForSession(db, sessionId)).not.toBeNull();
+
+    db.query(
+      "UPDATE session_economics SET vector_json = json_remove(vector_json, '$.retrieval') WHERE session_id = ?1",
     ).run(sessionId);
     expect(materializeMissingSessionEconomics(db)).toBe(1);
     expect(tokenEconomicsForSession(db, sessionId)).not.toBeNull();

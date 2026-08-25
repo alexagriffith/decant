@@ -10,13 +10,17 @@ import { defaultPricing, estimateCostParts } from "./cost.ts";
 import { type DateFilter, sessionDatePredicate, whereClause } from "./date-filter.ts";
 import { withImmediateTransaction } from "./db.ts";
 import { sessionUserStatePredicateForDatabase } from "./session-user-state.ts";
+import { classifyTool } from "./tools.ts";
 
 const CHARS_PER_TOKEN = 4;
 const encoder = new TextEncoder();
 // Bump when vector semantics change so the next sync rebuilds derived rows.
-// Version 2 includes corrected wall-clock attribution plus the billed-input
-// and waiting-on-user fields required by the current activity model.
-export const SESSION_ECONOMICS_FORMAT_VERSION = 2;
+// Version 3 adds the per-MCP-server retrieval slice; version 2 added corrected
+// wall-clock attribution plus the billed-input and waiting-on-user fields.
+// No schema migration: the new data is more JSON inside vector_json. Reads
+// recompute live until the next sync backfills, so nobody is served a vector
+// whose retrieval slice is missing.
+export const SESSION_ECONOMICS_FORMAT_VERSION = 3;
 
 // Cap every inter-message gap so long model, tool, or human pauses do not
 // dominate the timing breakdown. Mirrors the ACTIVE_GAP_CAP_SECONDS used for
@@ -37,6 +41,32 @@ export interface PhaseAmounts {
   active_ms: number;
   // This phase's share of the enclosing object's estimated_cost_usd, 0-1.
   cost_share: number;
+}
+
+/** MCP retrieval volume, split out of the phase totals it currently hides
+ * inside. Every MCP tool is bucketed `context` (see toolBucket), so a retrieval
+ * server that runs at session start lands in orientation -- the metric charges
+ * the intervention with the cost it is meant to remove. This decomposes that
+ * number without changing it. */
+export interface RetrievalEconomics {
+  /** Server slugs the caller named. Empty by default, and echoed back so a
+   * published figure carries its own exclusion set. */
+  excluded_servers: string[];
+  /** Always present and independent of `excluded_servers`, keyed by the raw
+   * MCP slug: any reader can re-derive the pair below for any allowlist,
+   * including one Decant did not choose. Two registrations of one product
+   * (`dosu` and `claude_ai_Dosu`) are distinct keys. */
+  by_server: Record<string, Record<Phase, PhaseAmounts>>;
+  /** The declared price of the named servers, by phase. */
+  attributed: Record<Phase, PhaseAmounts>;
+  /** `totals.phases` minus `attributed`, by phase, clamped at zero. */
+  remainder: Record<Phase, PhaseAmounts>;
+}
+
+export interface TokenEconomicsOptions {
+  /** Raw MCP server slugs to report as retrieval instead of phase spend.
+   * Defaults to empty, which leaves every reported number unchanged. */
+  excludeMcpServers?: readonly string[];
 }
 
 export interface TokenEconomicsBucket {
@@ -73,6 +103,9 @@ export interface TokenEconomics {
     // All timing captured from block-bearing messages: agent time plus waiting.
     attributed_ms: number;
     phases?: Record<Phase, PhaseAmounts>;
+    // A decomposition of `phases`, never a replacement: `phases` still means
+    // all spend in that phase, retrieval included.
+    retrieval?: RetrievalEconomics;
   };
 }
 
@@ -106,17 +139,20 @@ interface BlockRow {
 interface ResultRow {
   session_id: number;
   tool_name: string | null;
+  // Written at ingest from classifyTool, so it agrees with the in-process
+  // parse the block paths use. Null for every non-MCP tool.
+  mcp_server: string | null;
   input: string | null;
   bytes: number;
   call_seq: number | null;
 }
 
-interface MutableBucket {
+/** The sums a phase split is computed from. Shared by activity buckets and by
+ * the MCP retrieval slice so both render through the same phasesFor(). */
+interface PhaseTotals {
   generation: number;
   contextWindow: number;
   cost: number;
-  toolCalls: number;
-  sessions: Set<number>;
   // Orientation-phase portions (pre-first-edit). Implementation = total - these.
   // genOrientation feeds windowOrientation the same way generation feeds
   // contextWindow, so the phase cost split mirrors the whole-bucket formula.
@@ -124,10 +160,15 @@ interface MutableBucket {
   genOrientation: number;
   windowOrientation: number;
   costOrientation: number;
-  // Wall-clock ms attributed to this bucket, and the orientation-phase portion
+  // Wall-clock ms attributed here, and the orientation-phase portion
   // (pre-first-edit). Implementation = activeMs - activeMsOrientation.
   activeMs: number;
   activeMsOrientation: number;
+}
+
+interface MutableBucket extends PhaseTotals {
+  toolCalls: number;
+  sessions: Set<number>;
 }
 
 interface MutableLatency {
@@ -188,9 +229,26 @@ export interface SessionEconomicsVector {
       active_ms_orientation: number;
     }
   >;
+  /** Volume produced by MCP tool calls, keyed by raw server slug. A strict
+   * subset of `buckets` -- never an extra bucket -- so aggregation can price
+   * it with the same denominators and subtract it from the phase totals. */
+  retrieval: Record<string, RetrievalVectorPart>;
 }
 
-export function tokenEconomics(db: Database, filter?: DateFilter | null): TokenEconomics {
+interface RetrievalVectorPart {
+  generation: number;
+  generation_orientation: number;
+  context_window: number;
+  context_window_orientation: number;
+  active_ms: number;
+  active_ms_orientation: number;
+}
+
+export function tokenEconomics(
+  db: Database,
+  filter?: DateFilter | null,
+  options?: TokenEconomicsOptions,
+): TokenEconomics {
   const date = sessionDatePredicate("s", filter);
   const visible = {
     sql: [date.sql, sessionUserStatePredicateForDatabase(db, "s")]
@@ -206,6 +264,7 @@ export function tokenEconomics(db: Database, filter?: DateFilter | null): TokenE
        )`,
       visible.params,
     ),
+    options,
   );
 }
 
@@ -248,8 +307,10 @@ export function economicsVectorMatchesFilter(
 
 export function aggregateEconomicsVectors(
   vectors: Iterable<SessionEconomicsVector>,
+  options?: TokenEconomicsOptions,
 ): TokenEconomics {
   const buckets = emptyBuckets();
+  const servers = new Map<string, PhaseTotals>();
   let inputCost = 0;
   let outputCost = 0;
   let waitingOnUserMs = 0;
@@ -274,11 +335,20 @@ export function aggregateEconomicsVectors(
         entry.sessions.add(vector.id);
       }
     }
+    for (const [server, part] of Object.entries(vector.retrieval ?? {})) {
+      const entry = serverEntry(servers, server);
+      entry.generation += part.generation;
+      entry.contextWindow += part.context_window;
+      entry.genOrientation += part.generation_orientation;
+      entry.windowOrientation += part.context_window_orientation;
+      entry.activeMs += part.active_ms;
+      entry.activeMsOrientation += part.active_ms_orientation;
+    }
   }
 
   const totalGeneration = sumBuckets(buckets, "generation");
   const totalWindow = sumBuckets(buckets, "contextWindow");
-  for (const entry of buckets.values()) {
+  for (const entry of [...buckets.values(), ...servers.values()]) {
     // Generation is part of the window; mirror it into the orientation portion
     // so the phase cost split uses the same window basis as the whole bucket.
     entry.contextWindow += entry.generation;
@@ -286,7 +356,11 @@ export function aggregateEconomicsVectors(
   }
   const totalWindowWithGeneration = sumBuckets(buckets, "contextWindow");
   const windowBasis = totalWindowWithGeneration || totalWindow;
-  for (const entry of buckets.values()) {
+  // The retrieval slice is already inside the bucket sums above, so it folds
+  // and prices exactly like a bucket without ever entering a denominator.
+  // Using different denominators here would leave attributed + remainder
+  // unable to reconcile against the phases they decompose.
+  for (const entry of [...buckets.values(), ...servers.values()]) {
     entry.cost =
       outputCost * share(entry.generation, totalGeneration) +
       inputCost * share(entry.contextWindow, windowBasis);
@@ -294,10 +368,14 @@ export function aggregateEconomicsVectors(
       outputCost * share(entry.genOrientation, totalGeneration) +
       inputCost * share(entry.windowOrientation, windowBasis);
   }
-  return finish(buckets, inputCost, outputCost, waitingOnUserMs);
+  return finish(buckets, inputCost, outputCost, waitingOnUserMs, servers, options);
 }
 
-export function tokenEconomicsForSession(db: Database, sessionId: number): TokenEconomics | null {
+export function tokenEconomicsForSession(
+  db: Database,
+  sessionId: number,
+  options?: TokenEconomicsOptions,
+): TokenEconomics | null {
   const scopeCte = `WITH RECURSIVE scoped_session(id) AS (
     SELECT id FROM session WHERE id = ?1
     UNION ALL
@@ -311,7 +389,7 @@ export function tokenEconomicsForSession(db: Database, sessionId: number): Token
   }
   const cached = cachedVectorsForScope(db, scopeCte, [sessionId]);
   const vectors = cached.length === expected ? cached : vectorsForScope(db, scopeCte, [sessionId]);
-  return aggregateEconomicsVectors(withBilledInputWindow(vectors));
+  return aggregateEconomicsVectors(withBilledInputWindow(vectors), options);
 }
 
 /** Session panels retain their billed-input Window total while using the same
@@ -344,7 +422,27 @@ function withBilledInputWindow(vectors: SessionEconomicsVector[]): SessionEconom
         touched: part.touched || allocatedInput > 0,
       };
     }
-    return { ...vector, buckets };
+    // The retrieval slice has to take the same ride, or a session panel would
+    // price retrieval against a pre-allocation window while pricing the phases
+    // it decomposes against a post-allocation one, and the two would not
+    // reconcile. Allocating by each server's share of the whole run is
+    // identical to allocating to its bucket first and splitting inside it,
+    // because the bucket's own allocation is already weight-proportional.
+    const retrieval = {} as SessionEconomicsVector["retrieval"];
+    for (const [server, part] of Object.entries(vector.retrieval ?? {})) {
+      const weight = part.generation + part.context_window;
+      const allocatedInput =
+        totalWeight > 0 ? vector.billed_input_tokens * (weight / totalWeight) : 0;
+      const orientationWeight = part.generation_orientation + part.context_window_orientation;
+      const orientationShare = weight > 0 ? orientationWeight / weight : 0;
+      retrieval[server] = {
+        ...part,
+        context_window: part.context_window + allocatedInput,
+        context_window_orientation:
+          part.context_window_orientation + allocatedInput * orientationShare,
+      };
+    }
+    return { ...vector, buckets, retrieval };
   });
 }
 
@@ -484,9 +582,25 @@ function parseEconomicsVector(raw: string): SessionEconomicsVector | null {
       typeof vector.billed_input_tokens !== "number" ||
       typeof vector.waiting_on_user_ms !== "number" ||
       vector.buckets == null ||
-      typeof vector.buckets !== "object"
+      typeof vector.buckets !== "object" ||
+      vector.retrieval == null ||
+      typeof vector.retrieval !== "object" ||
+      Array.isArray(vector.retrieval)
     ) {
       return null;
+    }
+    for (const part of Object.values(vector.retrieval)) {
+      if (
+        part == null ||
+        typeof part.generation !== "number" ||
+        typeof part.context_window !== "number" ||
+        typeof part.generation_orientation !== "number" ||
+        typeof part.context_window_orientation !== "number" ||
+        typeof part.active_ms !== "number" ||
+        typeof part.active_ms_orientation !== "number"
+      ) {
+        return null;
+      }
     }
     for (const bucket of ACTIVITY_BUCKETS) {
       const part = vector.buckets[bucket];
@@ -572,12 +686,18 @@ function vectorsForScope(
 
   const vectorBySession = new Map<
     number,
-    { session: SessionRow; buckets: PerSessionBuckets; latency: MutableLatency }
+    {
+      session: SessionRow;
+      buckets: PerSessionBuckets;
+      servers: PerSessionServers;
+      latency: MutableLatency;
+    }
   >();
   for (const session of sessions) {
     vectorBySession.set(session.id, {
       session,
       buckets: emptyBuckets(),
+      servers: new Map(),
       latency: emptyLatency(),
     });
   }
@@ -592,20 +712,33 @@ function vectorsForScope(
   for (const [sessionId, sessionBlocks] of blocksBySession) {
     const vector = vectorBySession.get(sessionId);
     if (vector != null) {
-      allocateGeneration([vector.session], sessionBlocks, vector.buckets, boundaries);
-      allocateLatency(sessionId, sessionBlocks, vector.buckets, boundaries, vector.latency);
+      allocateGeneration(
+        [vector.session],
+        sessionBlocks,
+        vector.buckets,
+        boundaries,
+        vector.servers,
+      );
+      allocateLatency(
+        sessionId,
+        sessionBlocks,
+        vector.buckets,
+        boundaries,
+        vector.latency,
+        vector.servers,
+      );
     }
   }
   for (const vector of vectorBySession.values()) {
     if (!blocksBySession.has(vector.session.id)) {
-      allocateGeneration([vector.session], [], vector.buckets, boundaries);
+      allocateGeneration([vector.session], [], vector.buckets, boundaries, vector.servers);
     }
   }
 
   const results = economicsRows<ResultRow>(
     db,
     `${scopeCte}
-       SELECT t.session_id, t.tool_name, t.input,
+       SELECT t.session_id, t.tool_name, t.mcp_server, t.input,
               COALESCE(t.output_bytes, length(CAST(rb.tool_result AS BLOB)), 0) AS bytes,
               cm.seq AS call_seq
        FROM scoped_session fs
@@ -628,9 +761,14 @@ function vectorsForScope(
     entry.sessions.add(row.session_id);
     // A tool result belongs to orientation if its call happened before the
     // session's first edit. Unplaceable calls (no call block) default to
-    // implementation so orientation is never overstated.
-    if (phaseOf(boundaries, row.session_id, row.call_seq) === "orientation") {
+    // implementation so orientation is never overstated -- which also makes
+    // orientation retrieval a lower bound.
+    const phase = phaseOf(boundaries, row.session_id, row.call_seq);
+    if (phase === "orientation") {
       entry.windowOrientation += tokens;
+    }
+    if (row.mcp_server != null && vector != null) {
+      addServerWindow(vector.servers, row.mcp_server, tokens, phase);
     }
   }
 
@@ -662,6 +800,17 @@ function vectorsForScope(
         active_ms_orientation: entry?.activeMsOrientation ?? 0,
       };
     }
+    const retrieval = {} as SessionEconomicsVector["retrieval"];
+    for (const [server, entry] of mutable?.servers ?? []) {
+      retrieval[server] = {
+        generation: entry.generation,
+        generation_orientation: entry.genOrientation,
+        context_window: entry.contextWindow,
+        context_window_orientation: entry.windowOrientation,
+        active_ms: entry.activeMs,
+        active_ms_orientation: entry.activeMsOrientation,
+      };
+    }
     return {
       id: session.id,
       started_at: session.started_at,
@@ -673,11 +822,16 @@ function vectorsForScope(
         session.total_cache_creation_tokens,
       waiting_on_user_ms: mutable?.latency.waitingOnUserMs ?? 0,
       buckets,
+      retrieval,
     };
   });
 }
 
 type PerSessionBuckets = Map<ActivityBucket, MutableBucket>;
+/** Keyed by the raw MCP slug from classifyTool. A slug is not a display name:
+ * `dosu` and `claude_ai_Dosu` are two registrations of one product and stay
+ * two keys, so a caller can exclude exactly what it means to exclude. */
+type PerSessionServers = Map<string, PhaseTotals>;
 
 /** First-edit boundary per session: the message seq of the first file-editing
  * tool_use. Messages with seq < boundary are orientation; the edit's own
@@ -714,6 +868,7 @@ function allocateGeneration(
   blocks: BlockRow[],
   buckets: Map<ActivityBucket, MutableBucket>,
   boundaries: Map<number, number>,
+  servers: PerSessionServers,
 ): void {
   const blocksBySession = groupBy(blocks, (block) => block.session_id);
   for (const session of sessions) {
@@ -733,7 +888,7 @@ function allocateGeneration(
       for (const [messageId, outputTokens] of messageOutput) {
         const rows = messageBlocks.get(messageId) ?? [];
         const phase = phaseOf(boundaries, session.id, rows[0]?.seq);
-        allocateOutput(session.id, outputTokens, rows, buckets, phase);
+        allocateOutput(session.id, outputTokens, rows, buckets, phase, servers);
       }
       continue;
     }
@@ -771,6 +926,7 @@ function allocateGeneration(
       assistantBlocks,
       buckets,
       boundaries,
+      servers,
     );
   }
 }
@@ -787,6 +943,7 @@ function allocateLatency(
   buckets: Map<ActivityBucket, MutableBucket>,
   boundaries: Map<number, number>,
   latency: MutableLatency,
+  servers: PerSessionServers,
 ): void {
   let previous: number | null = null;
   for (const message of orderedMessages(blocks)) {
@@ -802,6 +959,7 @@ function allocateLatency(
         buckets,
         phaseOf(boundaries, sessionId, message.seq),
         latency,
+        servers,
       );
     }
     previous = at;
@@ -837,6 +995,7 @@ function distributeLatency(
   buckets: Map<ActivityBucket, MutableBucket>,
   phase: Phase,
   latency: MutableLatency,
+  servers: PerSessionServers,
 ): void {
   if (ms <= 0 || blocks.length === 0) {
     return;
@@ -855,6 +1014,7 @@ function distributeLatency(
       shareMs,
       phase,
     );
+    addServerLatency(servers, serverOf(item.block), shareMs, phase);
   }
 }
 
@@ -912,6 +1072,7 @@ function allocateOutput(
   blocks: BlockRow[],
   buckets: Map<ActivityBucket, MutableBucket>,
   phase: Phase,
+  servers: PerSessionServers,
 ): void {
   const hasThinking = blocks.some((block) => block.type === "thinking");
   const visible = blocks
@@ -925,6 +1086,7 @@ function allocateOutput(
     blocks.filter((block) => block.type !== "thinking"),
     buckets,
     phase,
+    servers,
   );
 }
 
@@ -935,6 +1097,7 @@ function distributeVisible(
   blocks: BlockRow[],
   buckets: Map<ActivityBucket, MutableBucket>,
   phase: Phase,
+  servers: PerSessionServers,
 ): void {
   if (tokens <= 0 || blocks.length === 0) {
     return;
@@ -942,13 +1105,15 @@ function distributeVisible(
   const weighted = blocks.map((block) => ({ block, weight: Math.max(1, blockSize(block)) }));
   const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
   for (const item of weighted) {
+    const amount = tokens * (item.weight / totalWeight);
     addBucket(
       buckets,
       blockBucket(item.block.type, item.block.tool_name, item.block.tool_input),
-      tokens * (item.weight / totalWeight),
+      amount,
       sessionId,
       phase,
     );
+    addServerGeneration(servers, serverOf(item.block), amount, phase);
   }
 }
 
@@ -960,6 +1125,7 @@ function distribute(
   blocks: BlockRow[],
   buckets: Map<ActivityBucket, MutableBucket>,
   boundaries: Map<number, number>,
+  servers: PerSessionServers,
 ): void {
   if (tokens <= 0 || blocks.length === 0) {
     return;
@@ -970,13 +1136,16 @@ function distribute(
   }));
   const totalWeight = weighted.reduce((sum, item) => sum + item.weight, 0);
   for (const item of weighted) {
+    const amount = tokens * (item.weight / totalWeight);
+    const phase = phaseOf(boundaries, sessionId, item.block.seq);
     addBucket(
       buckets,
       blockBucket(item.block.type, item.block.tool_name, item.block.tool_input),
-      tokens * (item.weight / totalWeight),
+      amount,
       sessionId,
-      phaseOf(boundaries, sessionId, item.block.seq),
+      phase,
     );
+    addServerGeneration(servers, serverOf(item.block), amount, phase);
   }
 }
 
@@ -1005,6 +1174,90 @@ function addBucket(
   entry.sessions.add(sessionId);
 }
 
+/** The MCP server behind a block, or null for a builtin or a non-tool block.
+ * Uses the raw logged tool name: localToolName splits on "." and would corrupt
+ * a slug. classifyTool is the same parser ingest stamps tool_call.mcp_server
+ * with, and Codex normalizes its MCP calls to mcp__<server>__<tool>, so one
+ * parser covers both sources. */
+function serverOf(block: BlockRow): string | null {
+  const name = block.tool_name;
+  if (name == null || name === "") {
+    return null;
+  }
+  return classifyTool(name).mcpServer;
+}
+
+function serverEntry(servers: Map<string, PhaseTotals>, server: string): PhaseTotals {
+  const existing = servers.get(server);
+  if (existing != null) {
+    return existing;
+  }
+  const created = emptyPhaseTotals();
+  servers.set(server, created);
+  return created;
+}
+
+function emptyPhaseTotals(): PhaseTotals {
+  return {
+    generation: 0,
+    contextWindow: 0,
+    cost: 0,
+    genOrientation: 0,
+    windowOrientation: 0,
+    costOrientation: 0,
+    activeMs: 0,
+    activeMsOrientation: 0,
+  };
+}
+
+function addServerGeneration(
+  servers: PerSessionServers,
+  server: string | null,
+  tokens: number,
+  phase: Phase,
+): void {
+  if (server == null || tokens <= 0) {
+    return;
+  }
+  const entry = serverEntry(servers, server);
+  entry.generation += tokens;
+  if (phase === "orientation") {
+    entry.genOrientation += tokens;
+  }
+}
+
+function addServerWindow(
+  servers: PerSessionServers,
+  server: string,
+  tokens: number,
+  phase: Phase,
+): void {
+  if (tokens <= 0) {
+    return;
+  }
+  const entry = serverEntry(servers, server);
+  entry.contextWindow += tokens;
+  if (phase === "orientation") {
+    entry.windowOrientation += tokens;
+  }
+}
+
+function addServerLatency(
+  servers: PerSessionServers,
+  server: string | null,
+  ms: number,
+  phase: Phase,
+): void {
+  if (server == null || ms <= 0) {
+    return;
+  }
+  const entry = serverEntry(servers, server);
+  entry.activeMs += ms;
+  if (phase === "orientation") {
+    entry.activeMsOrientation += ms;
+  }
+}
+
 function emptyBuckets(): Map<ActivityBucket, MutableBucket> {
   return new Map(
     ACTIVITY_BUCKETS.map((bucket) => [
@@ -1029,7 +1282,7 @@ function emptyLatency(): MutableLatency {
   return { waitingOnUserMs: 0 };
 }
 
-function phasesFor(entry: MutableBucket | undefined): Record<Phase, PhaseAmounts> {
+function phasesFor(entry: PhaseTotals | undefined): Record<Phase, PhaseAmounts> {
   const gen = entry?.generation ?? 0;
   const win = entry?.contextWindow ?? 0;
   const cost = entry?.cost ?? 0;
@@ -1060,7 +1313,9 @@ function finish(
   buckets: Map<ActivityBucket, MutableBucket>,
   inputCost: number,
   outputCost: number,
-  waitingOnUserMs = 0,
+  waitingOnUserMs: number,
+  servers: Map<string, PhaseTotals>,
+  options: TokenEconomicsOptions | undefined,
 ): TokenEconomics {
   const totalCost = sumBuckets(buckets, "cost");
   const rows: TokenEconomicsBucket[] = ACTIVITY_BUCKETS.map((bucket) => {
@@ -1097,7 +1352,96 @@ function finish(
   orientationTotal.cost_share = share(orientationTotal.estimated_cost_usd, totalCost);
   implementationTotal.cost_share = share(implementationTotal.estimated_cost_usd, totalCost);
   totals.phases = { orientation: orientationTotal, implementation: implementationTotal };
+  totals.retrieval = retrievalFor(servers, totals.phases, options);
   return { buckets: rows, totals };
+}
+
+/** Decompose the phase totals into the named servers' share and what is left,
+ * without touching the phase totals themselves. `by_server` is emitted whether
+ * or not anything was named, so the pair below can be re-derived downstream
+ * for any allowlist. */
+function retrievalFor(
+  servers: Map<string, PhaseTotals>,
+  phases: Record<Phase, PhaseAmounts>,
+  options: TokenEconomicsOptions | undefined,
+): RetrievalEconomics {
+  const excludedServers: string[] = [];
+  for (const slug of options?.excludeMcpServers ?? []) {
+    if (slug !== "" && !excludedServers.includes(slug)) {
+      excludedServers.push(slug);
+    }
+  }
+  const byServer: Record<string, Record<Phase, PhaseAmounts>> = {};
+  for (const server of [...servers.keys()].sort()) {
+    byServer[server] = phasesFor(servers.get(server));
+  }
+  // Sum the raw totals before rounding, the way a bucket is rounded once at
+  // the end. Summing already-rounded per-server rows would let attributed
+  // drift past the phase it is subtracted from.
+  const named = emptyPhaseTotals();
+  for (const server of excludedServers) {
+    const entry = servers.get(server);
+    if (entry == null) {
+      continue;
+    }
+    named.generation += entry.generation;
+    named.contextWindow += entry.contextWindow;
+    named.cost += entry.cost;
+    named.genOrientation += entry.genOrientation;
+    named.windowOrientation += entry.windowOrientation;
+    named.costOrientation += entry.costOrientation;
+    named.activeMs += entry.activeMs;
+    named.activeMsOrientation += entry.activeMsOrientation;
+  }
+  const attributed = phasesFor(named);
+  // Rounding on the two sides is independent, so a difference can land at -0
+  // or -1; PhaseAmounts declares every field minimum: 0.
+  const orientationCost = Math.max(
+    0,
+    phases.orientation.estimated_cost_usd - attributed.orientation.estimated_cost_usd,
+  );
+  const implementationCost = Math.max(
+    0,
+    phases.implementation.estimated_cost_usd - attributed.implementation.estimated_cost_usd,
+  );
+  const remainderCost = orientationCost + implementationCost;
+  return {
+    excluded_servers: excludedServers,
+    by_server: byServer,
+    attributed,
+    remainder: {
+      orientation: remainderAmounts(
+        phases.orientation,
+        attributed.orientation,
+        orientationCost,
+        share(orientationCost, remainderCost),
+      ),
+      implementation: remainderAmounts(
+        phases.implementation,
+        attributed.implementation,
+        implementationCost,
+        share(implementationCost, remainderCost),
+      ),
+    },
+  };
+}
+
+function remainderAmounts(
+  phase: PhaseAmounts,
+  attributed: PhaseAmounts,
+  cost: number,
+  costShare: number,
+): PhaseAmounts {
+  return {
+    generation_tokens: Math.max(0, phase.generation_tokens - attributed.generation_tokens),
+    context_window_tokens: Math.max(
+      0,
+      phase.context_window_tokens - attributed.context_window_tokens,
+    ),
+    estimated_cost_usd: cost,
+    active_ms: Math.max(0, phase.active_ms - attributed.active_ms),
+    cost_share: costShare,
+  };
 }
 
 function sumPhase(rows: TokenEconomicsBucket[], phase: Phase): PhaseAmounts {

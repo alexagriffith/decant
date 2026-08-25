@@ -5,6 +5,7 @@ import {
   economicsVectorMatchesFilter,
   type SessionEconomicsVector,
   type TokenEconomics,
+  type TokenEconomicsOptions,
 } from "./token-economics.ts";
 import { workerError, workerUrl } from "./worker-runtime.ts";
 
@@ -48,7 +49,10 @@ export class EconomicsCache {
     this.#options = options;
   }
 
-  async get(filter?: DateFilter | null): Promise<TokenEconomics> {
+  /** The cached vectors carry every MCP server's volume unconditionally, so an
+   * exclusion set is applied at aggregation and never becomes part of the
+   * cache key. */
+  async get(filter?: DateFilter | null, options?: TokenEconomicsOptions): Promise<TokenEconomics> {
     if (this.#vectors == null) {
       await (this.#building ?? this.#rebuild());
     } else if (this.#dataVersion() !== this.#builtDataVersion) {
@@ -59,6 +63,7 @@ export class EconomicsCache {
     const vectors = this.#vectors ?? [];
     return aggregateEconomicsVectors(
       vectors.filter((vector) => economicsVectorMatchesFilter(vector, filter)),
+      options,
     );
   }
 

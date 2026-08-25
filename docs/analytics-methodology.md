@@ -66,7 +66,7 @@ estimated cost, and active time to four buckets:
 
 | Bucket | What it represents |
 | --- | --- |
-| `context` | Reading, searching, listing, web/MCP retrieval, and read-only shell or Git commands. Unknown tools default here rather than overstating implementation. |
+| `context` | Reading, searching, listing, web/MCP retrieval, and read-only shell or Git commands. Unknown tools default here rather than overstating implementation. Every MCP tool lands here, which is why an MCP retrieval server's own cost is reported separately under [Retrieval attribution](#retrieval-attribution). |
 | `planning` | Thinking/reasoning blocks and explicit plan-management tools. |
 | `code` | Structured edits and shell commands that clearly build, test, write, or otherwise mutate work. |
 | `communicating` | Visible text and other non-tool, non-thinking output. |
@@ -80,7 +80,9 @@ Generation is allocated from per-message usage when available, then by block
 size when it is not. Tool-result bytes contribute to context-window volume.
 Bucket costs are proportional allocations of the session's estimated input and
 output cost, so they reconcile to the total but should not be read as separate
-provider charges.
+provider charges. The retrieval slice below is priced from the same two
+denominators, so it is a decomposition of these figures, not a separately
+metered one.
 
 ## Orientation and implementation
 
@@ -89,6 +91,10 @@ Phases are orthogonal to activity buckets:
 - **Orientation** is everything before the first detected file edit.
 - **Implementation** begins with that edit and includes everything after it.
 - A session that never edits a file is entirely orientation.
+
+Orientation therefore includes any MCP retrieval that ran before the first
+edit. [Retrieval attribution](#retrieval-attribution) reports that slice
+separately without changing this definition.
 
 Structured edit tools establish the boundary directly. Shell edits use narrow,
 high-confidence patterns such as `git apply`, `sed -i`, and explicit file-write
@@ -108,6 +114,45 @@ The split is reported by `decant economics`, which appends `orientation` and
 `implementation` rows after the bucket rows, by the generated report's
 "Orientation vs implementation" table, and by the Activity breakdown panel in
 the local UI.
+
+### Retrieval attribution
+
+Every MCP tool is bucketed `context`, so an MCP retrieval server that runs at
+the start of a session lands inside orientation. Read naively, the orientation
+share then charges a retrieval tool with part of the cost that tool exists to
+remove. `totals.retrieval` decomposes that number rather than redefining it:
+
+- `by_server` gives the phase split for every MCP server seen, keyed by the raw
+  slug. It is always present and does not depend on which servers a request
+  named, so any allowlist -- including one Decant did not pick -- can be
+  re-derived from a stored response. A slug is not a display name: `dosu` and
+  `claude_ai_Dosu` are two registrations of one product and stay two keys.
+- `attributed` is the phase split of the servers a request named through
+  `--exclude-mcp-server` or `?exclude_mcp_server=`, echoed back in
+  `excluded_servers`.
+- `remainder` is `totals.phases` minus `attributed`, clamped at zero.
+- The default exclusion set is **empty**. Nothing is excluded unless a caller
+  names it, so `totals.phases` is exactly what it was before this block
+  existed, and `attributed` is zero.
+
+Each of the three blocks normalizes `cost_share` within itself, so
+`remainder.orientation.cost_share` is the orientation share with the named
+servers taken out of both halves -- the corrected form of the headline number.
+
+A study should pre-register and publish **all three**: orientation all-in
+(`totals.phases.orientation`), the retrieval slice
+(`totals.retrieval.attributed.orientation`), and the remainder. `remainder`
+alone flatters the retrieval tool and `phases` alone penalizes it.
+
+Two limits are worth stating alongside the figures:
+
+- A `tool_call` with no linked call block has no message sequence, and the
+  phase classifier assigns those to implementation so orientation is never
+  overstated. The same rule applies to the retrieval slice, so **orientation
+  retrieval is a lower bound**, not a point estimate.
+- Codex allocates generation in aggregate rather than per message, so Codex MCP
+  *generation* is an approximation. Tool-result *window bytes* -- the larger
+  part of a retrieval call -- are measured directly for both sources.
 
 ## Active time and user wait
 

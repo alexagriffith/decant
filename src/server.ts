@@ -425,7 +425,9 @@ export async function handleRequest(
     const sessionEconomicsMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/token-economics$/);
     if (request.method === "GET" && sessionEconomicsMatch != null) {
       return withDb(config, context, (db) => {
-        const economics = tokenEconomicsForSession(db, Number(sessionEconomicsMatch[1]));
+        const economics = tokenEconomicsForSession(db, Number(sessionEconomicsMatch[1]), {
+          excludeMcpServers: url.searchParams.getAll("exclude_mcp_server"),
+        });
         return economics == null ? sessionNotFound(db) : json(economics);
       });
     }
@@ -563,10 +565,17 @@ export async function handleRequest(
       return withDb(config, context, (db) => json(modelSparklines(db, dateFilter)));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/token-economics") {
+      // Repeatable, unlike every other analytics filter: an exclusion set is a
+      // list of server slugs, so getAll rather than get.
+      const economicsOptions = {
+        excludeMcpServers: url.searchParams.getAll("exclude_mcp_server"),
+      };
       if (context.economics != null) {
-        return json(await context.economics.get(dateFilter));
+        return json(await context.economics.get(dateFilter, economicsOptions));
       }
-      return withDb(config, context, (db) => json(tokenEconomics(db, dateFilter)));
+      return withDb(config, context, (db) =>
+        json(tokenEconomics(db, dateFilter, economicsOptions)),
+      );
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/now") {
       return withDb(config, context, (db) =>

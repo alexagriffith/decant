@@ -76,6 +76,38 @@ describe("economics cache", () => {
     db.close();
   });
 
+  test("passes the exclusion set through to aggregation without rebuilding", async () => {
+    const dbPath = seededDbPath();
+    const db = openDb(dbPath);
+    upsertSession(
+      db,
+      parseClaudeSession("sess-mcp-claude", fixture("claude", "mcp.jsonl")),
+      "/x/mcp.jsonl",
+      1,
+      2,
+      "claude",
+    );
+    const counter = { calls: 0 };
+    const cache = new EconomicsCache({
+      dbPath,
+      db,
+      computeVectors: countingComputeVectors(counter),
+    });
+
+    const none = await cache.get();
+    const excluded = await cache.get(null, { excludeMcpServers: ["github"] });
+    expect(none).toEqual(tokenEconomics(db));
+    expect(excluded).toEqual(tokenEconomics(db, null, { excludeMcpServers: ["github"] }));
+    expect(excluded.totals.phases).toEqual(none.totals.phases);
+    expect(excluded.totals.retrieval?.attributed.orientation.estimated_cost_usd).toBeGreaterThan(0);
+    expect(none.totals.retrieval?.attributed.orientation.estimated_cost_usd).toBe(0);
+    // Vectors carry every server unconditionally, so a second exclusion set is
+    // answered from the same computation rather than a rebuild.
+    expect(counter.calls).toBe(1);
+    cache.dispose();
+    db.close();
+  });
+
   test("detects external writes, serves stale, then rebuilds and notifies", async () => {
     const dbPath = seededDbPath();
     const db = openDb(dbPath);

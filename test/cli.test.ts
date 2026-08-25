@@ -167,6 +167,63 @@ describe("runCli", () => {
     // in formatPercent still prints a plausible "0.7%", so only the magnitude of
     // the sum catches it.
     expect((phasePercents[0] ?? 0) + (phasePercents[1] ?? 0)).toBeCloseTo(100, 1);
+    // Nothing is named by default, so the retrieval rows stay off and the
+    // human table is byte-identical to what it printed before the flag existed.
+    expect(humanTokens.stdout).not.toContain("orientation_retrieval");
+
+    const excluded = await runCli([...base, "tokens", "--exclude-mcp-server", "github"]);
+    expect(excluded.code).toBe(0);
+    const jsonExcluded = JSON.parse(excluded.stdout) as {
+      totals: {
+        phases: { orientation: { estimated_cost_usd: number } };
+        retrieval: {
+          excluded_servers: string[];
+          by_server: Record<string, unknown>;
+          attributed: { orientation: { estimated_cost_usd: number } };
+          remainder: { orientation: { estimated_cost_usd: number } };
+        };
+      };
+    };
+    // Reparsed from stdout rather than reusing jsonTokens: the toMatchObject
+    // above emptied its `totals` in place.
+    const baseline = JSON.parse(tokens.stdout) as typeof jsonExcluded;
+    expect(jsonExcluded.totals.phases).toEqual(baseline.totals.phases);
+    expect(jsonExcluded.totals.retrieval.excluded_servers).toEqual(["github"]);
+    expect(Object.keys(baseline.totals.retrieval.by_server)).toContain("github");
+    expect(jsonExcluded.totals.retrieval.attributed.orientation.estimated_cost_usd).toBeGreaterThan(
+      0,
+    );
+
+    const humanExcluded = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "tokens",
+      "--exclude-mcp-server",
+      "github",
+    ]);
+    expect(humanExcluded).toMatchObject({ code: 0, stderr: "" });
+    const retrievalCosts = Object.fromEntries(
+      [
+        ...humanExcluded.stdout.matchAll(
+          /^(orientation_all_in|orientation_retrieval|orientation_remainder)\t-\t-\t([\d.]+)\t-\t[\d.]+%$/gm,
+        ),
+      ].map((match) => [match[1] as string, Number(match[2])]),
+    );
+    expect(Object.keys(retrievalCosts).sort()).toEqual([
+      "orientation_all_in",
+      "orientation_remainder",
+      "orientation_retrieval",
+    ]);
+    // The two halves add back to the all-in number a report already prints.
+    expect(
+      (retrievalCosts.orientation_retrieval ?? 0) + (retrievalCosts.orientation_remainder ?? 0),
+    ).toBeCloseTo(retrievalCosts.orientation_all_in ?? 0, 4);
+    expect(retrievalCosts.orientation_retrieval).toBeGreaterThan(0);
+    // The new labels must not be read as phase rows by anything parsing this.
+    expect([
+      ...humanExcluded.stdout.matchAll(/^(?:orientation|implementation)\t.*\t([\d.]+)%$/gm),
+    ]).toHaveLength(2);
 
     const search = await runCli([...base, "search", "auth", "--limit", "5"]);
     expect(search.code).toBe(0);

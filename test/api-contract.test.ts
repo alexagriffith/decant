@@ -249,6 +249,20 @@ describe("local API OpenAPI contract", () => {
           body: { key: recommendationKey, source: "api-contract", note: "fixture-only" },
         },
       ];
+      // Extra requests against operations `cases` already covers, so the
+      // operationKeys equality below stays one entry per operation.
+      const variantCases: ContractCase[] = [
+        {
+          path: "/api/analytics/token-economics",
+          method: "get",
+          url: "/api/analytics/token-economics?exclude_mcp_server=dosu&exclude_mcp_server=claude_ai_Dosu",
+        },
+        {
+          path: "/api/sessions/{id}/token-economics",
+          method: "get",
+          url: `/api/sessions/${sessionId}/token-economics?exclude_mcp_server=github`,
+        },
+      ];
       const errorCases: ContractCase[] = [
         {
           path: "/api/health",
@@ -359,6 +373,14 @@ describe("local API OpenAPI contract", () => {
         "to",
         "tool",
       ]);
+      expect(parameterNames(document, "/api/analytics/token-economics", "get")).toEqual([
+        "exclude_mcp_server",
+        "from",
+        "to",
+      ]);
+      expect(parameterNames(document, "/api/sessions/{id}/token-economics", "get")).toEqual([
+        "exclude_mcp_server",
+      ]);
       expect(requestPropertyNames(document, "/api/search", "post")).toContain("include_total");
       expect(requestPropertyNames(document, "/api/sessions/{id}/state", "post")).toEqual(["state"]);
       expect(operationDescription(document, "/api/sessions", "get")).toContain(
@@ -386,7 +408,7 @@ describe("local API OpenAPI contract", () => {
       ]);
       const validators = new Map<string, ValidateFunction>();
 
-      for (const contractCase of [...cases, ...errorCases]) {
+      for (const contractCase of [...cases, ...variantCases, ...errorCases]) {
         const expectedStatus = contractCase.status ?? 200;
         const expectedMediaType = contractCase.mediaType ?? "application/json";
         const response =
@@ -503,6 +525,16 @@ function seed(config: Config): void {
     1,
     2,
     "contract-codex",
+  );
+  // Gives totals.retrieval.by_server real entries: an empty map satisfies its
+  // additionalProperties schema without ever exercising it.
+  upsertSession(
+    db,
+    parseClaudeSession("contract-claude-mcp", fixture("claude", "mcp.jsonl")),
+    "/synthetic/claude-mcp.jsonl",
+    1,
+    2,
+    "contract-claude-mcp",
   );
   regenerate(db);
   db.close();
