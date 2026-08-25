@@ -37,9 +37,11 @@ Everything Decant ingests is written into it verbatim.
 | --- | --- |
 | The full source record for every message, exactly as the tool wrote it | `message.raw` |
 | Prompt, response, and reasoning text | `block.text` |
+| The opening of your first prompt, kept verbatim as the session's display title | `session.title` |
 | Tool arguments, including shell commands, file paths, and patch bodies | `block.tool_input`, `tool_call.input` |
 | Tool output, including the contents of files an agent read | `block.tool_result`, `tool_call.output_preview` |
 | Absolute local paths for the working directory, the source log, and every file an agent touched | `session.cwd`, `session.source_path`, `file_ref.path`, `ingest_source.path` |
+| Absolute local paths of every project and worktree you ran agents in | `project.path`, `project.root_path` |
 | Lines a parser could not read, kept verbatim so they can be diagnosed | `ingest_issue.raw_line` |
 
 Only `block.text`, `block.tool_name`, and `block.tool_input` are full-text
@@ -79,17 +81,60 @@ decant db info --full   # adds fts_rows and text_bytes: a full scan, slow on a l
 Delete one session tree from the CLI, or use **Delete session** in the web UI:
 
 ```sh
-decant ls                # find the id
-decant session rm 42     # deletes that session and its descendants
+decant ls                      # find the id
+decant session rm 42 --dry-run # what would go, without deleting it
+decant session rm 42 --yes     # --yes is required once it has descendants
 decant db vacuum
 ```
+
+`session rm` deletes the session **and its descendant tree**, so `--yes` is
+required whenever the target has descendants, and `--dry-run` reports the blast
+radius without touching anything.
+
+#### If you delete something by mistake
+
+There is no un-delete command, and it is not enough to re-run `sync`: deletion
+writes a tombstone that makes every later sync skip that source file on purpose.
+The source JSONL is untouched on disk, so the session can be recovered by
+clearing the two rows that block it and re-ingesting. Close `decant serve`
+first, and back the archive up before editing it.
+
+```sh
+# 1. Find the tombstone for the session you want back.
+sqlite3 ~/.decant/decant.db \
+  "SELECT tool, source_session_id, state FROM session_user_state WHERE state = 'deleted';"
+
+# 2. Clear it. LIKE also catches the Claude subagent-spawn tombstones, which
+#    store a JSON pair containing the parent's source_session_id.
+sqlite3 ~/.decant/decant.db \
+  "DELETE FROM session_user_state
+    WHERE state = 'deleted' AND source_session_id LIKE '%PASTE_SOURCE_SESSION_ID%';"
+
+# 3. Forget the ingest bookkeeping for that file. Without this the next sync
+#    skips it on unchanged size and mtime before it ever re-reads it.
+sqlite3 ~/.decant/decant.db \
+  "DELETE FROM ingest_source WHERE path = '/path/to/the/session.jsonl';"
+
+# 4. Re-ingest it.
+decant sync --path /path/to/the/session.jsonl
+```
+
+Both deletes are required. Clearing only `session_user_state` leaves the file
+skipped by the unchanged-metadata check, and the session does not come back.
+Anything vacuumed away in the meantime is rebuilt from the source log, not
+recovered from the archive, so this works only while the source JSONL still
+exists.
 
 Both paths are a hard delete: the rows are removed and their full-text index
 entries with them. The bytes are not. SQLite returns freed pages to its own free
 list without zeroing them, so deleted transcript text remains readable inside the
 archive file, recoverable with `grep`, until `decant db vacuum` rewrites it.
 `decant db info` reports `freelist_bytes`, and a non-zero value means a vacuum is
-owed.
+owed. The converse does not hold. Freed pages are reused: the next sync, and any
+read command that syncs first, writes new rows into them. So `freelist_bytes` can
+read back at or near zero while deleted text still survives in the unused tail of
+a page something else now occupies. Run `db vacuum` as the step that follows a
+delete, rather than waiting for the number to look large.
 
 To remove everything Decant holds:
 
@@ -164,7 +209,7 @@ the deleted transcript is still readable in the archive file. For a session that
 was sensitive enough to delete, the sequence is both commands:
 
 ```sh
-decant session rm <id>
+decant session rm <id> --yes
 decant db vacuum
 ```
 

@@ -117,7 +117,7 @@ decant tool stats              # tool usage
 decant mcp stats               # MCP server usage
 decant export 1 > session.md   # export a session
 decant db info                 # what the archive holds and where
-decant session rm 1            # delete a session and its descendants
+decant session rm 1 --yes      # delete a session and its descendants
 decant db vacuum               # release the freed pages after a delete
 ```
 
