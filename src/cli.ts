@@ -1259,28 +1259,34 @@ function optionalInteger(value: string | undefined): number | undefined {
   return value == null ? undefined : parseInteger(value);
 }
 
-/** The three numbers a study has to publish together: orientation all-in, the
- * named servers' slice of it, and what is left. Reporting any one alone either
- * flatters or penalizes the retrieval tool. All three are shares of the same
- * archive total, so the last two add back to the first. */
+/** Splits the `orientation` row above into the named servers' share and what is
+ * left, so a study can read all three numbers it must publish together off one
+ * invocation. The all-in figure is not reprinted: it IS the `orientation` row.
+ *
+ * Every column is filled rather than dashed, because these two rows sum to that
+ * row field by field -- printing `-` for tokens and time invites the reader to
+ * conclude the retrieval slice measures something narrower than it does. The
+ * percentages share the `orientation` row's denominator (the archive total), so
+ * the column adds up down the table. */
 function retrievalRows(economics: TokenEconomics, excluded: string[]): string {
   const retrieval = economics.totals.retrieval;
   if (excluded.length === 0 || retrieval == null) {
     return "";
   }
   const total = economics.totals.estimated_cost_usd;
-  const allIn = economics.totals.phases?.orientation.estimated_cost_usd ?? 0;
   return (
     [
-      ["orientation_all_in", allIn] as const,
-      ["orientation_retrieval", retrieval.attributed.orientation.estimated_cost_usd] as const,
-      ["orientation_remainder", retrieval.remainder.orientation.estimated_cost_usd] as const,
+      ["orientation_retrieval", retrieval.attributed.orientation] as const,
+      ["orientation_remainder", retrieval.remainder.orientation] as const,
     ] as const
   )
     .map(
-      ([label, cost]) =>
-        `${label}\t-\t-\t${cost.toFixed(4)}\t-\t` +
-        `${formatPercent(total > 0 ? cost / total : 0)}\n`,
+      ([label, amounts]) =>
+        `${label}\t${formatNumber(amounts.generation_tokens)}\t` +
+        `${formatNumber(amounts.context_window_tokens)}\t` +
+        `${amounts.estimated_cost_usd.toFixed(4)}\t` +
+        `${formatDuration(amounts.active_ms)}\t` +
+        `${formatPercent(total > 0 ? amounts.estimated_cost_usd / total : 0)}\n`,
     )
     .join("");
 }

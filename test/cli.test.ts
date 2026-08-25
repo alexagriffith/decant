@@ -203,23 +203,32 @@ describe("runCli", () => {
       "github",
     ]);
     expect(humanExcluded).toMatchObject({ code: 0, stderr: "" });
-    const retrievalCosts = Object.fromEntries(
-      [
-        ...humanExcluded.stdout.matchAll(
-          /^(orientation_all_in|orientation_retrieval|orientation_remainder)\t-\t-\t([\d.]+)\t-\t[\d.]+%$/gm,
-        ),
-      ].map((match) => [match[1] as string, Number(match[2])]),
-    );
-    expect(Object.keys(retrievalCosts).sort()).toEqual([
-      "orientation_all_in",
-      "orientation_remainder",
-      "orientation_retrieval",
-    ]);
-    // The two halves add back to the all-in number a report already prints.
-    expect(
-      (retrievalCosts.orientation_retrieval ?? 0) + (retrievalCosts.orientation_remainder ?? 0),
-    ).toBeCloseTo(retrievalCosts.orientation_all_in ?? 0, 4);
-    expect(retrievalCosts.orientation_retrieval).toBeGreaterThan(0);
+    // All-in is NOT reprinted as its own row: the `orientation` row already is
+    // that number, and printing it twice reads as a narrower measurement.
+    expect(humanExcluded.stdout).not.toContain("orientation_all_in");
+    const numericRow = (label: string): number[] => {
+      const match = new RegExp(
+        `^${label}\\t(\\d+)\\t(\\d+)\\t([\\d.]+)\\t(.+?)\\t([\\d.]+)%$`,
+        "m",
+      ).exec(humanExcluded.stdout);
+      if (match == null) {
+        throw new Error(`${label} row missing from:\n${humanExcluded.stdout}`);
+      }
+      return [match[1], match[2], match[3], match[5]].map((part) => Number(part));
+    };
+    const orientation = numericRow("orientation");
+    const attributed = numericRow("orientation_retrieval");
+    const remainder = numericRow("orientation_remainder");
+    expect(attributed[2]).toBeGreaterThan(0);
+    // Every printed column is a decomposition of the `orientation` row above:
+    // generation, context window, cost, and percent all add back to it. That is
+    // what makes the two rows self-evidently a split rather than a subset.
+    for (const column of [0, 1, 2, 3]) {
+      expect((attributed[column] ?? 0) + (remainder[column] ?? 0)).toBeCloseTo(
+        orientation[column] ?? 0,
+        column === 2 ? 4 : 1,
+      );
+    }
     // The new labels must not be read as phase rows by anything parsing this.
     expect([
       ...humanExcluded.stdout.matchAll(/^(?:orientation|implementation)\t.*\t([\d.]+)%$/gm),

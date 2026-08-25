@@ -80,7 +80,8 @@ Generation is allocated from per-message usage when available, then by block
 size when it is not. Tool-result bytes contribute to context-window volume.
 Bucket costs are proportional allocations of the session's estimated input and
 output cost, so they reconcile to the total but should not be read as separate
-provider charges. The retrieval slice below is priced from the same two
+provider charges. The slice described under
+[Retrieval attribution](#retrieval-attribution) is priced from the same two
 denominators, so it is a decomposition of these figures, not a separately
 metered one.
 
@@ -155,14 +156,20 @@ retrieval share = totals.retrieval.attributed.orientation.estimated_cost_usd
                 / totals.estimated_cost_usd
 ```
 
-`decant tokens --exclude-mcp-server <slug>` already does this: the percentages
-in its `orientation_all_in` / `orientation_retrieval` / `orientation_remainder`
-rows are all taken against `totals.estimated_cost_usd`, so they add up in the
-column. The same command's `--json` output reports the within-block
-`cost_share` instead. The two are different quantities under one field name, so
-take the percentage from the row that names its denominator, or divide the
-`estimated_cost_usd` values yourself. Worked example from a fixture archive
-with `--exclude-mcp-server dosu --exclude-mcp-server github`:
+`decant tokens --exclude-mcp-server <slug>` already does this: it appends
+`orientation_retrieval` and `orientation_remainder` rows whose percentages are
+taken against `totals.estimated_cost_usd`, the same denominator the
+`orientation` row above them uses. Every column in those two rows -- tokens,
+context window, cost, time, and percent -- adds back to the `orientation` row,
+so all three numbers a study publishes are readable from one invocation:
+all-in is the `orientation` row itself, and the two rows below split it. The
+all-in figure is deliberately not reprinted under its own label.
+
+The same command's `--json` output reports the within-block `cost_share`
+instead. The two are different quantities under one field name, so take the
+percentage from the table, or divide the `estimated_cost_usd` values yourself.
+Worked example from a fixture archive with
+`--exclude-mcp-server dosu --exclude-mcp-server github`:
 
 | Quantity | Within-block `cost_share` | Share of archive cost |
 | --- | --- | --- |
