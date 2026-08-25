@@ -195,6 +195,35 @@ export function inheritDeletedSessionTombstone(
 }
 
 /**
+ * A session plus everything descended from it. Deletion applies to the whole
+ * tree, so anything that reports the blast radius of a delete has to use the
+ * same shape the delete does, or the two drift apart silently.
+ */
+const SUBTREE_CTE = `WITH RECURSIVE subtree(id) AS (
+   SELECT id FROM session WHERE id = ?1
+   UNION
+   SELECT child.id
+   FROM session child
+   JOIN subtree parent ON child.parent_session_id = parent.id
+ )`;
+
+/**
+ * Ids in a session's descendant tree, including the session itself. Empty when
+ * the id is not in the archive, which is the same signal setSessionUserState
+ * returns false on.
+ */
+export function sessionSubtreeIds(db: Database, sessionId: number): number[] {
+  return (
+    db
+      .query(
+        `${SUBTREE_CTE}
+         SELECT s.id FROM session s JOIN subtree ON subtree.id = s.id ORDER BY s.id`,
+      )
+      .all(sessionId) as { id: number }[]
+  ).map((row) => row.id);
+}
+
+/**
  * Apply direct user archive state, or delete a session's existing descendant
  * tree.
  *
@@ -213,13 +242,7 @@ export function setSessionUserState(
   return withImmediateTransaction(db, () => {
     const identities = db
       .query(
-        `WITH RECURSIVE subtree(id) AS (
-           SELECT id FROM session WHERE id = ?1
-           UNION
-           SELECT child.id
-           FROM session child
-           JOIN subtree parent ON child.parent_session_id = parent.id
-         )
+        `${SUBTREE_CTE}
          SELECT s.id, s.tool, s.source_session_id, s.source_path
          FROM session s
          JOIN subtree ON subtree.id = s.id

@@ -34,6 +34,7 @@ import {
   parsePeerList,
   serve as serveApp,
 } from "./server.ts";
+import { sessionSubtreeIds, setSessionUserState } from "./session-user-state.ts";
 import {
   byDimension,
   fileHotspots,
@@ -101,7 +102,18 @@ interface DbInfo {
   schema_version: number;
   sessions: number;
   messages: number;
+  blocks: number;
   tool_calls: number;
+  file_refs: number;
+  /**
+   * Pages SQLite has freed but not returned to the filesystem. Deleted rows
+   * keep their bytes readable in the file until `decant db vacuum` runs, so
+   * this is the number that says a vacuum is owed.
+   */
+  freelist_bytes: number;
+  /** Full-scan totals, present only under `--full`. */
+  fts_rows?: number;
+  text_bytes?: number;
 }
 
 /**
@@ -514,9 +526,53 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       );
   };
 
+  const addRm = (command: Command): void => {
+    command
+      .description("delete a session and its descendants from the archive")
+      .argument("<id>", "session id", parseInteger)
+      .action((id: number) =>
+        run(() => {
+          // Deliberately not readArchive(): deleting must not first re-ingest
+          // the source directories, and the id came from a read that already
+          // synced.
+          const archive = openArchive(resolve());
+          try {
+            // Counted before the delete, because afterwards there is nothing
+            // left to count.
+            const descendants = Math.max(sessionSubtreeIds(archive.db, id).length - 1, 0);
+            const deleted = setSessionUserState(archive.db, id, "deleted");
+            if (isJson(globals())) {
+              io.writeOut(
+                `${JSON.stringify(
+                  deleted
+                    ? { deleted: true, session_id: id, descendants }
+                    : { deleted: false, session_id: id, error: "session not found" },
+                  null,
+                  2,
+                )}\n`,
+              );
+            } else if (!deleted) {
+              io.writeErr(`error: no session with id ${id}\n`);
+            } else if (!globals().quiet) {
+              io.writeOut(
+                `deleted session ${id} (${descendants} descendant${descendants === 1 ? "" : "s"})\n` +
+                  // SQLite frees the pages without zeroing them, so the
+                  // transcript stays readable in the file until a vacuum.
+                  "run `decant db vacuum` to release the freed pages\n",
+              );
+            }
+            return deleted ? 0 : 1;
+          } finally {
+            closeDb(archive.db);
+          }
+        }),
+      );
+  };
+
   const session = program.command("session").description("inspect sessions");
   addLs(session.command("ls"));
   addShow(session.command("show"));
+  addRm(session.command("rm"));
   addLs(program.command("ls"));
   addShow(program.command("show"));
 
@@ -549,21 +605,32 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   const dbCommand = program.command("db").description("inspect and maintain the session log index");
   dbCommand
     .command("info")
-    .description("show DB path, size, schema version, and row counts")
-    .action(() =>
+    .description("show DB path, size, schema version, row counts, and freed pages")
+    .option("--full", "add full-scan totals (fts_rows, text_bytes); slow on a large archive")
+    .action((commandOptions: { full?: boolean }) =>
       run(() => {
         const archive = openArchive(resolve());
         try {
-          const row = dbInfo(archive);
-          output(
-            row,
-            () =>
-              `path:       ${row.path}\n` +
-              `size_bytes: ${row.size_bytes}\n` +
-              `schema:     v${row.schema_version}\n` +
-              `sessions:   ${row.sessions}\n` +
-              `messages:   ${row.messages}\n` +
-              `tool_calls: ${row.tool_calls}\n`,
+          const row = dbInfo(archive, { full: commandOptions.full === true });
+          const fields: [string, string | number][] = [
+            ["path", row.path],
+            ["size_bytes", row.size_bytes],
+            ["schema", `v${row.schema_version}`],
+            ["sessions", row.sessions],
+            ["messages", row.messages],
+            ["blocks", row.blocks],
+            ["tool_calls", row.tool_calls],
+            ["file_refs", row.file_refs],
+            ["freelist_bytes", row.freelist_bytes],
+          ];
+          if (row.fts_rows != null) {
+            fields.push(["fts_rows", row.fts_rows]);
+          }
+          if (row.text_bytes != null) {
+            fields.push(["text_bytes", row.text_bytes]);
+          }
+          output(row, () =>
+            fields.map(([label, value]) => `${`${label}:`.padEnd(16)}${value}\n`).join(""),
           );
         } finally {
           closeDb(archive.db);
@@ -1299,7 +1366,14 @@ function waitForProcessSignal(): Promise<void> {
   });
 }
 
-function dbInfo(archive: Archive): DbInfo {
+/**
+ * `full` adds the two totals that cost a full scan of the archive. Measured on
+ * a 2.5 GB archive: the row counts and the freelist pragma finish in under
+ * 10 ms, while the byte sum takes 5-13 s and the FTS row count 0.6-2 s. A
+ * command whose job is to report a path and a schema version must not pay
+ * that, so those two are opt-in.
+ */
+function dbInfo(archive: Archive, options: { full?: boolean } = {}): DbInfo {
   const version =
     (
       archive.db.query("SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations").get() as {
@@ -1310,14 +1384,39 @@ function dbInfo(archive: Archive): DbInfo {
     .query(
       `SELECT (SELECT COUNT(*) FROM session) AS sessions,
               (SELECT COUNT(*) FROM message) AS messages,
-              (SELECT COUNT(*) FROM tool_call) AS tool_calls`,
+              (SELECT COUNT(*) FROM block) AS blocks,
+              (SELECT COUNT(*) FROM tool_call) AS tool_calls,
+              (SELECT COUNT(*) FROM file_ref) AS file_refs`,
     )
-    .get() as Pick<DbInfo, "sessions" | "messages" | "tool_calls">;
+    .get() as Pick<DbInfo, "sessions" | "messages" | "blocks" | "tool_calls" | "file_refs">;
+  const pages = archive.db
+    .query(
+      `SELECT (SELECT * FROM pragma_freelist_count()) AS freelist,
+              (SELECT * FROM pragma_page_size()) AS page_size`,
+    )
+    .get() as { freelist: number; page_size: number };
+  const scans =
+    options.full === true
+      ? (archive.db
+          .query(
+            // block.tool_result and message.raw are stored but not indexed, so
+            // this total is deliberately wider than what search can reach.
+            `SELECT (SELECT COUNT(*) FROM block_fts) AS fts_rows,
+                    (SELECT COALESCE(SUM(LENGTH(raw)), 0) FROM message)
+                    + (SELECT COALESCE(SUM(LENGTH(COALESCE(text, ''))
+                                          + LENGTH(COALESCE(tool_input, ''))
+                                          + LENGTH(COALESCE(tool_result, ''))), 0)
+                       FROM block) AS text_bytes`,
+          )
+          .get() as { fts_rows: number; text_bytes: number })
+      : null;
   return {
     path: archive.config.dbPath,
     size_bytes: statSync(archive.config.dbPath, { throwIfNoEntry: false })?.size ?? 0,
     schema_version: version,
     ...counts,
+    freelist_bytes: pages.freelist * pages.page_size,
+    ...(scans ?? {}),
   };
 }
 
@@ -1328,6 +1427,7 @@ const completionWords = [
   "session",
   "ls",
   "show",
+  "rm",
   "project",
   "db",
   "distill",
