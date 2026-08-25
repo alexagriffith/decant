@@ -76,6 +76,16 @@ Shell classification is deliberately conservative. Read-only commands such as
 are code. A bucket is an analytical attribution, not a provider billing field
 or a quality judgment.
 
+### Search counting
+
+A search is a `Grep` or `Glob` tool call, or a shell statement whose leading
+command is a search binary such as `rg`, `grep`, or `find`. Compound commands
+are split on `;`, `&&`, `||`, and newlines, so `cd src && rg handler` counts.
+Pipelines are not split: `ps aux | grep node` filters output rather than
+searching a repository, and does not count. Codex records some shell activity
+inside a JavaScript `exec` program; those inner commands are not yet counted,
+so Codex search volume is understated.
+
 Generation is allocated from per-message usage when available, then by block
 size when it is not. Tool-result bytes contribute to context-window volume.
 Bucket costs are proportional allocations of the session's estimated input and
