@@ -906,7 +906,8 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .command("tokens")
     .alias("economics")
     .description(
-      "break tokens, cost, agent time, and user wait into context, planning, code, and communicating",
+      "break tokens, cost, agent time, and user wait into context, planning, code, and " +
+        "communicating, then into orientation and implementation",
     )
     .action(() =>
       run(() => {
@@ -926,6 +927,27 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
               .concat(row.buckets.length > 0 ? "\n" : "")
               .concat(
                 `waiting_on_user\t-\t-\t-\t${formatDuration(row.totals.waiting_on_user_ms)}\n`,
+              )
+              // Phases are orthogonal to the buckets above, so they append as
+              // their own rows with the cost share the buckets do not carry.
+              .concat(
+                row.totals.phases == null
+                  ? ""
+                  : (["orientation", "implementation"] as const)
+                      .map((phase) => {
+                        const amounts = row.totals.phases?.[phase];
+                        if (amounts == null) {
+                          return "";
+                        }
+                        return (
+                          `${phase}\t${formatNumber(amounts.generation_tokens)}\t` +
+                          `${formatNumber(amounts.context_window_tokens)}\t` +
+                          `${amounts.estimated_cost_usd.toFixed(4)}\t` +
+                          `${formatDuration(amounts.active_ms)}\t` +
+                          `${formatPercent(amounts.cost_share)}\n`
+                        );
+                      })
+                      .join(""),
               ),
           );
         } finally {
@@ -1237,6 +1259,10 @@ function trustedPeers(values: string[] | undefined): string[] {
 
 function formatNumber(value: number): string {
   return String(Math.round(value));
+}
+
+function formatPercent(share: number): string {
+  return `${(share * 100).toFixed(1)}%`;
 }
 
 function formatDuration(ms: number): string {

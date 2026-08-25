@@ -135,7 +135,13 @@ describe("runCli", () => {
 
     const tokens = await runCli([...base, "tokens"]);
     expect(tokens.code).toBe(0);
-    expect(JSON.parse(tokens.stdout)).toMatchObject({
+    const jsonTokens = JSON.parse(tokens.stdout) as {
+      totals: { phases: { orientation: { cost_share: number } } };
+    };
+    expect(jsonTokens.totals.phases.orientation.cost_share).toBeTypeOf("number");
+    // Asserted first: toMatchObject substitutes asymmetric matchers into the
+    // received value, so `totals` is no longer readable after the next call.
+    expect(jsonTokens).toMatchObject({
       buckets: expect.arrayContaining([
         expect.objectContaining({ bucket: "context", active_ms: expect.any(Number) }),
       ]),
@@ -148,6 +154,8 @@ describe("runCli", () => {
     const humanTokens = await runCli(["--db", dbPath, "--no-sync", "tokens"]);
     expect(humanTokens).toMatchObject({ code: 0, stderr: "" });
     expect(humanTokens.stdout).toContain("waiting_on_user\t-\t-\t-");
+    expect(humanTokens.stdout).toContain("orientation\t");
+    expect(humanTokens.stdout).toMatch(/^implementation\t.*%$/m);
 
     const search = await runCli([...base, "search", "auth", "--limit", "5"]);
     expect(search.code).toBe(0);
