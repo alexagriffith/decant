@@ -894,17 +894,22 @@ describe("db info discloses what the archive stores", () => {
         .query("INSERT INTO message (session_id, seq, role, raw) VALUES (?1, 0, 'user', ?2)")
         .run(sessionId, sample).lastInsertRowid,
     );
+    // Every column the sum touches gets the multibyte sample. Leaving
+    // tool_input and tool_result NULL would let COALESCE return 0 either way,
+    // so reverting those two call sites to LENGTH() would go unnoticed --
+    // and tool_result is the largest content column in a real archive.
     db.query(
-      `INSERT INTO block (message_id, session_id, ordinal, type, text)
-       VALUES (?1, ?2, 0, 'text', ?3)`,
+      `INSERT INTO block (message_id, session_id, ordinal, type, text, tool_input, tool_result)
+       VALUES (?1, ?2, 0, 'tool_use', ?3, ?3, ?3)`,
     ).run(messageId, sessionId, sample);
     closeDb(db);
 
     const info = JSON.parse(
       (await runCli(["--db", dbPath, "--json", "--no-sync", "db", "info", "--full"])).stdout,
     ) as FullInfoJson;
-    // Two stored copies of the sample: message.raw and block.text.
-    expect(info.text_bytes).toBe(26);
+    // Four stored copies of the sample at 13 bytes each: message.raw, and
+    // block.text / tool_input / tool_result.
+    expect(info.text_bytes).toBe(52);
   });
 });
 
