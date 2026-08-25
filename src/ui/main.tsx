@@ -1648,19 +1648,16 @@ function SessionsView({
         <StatCard
           icon="sessions"
           label="Sessions"
-          tone="accent"
           value={formatInt(cardSummary.sessions)}
         />
         <StatCard
           icon="messages"
           label="Messages"
-          tone="info"
           value={formatInt(cardSummary.messages)}
         />
         <StatCard
           icon="money"
           label="Est. cost"
-          tone="success"
           value={money(cardSummary.estimated_cost_usd)}
         />
       </div>
@@ -1871,14 +1868,12 @@ function ProjectsView({
         <StatCard
           icon="folder"
           label="Projects"
-          tone="accent"
           value={formatInt(projects.filter((project) => !project.is_worktree).length)}
         />
-        <StatCard icon="folder" label="Worktrees" tone="info" value={formatInt(worktrees.length)} />
+        <StatCard icon="folder" label="Worktrees" value={formatInt(worktrees.length)} />
         <StatCard
           icon="tools"
           label="Activity sources"
-          tone="success"
           value={formatInt(activitySources.size)}
         />
       </div>
@@ -4252,37 +4247,31 @@ function AnalyticsView({
         <StatCard
           icon="sessions"
           label="Sessions"
-          tone="accent"
           value={formatInt(data.summary?.sessions ?? 0)}
         />
         <StatCard
           icon="messages"
           label="Messages"
-          tone="info"
           value={formatInt(data.summary?.messages ?? 0)}
         />
         <StatCard
           icon="bolt"
           label="Tool calls"
-          tone="warning"
           value={formatInt(data.summary?.tool_calls ?? 0)}
         />
         <StatCard
           icon="download"
           label="Input tokens"
-          tone="neutral"
           value={compact(data.summary?.input_tokens ?? 0)}
         />
         <StatCard
           icon="upload"
           label="Output tokens"
-          tone="neutral"
           value={compact(data.summary?.output_tokens ?? 0)}
         />
         <StatCard
           icon="money"
           label="Est. cost"
-          tone="success"
           value={money(data.summary?.estimated_cost_usd ?? 0)}
         />
       </div>
@@ -5695,12 +5684,10 @@ type IconName =
 function StatCard({
   icon,
   label,
-  tone,
   value,
 }: {
   icon: IconName;
   label: string;
-  tone: BadgeTone;
   value: string;
 }) {
   return (
@@ -5709,7 +5696,7 @@ function StatCard({
         <span>{label}</span>
         <strong>{value}</strong>
       </div>
-      <span className={`stat-icon tone-${tone}`}>
+      <span className="stat-icon">
         <Icon name={icon} />
       </span>
     </div>
@@ -7394,26 +7381,23 @@ function ToolsView({
         <StatCard
           icon="tools"
           label="Total calls"
-          tone="accent"
           value={formatInt(aggregate.totalCalls)}
         />
         <StatCard
           icon="info"
           label="Error rate"
-          tone={aggregate.errorRate > 0 ? "danger" : "success"}
           value={aggregate.totalCalls === 0 ? "—" : `${aggregate.errorRate.toFixed(1)}%`}
         />
         <StatCard
           icon="clock"
           label="Median / p95 elapsed"
-          tone="info"
           value={
             aggregate.p50 == null || aggregate.p95 == null
               ? "—"
               : `${durationPrecise(aggregate.p50)} / ${durationPrecise(aggregate.p95)}`
           }
         />
-        <StatCard icon="bolt" label="Top tool" tone="warning" value={aggregate.topTool ?? "—"} />
+        <StatCard icon="bolt" label="Top tool" value={aggregate.topTool ?? "—"} />
       </section>
 
       <section className="panel">
