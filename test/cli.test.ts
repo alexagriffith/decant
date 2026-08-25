@@ -872,6 +872,40 @@ describe("db info discloses what the archive stores", () => {
     expect(afterVacuum.freelist_bytes).toBe(0);
     expect(afterVacuum.size_bytes).toBeLessThan(afterDelete.size_bytes);
   });
+
+  test("text_bytes counts bytes, not characters", async () => {
+    const dbPath = join(workDir, "db-info-utf8.db");
+    // SQLite's LENGTH() counts characters on a TEXT column. The field sits
+    // directly under size_bytes, which is real bytes from statSync, so it has
+    // to be measured the same way or the two disagree in the same output.
+    const sample = "h\u00e9llo\u2192\ud83d\ude42";
+    // Code points, not UTF-16 units: SQLite's LENGTH() counts characters, and
+    // JS .length would count the emoji's surrogate pair twice.
+    expect([...sample].length).toBe(7);
+    expect(Buffer.byteLength(sample, "utf8")).toBe(13);
+
+    const db = openDb(dbPath);
+    const sessionId = Number(
+      db.query("INSERT INTO session (tool, source_session_id) VALUES ('claude_code', 'utf8')").run()
+        .lastInsertRowid,
+    );
+    const messageId = Number(
+      db
+        .query("INSERT INTO message (session_id, seq, role, raw) VALUES (?1, 0, 'user', ?2)")
+        .run(sessionId, sample).lastInsertRowid,
+    );
+    db.query(
+      `INSERT INTO block (message_id, session_id, ordinal, type, text)
+       VALUES (?1, ?2, 0, 'text', ?3)`,
+    ).run(messageId, sessionId, sample);
+    closeDb(db);
+
+    const info = JSON.parse(
+      (await runCli(["--db", dbPath, "--json", "--no-sync", "db", "info", "--full"])).stdout,
+    ) as FullInfoJson;
+    // Two stored copies of the sample: message.raw and block.text.
+    expect(info.text_bytes).toBe(26);
+  });
 });
 
 describe("session rm", () => {
@@ -928,7 +962,15 @@ describe("session rm", () => {
     expect(ftsMatches(dbPath, "ROOTCANARYTEXT")).toBe(1);
     expect(ftsMatches(dbPath, "CHILDCANARYTEXT")).toBe(1);
 
-    const removed = await runCli(["--db", dbPath, "--no-sync", "session", "rm", String(rootId)]);
+    const removed = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "session",
+      "rm",
+      String(rootId),
+      "--yes",
+    ]);
     expect(removed.code).toBe(0);
     expect(removed.stdout).toContain(`deleted session ${rootId} (1 descendant)`);
     // The bytes stay readable in the file until a vacuum, so the hint is part
@@ -965,6 +1007,7 @@ describe("session rm", () => {
       "session",
       "rm",
       String(rootId),
+      "--yes",
     ]);
     expect(removed.code).toBe(0);
     expect(JSON.parse(removed.stdout)).toMatchObject({
@@ -980,6 +1023,146 @@ describe("session rm", () => {
     const removed = await runCli(["--db", dbPath, "--json", "--no-sync", "session", "rm", "4242"]);
     expect(removed.code).toBe(1);
     expect(JSON.parse(removed.stdout)).toMatchObject({ deleted: false, session_id: 4242 });
+  });
+
+  function seedLoneSession(dbPath: string): number {
+    const db = openDb(dbPath);
+    try {
+      return Number(
+        db
+          .query("INSERT INTO session (tool, source_session_id) VALUES ('claude_code', 'lone')")
+          .run().lastInsertRowid,
+      );
+    } finally {
+      closeDb(db);
+    }
+  }
+
+  function sessionCount(dbPath: string): number {
+    const db = openDb(dbPath);
+    try {
+      return (db.query("SELECT count(*) AS n FROM session").get() as { n: number }).n;
+    } finally {
+      closeDb(db);
+    }
+  }
+
+  test("refuses a tree delete without --yes and mutates nothing", async () => {
+    const dbPath = join(workDir, "session-rm-guard.db");
+    const { rootId } = seedTree(dbPath);
+
+    const refused = await runCli(["--db", dbPath, "--no-sync", "session", "rm", String(rootId)]);
+    expect(refused.code).toBe(2);
+    expect(refused.stderr).toContain("1 descendant");
+    expect(refused.stderr).toContain("--yes");
+    expect(refused.stdout).toBe("");
+
+    // There is no un-delete, so a refused guard has to leave the archive
+    // byte-for-byte as it found it.
+    expect(sessionCount(dbPath)).toBe(2);
+    expect(ftsMatches(dbPath, "ROOTCANARYTEXT")).toBe(1);
+    expect(ftsMatches(dbPath, "CHILDCANARYTEXT")).toBe(1);
+  });
+
+  test("a session with no descendants does not need --yes", async () => {
+    const dbPath = join(workDir, "session-rm-lone.db");
+    const id = seedLoneSession(dbPath);
+
+    const removed = await runCli(["--db", dbPath, "--no-sync", "session", "rm", String(id)]);
+    expect(removed.code).toBe(0);
+    expect(removed.stdout).toContain(`deleted session ${id} (0 descendants)`);
+    expect(sessionCount(dbPath)).toBe(0);
+  });
+
+  test("--dry-run reports the blast radius and mutates nothing", async () => {
+    const dbPath = join(workDir, "session-rm-dry.db");
+    const { rootId } = seedTree(dbPath);
+
+    const dry = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "session",
+      "rm",
+      String(rootId),
+      "--dry-run",
+    ]);
+    expect(dry.code).toBe(0);
+    expect(dry.stdout).toContain(`would delete session ${rootId} (1 descendant)`);
+    expect(sessionCount(dbPath)).toBe(2);
+    expect(ftsMatches(dbPath, "CHILDCANARYTEXT")).toBe(1);
+  });
+
+  test("--dry-run wins over --yes", async () => {
+    const dbPath = join(workDir, "session-rm-dry-yes.db");
+    const { rootId } = seedTree(dbPath);
+
+    const dry = await runCli([
+      "--db",
+      dbPath,
+      "--no-sync",
+      "session",
+      "rm",
+      String(rootId),
+      "--yes",
+      "--dry-run",
+    ]);
+    expect(dry.code).toBe(0);
+    expect(sessionCount(dbPath)).toBe(2);
+  });
+
+  test("--json marks a dry run and still deletes nothing", async () => {
+    const dbPath = join(workDir, "session-rm-dry-json.db");
+    const { rootId } = seedTree(dbPath);
+
+    const dry = await runCli([
+      "--db",
+      dbPath,
+      "--json",
+      "--no-sync",
+      "session",
+      "rm",
+      String(rootId),
+      "--dry-run",
+    ]);
+    expect(dry.code).toBe(0);
+    expect(JSON.parse(dry.stdout)).toMatchObject({
+      deleted: false,
+      dry_run: true,
+      session_id: rootId,
+      descendants: 1,
+    });
+    expect(sessionCount(dbPath)).toBe(2);
+  });
+
+  test("--json reports a refused guard", async () => {
+    const dbPath = join(workDir, "session-rm-guard-json.db");
+    const { rootId } = seedTree(dbPath);
+
+    const refused = await runCli([
+      "--db",
+      dbPath,
+      "--json",
+      "--no-sync",
+      "session",
+      "rm",
+      String(rootId),
+    ]);
+    expect(refused.code).toBe(2);
+    expect(JSON.parse(refused.stdout)).toMatchObject({
+      deleted: false,
+      session_id: rootId,
+      descendants: 1,
+    });
+    expect(sessionCount(dbPath)).toBe(2);
+  });
+
+  test("--dry-run still reports an unknown id as a miss", async () => {
+    const dbPath = join(workDir, "session-rm-dry-missing.db");
+    seedTree(dbPath);
+    const dry = await runCli(["--db", dbPath, "--no-sync", "session", "rm", "4242", "--dry-run"]);
+    expect(dry.code).toBe(1);
+    expect(dry.stderr).toContain("no session with id 4242");
   });
 
   test("is offered by shell completion", async () => {

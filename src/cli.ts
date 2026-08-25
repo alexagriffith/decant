@@ -530,38 +530,87 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     command
       .description("delete a session and its descendants from the archive")
       .argument("<id>", "session id", parseInteger)
-      .action((id: number) =>
+      .option("--yes", "confirm deleting a session that has descendants")
+      .option("--dry-run", "report what would be deleted, and delete nothing")
+      .action((id: number, commandOptions: { yes?: boolean; dryRun?: boolean }) =>
         run(() => {
           // Deliberately not readArchive(): deleting must not first re-ingest
           // the source directories, and the id came from a read that already
           // synced.
           const archive = openArchive(resolve());
           try {
+            const json = isJson(globals());
+            const writeJson = (value: unknown): void => {
+              io.writeOut(`${JSON.stringify(value, null, 2)}\n`);
+            };
+            const reportMiss = (): number => {
+              if (json) {
+                writeJson({ deleted: false, session_id: id, error: "session not found" });
+              } else {
+                io.writeErr(`error: no session with id ${id}\n`);
+              }
+              return 1;
+            };
+
             // Counted before the delete, because afterwards there is nothing
             // left to count.
-            const descendants = Math.max(sessionSubtreeIds(archive.db, id).length - 1, 0);
-            const deleted = setSessionUserState(archive.db, id, "deleted");
-            if (isJson(globals())) {
-              io.writeOut(
-                `${JSON.stringify(
-                  deleted
-                    ? { deleted: true, session_id: id, descendants }
-                    : { deleted: false, session_id: id, error: "session not found" },
-                  null,
-                  2,
-                )}\n`,
-              );
-            } else if (!deleted) {
-              io.writeErr(`error: no session with id ${id}\n`);
+            const subtree = sessionSubtreeIds(archive.db, id);
+            if (subtree.length === 0) {
+              return reportMiss();
+            }
+            const descendants = subtree.length - 1;
+            const plural = descendants === 1 ? "" : "s";
+
+            if (commandOptions.dryRun === true) {
+              if (json) {
+                writeJson({ deleted: false, dry_run: true, session_id: id, descendants });
+              } else if (!globals().quiet) {
+                io.writeOut(
+                  `would delete session ${id} (${descendants} descendant${plural})\n` +
+                    "nothing was deleted (--dry-run)\n",
+                );
+              }
+              return 0;
+            }
+
+            // Deletion has no un-delete. The rows go, tombstones stop every
+            // later sync from re-ingesting the source, and the only way back is
+            // editing two tables by hand. A mistyped id must not silently take
+            // a whole tree with it.
+            if (descendants > 0 && commandOptions.yes !== true) {
+              if (json) {
+                writeJson({
+                  deleted: false,
+                  session_id: id,
+                  descendants,
+                  error: "refusing to delete a session tree without --yes",
+                });
+              } else {
+                io.writeErr(
+                  `error: session ${id} has ${descendants} descendant${plural}; ` +
+                    `deleting it removes ${subtree.length} sessions\n` +
+                    "re-run with --yes to confirm, or --dry-run to preview\n",
+                );
+              }
+              return 2;
+            }
+
+            if (!setSessionUserState(archive.db, id, "deleted")) {
+              // Unreachable in practice: the subtree query above found the row
+              // on this same connection.
+              return reportMiss();
+            }
+            if (json) {
+              writeJson({ deleted: true, session_id: id, descendants });
             } else if (!globals().quiet) {
               io.writeOut(
-                `deleted session ${id} (${descendants} descendant${descendants === 1 ? "" : "s"})\n` +
+                `deleted session ${id} (${descendants} descendant${plural})\n` +
                   // SQLite frees the pages without zeroing them, so the
                   // transcript stays readable in the file until a vacuum.
                   "run `decant db vacuum` to release the freed pages\n",
               );
             }
-            return deleted ? 0 : 1;
+            return 0;
           } finally {
             closeDb(archive.db);
           }
@@ -1399,13 +1448,18 @@ function dbInfo(archive: Archive, options: { full?: boolean } = {}): DbInfo {
     options.full === true
       ? (archive.db
           .query(
+            // OCTET_LENGTH, not LENGTH: LENGTH counts characters on a TEXT
+            // column, which understates a non-ASCII archive by a third to a
+            // half. text_bytes is printed beside size_bytes, which is real
+            // bytes from statSync, so the two have to be the same unit.
+            //
             // block.tool_result and message.raw are stored but not indexed, so
             // this total is deliberately wider than what search can reach.
             `SELECT (SELECT COUNT(*) FROM block_fts) AS fts_rows,
-                    (SELECT COALESCE(SUM(LENGTH(raw)), 0) FROM message)
-                    + (SELECT COALESCE(SUM(LENGTH(COALESCE(text, ''))
-                                          + LENGTH(COALESCE(tool_input, ''))
-                                          + LENGTH(COALESCE(tool_result, ''))), 0)
+                    (SELECT COALESCE(SUM(OCTET_LENGTH(raw)), 0) FROM message)
+                    + (SELECT COALESCE(SUM(OCTET_LENGTH(COALESCE(text, ''))
+                                          + OCTET_LENGTH(COALESCE(tool_input, ''))
+                                          + OCTET_LENGTH(COALESCE(tool_result, ''))), 0)
                        FROM block) AS text_bytes`,
           )
           .get() as { fts_rows: number; text_bytes: number })
