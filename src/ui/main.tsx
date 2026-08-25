@@ -1645,21 +1645,9 @@ function SessionsView({
       </header>
 
       <div className="stat-grid sessions-stat-grid">
-        <StatCard
-          icon="sessions"
-          label="Sessions"
-          value={formatInt(cardSummary.sessions)}
-        />
-        <StatCard
-          icon="messages"
-          label="Messages"
-          value={formatInt(cardSummary.messages)}
-        />
-        <StatCard
-          icon="money"
-          label="Est. cost"
-          value={money(cardSummary.estimated_cost_usd)}
-        />
+        <StatCard icon="sessions" label="Sessions" value={formatInt(cardSummary.sessions)} />
+        <StatCard icon="messages" label="Messages" value={formatInt(cardSummary.messages)} />
+        <StatCard icon="money" label="Est. cost" value={money(cardSummary.estimated_cost_usd)} />
       </div>
 
       <section aria-busy={pageLoading} className="panel sessions-panel">
@@ -1871,11 +1859,7 @@ function ProjectsView({
           value={formatInt(projects.filter((project) => !project.is_worktree).length)}
         />
         <StatCard icon="folder" label="Worktrees" value={formatInt(worktrees.length)} />
-        <StatCard
-          icon="tools"
-          label="Activity sources"
-          value={formatInt(activitySources.size)}
-        />
+        <StatCard icon="tools" label="Activity sources" value={formatInt(activitySources.size)} />
       </div>
 
       <section className="panel">
@@ -4244,21 +4228,9 @@ function AnalyticsView({
       </header>
 
       <div className="stat-grid analytics-stat-grid">
-        <StatCard
-          icon="sessions"
-          label="Sessions"
-          value={formatInt(data.summary?.sessions ?? 0)}
-        />
-        <StatCard
-          icon="messages"
-          label="Messages"
-          value={formatInt(data.summary?.messages ?? 0)}
-        />
-        <StatCard
-          icon="bolt"
-          label="Tool calls"
-          value={formatInt(data.summary?.tool_calls ?? 0)}
-        />
+        <StatCard icon="sessions" label="Sessions" value={formatInt(data.summary?.sessions ?? 0)} />
+        <StatCard icon="messages" label="Messages" value={formatInt(data.summary?.messages ?? 0)} />
+        <StatCard icon="bolt" label="Tool calls" value={formatInt(data.summary?.tool_calls ?? 0)} />
         <StatCard
           icon="download"
           label="Input tokens"
@@ -5681,15 +5653,7 @@ type IconName =
   | "upload"
   | "x";
 
-function StatCard({
-  icon,
-  label,
-  value,
-}: {
-  icon: IconName;
-  label: string;
-  value: string;
-}) {
+function StatCard({ icon, label, value }: { icon: IconName; label: string; value: string }) {
   return (
     <div className="stat-card">
       <div>
@@ -7378,11 +7342,7 @@ function ToolsView({
       </header>
 
       <section aria-label="Tool call summary" className="stat-grid tool-stat-grid">
-        <StatCard
-          icon="tools"
-          label="Total calls"
-          value={formatInt(aggregate.totalCalls)}
-        />
+        <StatCard icon="tools" label="Total calls" value={formatInt(aggregate.totalCalls)} />
         <StatCard
           icon="info"
           label="Error rate"

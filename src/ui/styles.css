@@ -5689,11 +5689,17 @@ pre {
 /* ===========================================================================
  * Responsive. Breakpoint order is asserted by test/ui-responsive-styles.test.ts
  * =========================================================================== */
-@media (max-width: 1200px) {
+/* The sidebar is visible above 1200px and collapses at or below it, so the
+ * content area jumps ~300px at that boundary. Six columns only stay one line
+ * per label above ~1294px viewport; drop to three before that rather than ship
+ * a band where two labels wrap and every card grows taller. */
+@media (max-width: 1320px) {
   .analytics-stat-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+}
 
+@media (max-width: 1200px) {
   .mobile-only {
     display: inline-grid;
   }

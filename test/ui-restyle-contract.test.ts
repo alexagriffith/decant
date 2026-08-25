@@ -35,7 +35,13 @@ describe("restyle contract", () => {
     // Six cards, so every column count it declares must divide six exactly.
     // `auto-fit` used to pick whatever fitted -- five columns anywhere between
     // 980px and 1151px -- which left the sixth card alone against an empty row.
-    const markup = main.slice(main.indexOf('"stat-grid analytics-stat-grid"'));
+    // Guard the marker so a renamed or reordered class names itself rather than
+    // reporting a card count of zero. Note the slice assumes the grid stays
+    // inline in this component at six-space indent; extracting it would shift
+    // the closing tag and inflate the count rather than fail cleanly.
+    const marker = main.indexOf('"stat-grid analytics-stat-grid"');
+    expect(marker).toBeGreaterThanOrEqual(0);
+    const markup = main.slice(marker);
     const grid = markup.slice(0, markup.indexOf("\n      </div>"));
     const cards = grid.match(/<StatCard/g)?.length ?? 0;
     expect(cards).toBe(6);
