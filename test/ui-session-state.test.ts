@@ -27,4 +27,12 @@ describe("session state UI", () => {
     expect(DELETE_SESSION_EXPLANATION).toContain("source JSONL files on disk are not changed");
     expect(DELETE_SESSION_EXPLANATION).toContain("future syncs from restoring");
   });
+
+  test("delete confirmation does not promise more than a row delete gives", () => {
+    // SQLite frees the pages without zeroing them, so the transcript text stays
+    // greppable in the archive file until a vacuum rewrites it. Copy that says
+    // "permanently" without saying that is wrong where it matters most.
+    expect(DELETE_SESSION_EXPLANATION).not.toContain("permanently");
+    expect(DELETE_SESSION_EXPLANATION).toContain("decant db vacuum");
+  });
 });

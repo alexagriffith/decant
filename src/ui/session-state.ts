@@ -6,9 +6,10 @@ export interface SessionArchiveView {
 }
 
 export const DELETE_SESSION_EXPLANATION =
-  "This permanently removes this session and its subagent transcripts from the Decant archive. " +
+  "This removes this session and its subagent transcripts from the Decant archive. " +
   "The source JSONL files on disk are not changed. A deletion tombstone prevents future syncs " +
-  "from restoring these sessions.";
+  "from restoring these sessions. SQLite frees the deleted rows without overwriting them, so " +
+  "their text stays readable inside the archive file until you run `decant db vacuum`.";
 
 export function archiveActionFor(
   session: SessionArchiveView,
