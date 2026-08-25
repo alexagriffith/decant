@@ -95,6 +95,7 @@ describe("activity bucket classifier", () => {
       expect(countSearches("Bash", '{"command":"/usr/bin/grep -rn foo"}')).toBe(1);
       expect(countSearches("exec_command", '"{\\"cmd\\":\\"rg TODO\\"}"')).toBe(1);
       expect(countSearches("Bash", '{"command":"cat README.md"}')).toBe(0);
+      expect(countSearches("Bash", '{"command":"git grep -n foo"}')).toBe(1);
     });
 
     test("countSearches: compound statements count each search", () => {
@@ -108,6 +109,11 @@ describe("activity bucket classifier", () => {
     });
 
     test("countSearches: MCP tools named like shells do not count", () => {
+      // "exec" has no dot, so localToolName would leave it unchanged anyway --
+      // this line returns 0 with or without the mcp__ guard. The dotted case
+      // below is the one that actually exercises the guard: localToolName
+      // would flatten it to "shell" (a SHELL_TOOLS name) if the mcp__ check
+      // didn't short-circuit first. Don't drop the dotted case as redundant.
       expect(countSearches("mcp__posthog__exec", '{"command":"rg foo"}')).toBe(0);
       expect(countSearches("mcp__codex_apps__x.shell", '{"command":"rg foo"}')).toBe(0);
     });

@@ -850,14 +850,14 @@ function searchHeavy(db: Database, visibleSession: string): Recommendation[] {
   const namePredicate = SEARCH_CANDIDATE_TOOLS.map(
     (name) => `lower(tc.tool_name) = '${name}' OR lower(tc.tool_name) LIKE '%.${name}'`,
   ).join(" OR ");
-  const rows = queryRows<{ session_id: string; tool_name: string; input: string | null }>(
+  const rows = queryRows<{ session_id: number; tool_name: string; input: string | null }>(
     db,
     `SELECT tc.session_id AS session_id, tc.tool_name AS tool_name, tc.input AS input
        FROM tool_call tc JOIN session s ON s.id = tc.session_id
       WHERE ${WINDOW} AND ${visibleSession} AND (${namePredicate})`,
   );
   let searches = 0;
-  const searchSessions = new Set<string>();
+  const searchSessions = new Set<number>();
   for (const row of rows) {
     const found = countSearches(row.tool_name, row.input);
     if (found > 0) {
