@@ -173,7 +173,9 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   const program = new Command();
   program
     .name("decant")
-    .description("analyze Claude Code and Codex sessions: tokens, context windows, and cost")
+    .description(
+      "analyze Claude Code, Codex, and Gemini CLI sessions: tokens, context windows, and cost",
+    )
     .version(DECANT_VERSION)
     .exitOverride()
     .configureOutput({
@@ -213,6 +215,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
   const runSync = (commandOptions: {
     claudeDir?: string;
     codexDir?: string;
+    geminiDir?: string;
     path?: string[];
   }): number => {
     const missingPath = commandOptions.path?.find((path) => !existsSync(path));
@@ -222,7 +225,11 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     }
 
     const archive = openArchive(
-      resolve({ claudeDir: commandOptions.claudeDir, codexDir: commandOptions.codexDir }),
+      resolve({
+        claudeDir: commandOptions.claudeDir,
+        codexDir: commandOptions.codexDir,
+        geminiDir: commandOptions.geminiDir,
+      }),
     );
     try {
       const report = ingestSync(archive.db, {
@@ -273,14 +280,20 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .description("scan session directories and upsert new or changed sessions")
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
+    .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")
     .option(
       "--path <path>",
       "ingest only this source file or directory (repeatable)",
       collectOption,
       [] as string[],
     )
-    .action((commandOptions: { claudeDir?: string; codexDir?: string; path?: string[] }) =>
-      run(() => runSync(commandOptions)),
+    .action(
+      (commandOptions: {
+        claudeDir?: string;
+        codexDir?: string;
+        geminiDir?: string;
+        path?: string[];
+      }) => run(() => runSync(commandOptions)),
     );
 
   // Terminal rendering only. Under `serve`, server.ts's applyWatchEvent already
@@ -301,6 +314,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .description("watch session directories and keep the session log index current")
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
+    .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -313,6 +327,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
       (commandOptions: {
         claudeDir?: string;
         codexDir?: string;
+        geminiDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -321,6 +336,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           const config = resolve({
             claudeDir: commandOptions.claudeDir,
             codexDir: commandOptions.codexDir,
+            geminiDir: commandOptions.geminiDir,
           });
           const stop = waitForProcessSignal();
           const handle = startWatch({
@@ -344,6 +360,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
     .option("--port <n>", "port to bind", parseInteger, DEFAULT_SERVE_PORT)
     .option("--claude-dir <dir>", "override the Claude projects directory")
     .option("--codex-dir <dir>", "override the Codex home directory")
+    .option("--gemini-dir <dir>", "override the Gemini CLI tmp directory")
     .option("--interval-ms <ms>", "fallback sweep interval", parseInteger, DEFAULT_SYNC_INTERVAL_MS)
     .option(
       "--debounce-ms <ms>",
@@ -365,6 +382,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
         port?: number;
         claudeDir?: string;
         codexDir?: string;
+        geminiDir?: string;
         intervalMs?: number;
         debounceMs?: number;
         fsWatch?: boolean;
@@ -375,6 +393,7 @@ export async function runCli(argv: string[], options: CliRunOptions = {}): Promi
           const config = resolve({
             claudeDir: commandOptions.claudeDir,
             codexDir: commandOptions.codexDir,
+            geminiDir: commandOptions.geminiDir,
           });
           // Without this, --no-sync (and DECANT_NO_SYNC) were accepted here and
           // silently ignored: serve's watcher kept ingesting the source

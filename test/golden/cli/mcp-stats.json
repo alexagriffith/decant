@@ -36,6 +36,15 @@
     "last_used_at": "2026-05-06T09:00:13.000Z"
   },
   {
+    "mcp_server": "docs",
+    "tools": 1,
+    "calls": 1,
+    "errors": 0,
+    "p50_ms": 1000,
+    "p95_ms": 1000,
+    "last_used_at": "2026-06-03T10:00:02.000Z"
+  },
+  {
     "mcp_server": "exa",
     "tools": 1,
     "calls": 1,

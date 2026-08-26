@@ -8,7 +8,7 @@ service, bearer token, or second application process.
 ## Data flow
 
 ```text
-~/.claude + ~/.codex
+~/.claude + ~/.codex + ~/.gemini
         |
         v
 discover -> parse -> normalize -> enrich -> ingest
@@ -45,10 +45,12 @@ codes belong in `src/cli.ts`; HTTP status and error-envelope policy belong in
 
 ## Parsing and ingest
 
-Each source file produces one normalized session. Parsers retain canonical raw
-records while mapping provider-specific roles, blocks, usage, tool calls, and
-lineage into shared tables. Malformed lines and unknown record types become
-diagnostics rather than aborting the file.
+Each source file produces one normalized session. The source implementations
+in `src/sources/claude.ts`, `src/sources/codex.ts`, and
+`src/sources/gemini.ts` retain canonical raw records while mapping
+provider-specific roles, blocks, usage, tool calls, and lineage into shared
+tables. Malformed lines and unknown record types become diagnostics rather
+than aborting the file.
 
 Ingest uses file metadata and hashes to avoid unnecessary work. A changed
 session is replaced transactionally, then Decant materializes context-window

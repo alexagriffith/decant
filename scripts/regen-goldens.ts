@@ -31,19 +31,27 @@ function requireReviewedDiff(): void {
 function stageFixtures(caseDir: string, fixtures: string[]): IngestConfig {
   const claudeDir = join(caseDir, "sources", "claude");
   const codexDir = join(caseDir, "sources", "codex");
+  const geminiDir = join(caseDir, "sources", "gemini");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
+  mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
   for (const fixture of fixtures) {
     const source = join(repoRoot, fixture);
     const name = basename(source);
     if (fixture.startsWith("fixtures/claude/")) copyFileSync(source, join(claudeDir, name));
     else if (fixture.startsWith("fixtures/codex/")) {
       copyFileSync(source, join(codexDir, "sessions", `rollout-${name}`));
+    } else if (fixture.startsWith("fixtures/gemini/")) {
+      copyFileSync(source, join(geminiDir, "synthetic-project", "chats", `session-${name}`));
     } else {
       throw new Error(`Unsupported golden fixture path: ${fixture}`);
     }
   }
-  return { claudeDir, codexDir };
+  writeFileSync(
+    join(geminiDir, "synthetic-project", ".project_root"),
+    "/synthetic/gemini-project\n",
+  );
+  return { claudeDir, codexDir, geminiDir };
 }
 
 function canonicalizeRows(value: unknown, caseDir: string): unknown {

@@ -2,8 +2,8 @@
 
 Decant reads coding-agent logs into a local SQLite archive. The source logs and
 the archive have different jobs: source JSONL is the durable record produced by
-Claude Code or Codex; `~/.decant/decant.db` is a searchable, rebuildable index
-plus Decant-owned user state.
+Claude Code, Codex, or Gemini CLI; `~/.decant/decant.db` is a searchable,
+rebuildable index plus Decant-owned user state.
 
 Nothing in this lifecycle uploads transcripts or calls a hosted service. It does
 copy them onto your disk. See
@@ -16,7 +16,10 @@ By default Decant discovers:
 
 - Claude Code sessions under `~/.claude/projects`;
 - Codex sessions under `~/.codex/sessions` and source-archived sessions under
-  `~/.codex/archived_sessions`.
+  `~/.codex/archived_sessions`;
+- Gemini CLI sessions under `~/.gemini/tmp/<project>/chats`. Decant reads the
+  adjacent `.project_root` sidecar for the workspace path and leaves the
+  project unset when that sidecar is absent or empty.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
 Unchanged files are skipped by metadata and content checks. Watch mode combines
@@ -195,9 +198,9 @@ a Decant user override does not move or rewrite provider files.
 
 Deleting a session tree removes its transcript-derived rows from Decant and
 prevents the configured source from re-ingesting that identity. The original
-Claude Code or Codex log remains on disk. If the source record must also be
-removed, manage it through the owning tool or delete that source file only
-after deciding that losing the original transcript is intended.
+Claude Code, Codex, or Gemini CLI log remains on disk. If the source record
+must also be removed, manage it through the owning tool or delete that source
+file only after deciding that losing the original transcript is intended.
 
 Removing the rows may leave their text recoverable in freed pages. For a session
 that was sensitive enough to delete, run both commands:

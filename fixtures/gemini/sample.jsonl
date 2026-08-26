@@ -1,0 +1,6 @@
+{"sessionId":"gemini-synthetic","projectHash":"synthetic-project","startTime":"2026-06-01T10:00:00.000Z","lastUpdated":"2026-06-01T10:00:04.000Z","kind":"chat"}
+{"id":"user-1","timestamp":"2026-06-01T10:00:01.000Z","type":"user","content":[{"text":"Inspect the synthetic example."}]}
+{"id":"assistant-1","timestamp":"2026-06-01T10:00:02.000Z","type":"gemini","model":"example-model","content":[{"text":"I will inspect the file."}],"tokens":{"input":10,"output":4,"cached":3,"thoughts":2},"toolCalls":[{"id":"call-1","name":"read_file","args":{"file_path":"/tmp/example.txt"},"result":[{"functionResponse":{"id":"call-1","name":"read_file","response":{"output":"example"}}}],"status":"success","timestamp":"2026-06-01T10:00:02.500Z"}],"thoughts":[{"text":"Read the requested file."}]}
+{"id":"tool-1","timestamp":"2026-06-01T10:00:03.000Z","type":"user","content":[{"functionResponse":{"id":"call-1","name":"read_file","response":{"output":"example"}}}]}
+{"id":"assistant-2","timestamp":"2026-06-01T10:00:04.000Z","type":"gemini","model":"example-model","content":"The synthetic file contains example text.","tokens":{"input":5,"output":6,"cached":1,"thoughts":0}}
+{"$set":{"messages":[],"lastUpdated":"2026-06-01T10:00:04.000Z"}}

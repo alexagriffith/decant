@@ -16,5 +16,14 @@
     "reasoning_tokens": 140,
     "est_reasoning_tokens": 0,
     "estimated_cost_usd": 0.00985
+  },
+  {
+    "key": "example-model",
+    "sessions": 2,
+    "input_tokens": 18,
+    "output_tokens": 11,
+    "reasoning_tokens": 2,
+    "est_reasoning_tokens": 0,
+    "estimated_cost_usd": 0
   }
 ]

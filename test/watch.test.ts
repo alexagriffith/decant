@@ -24,12 +24,15 @@ function freshConfig(): Config {
   const root = join(workDir, `case-${caseCounter}`);
   const claudeDir = join(root, "claude", "projects");
   const codexDir = join(root, "codex");
+  const geminiDir = join(root, "gemini");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
+  mkdirSync(geminiDir, { recursive: true });
   return {
     dbPath: join(root, "archive.db"),
     claudeDir,
     codexDir,
+    geminiDir,
   };
 }
 
@@ -61,7 +64,11 @@ function onceSync(events: WatchEvent[]): Promise<SyncEvent> {
 describe("watch mode", () => {
   test("watchDirs returns existing source directories only", () => {
     const config = freshConfig();
-    expect(watchDirs(config)).toEqual([config.claudeDir, join(config.codexDir, "sessions")]);
+    expect(watchDirs(config)).toEqual([
+      config.claudeDir,
+      join(config.codexDir, "sessions"),
+      config.geminiDir,
+    ]);
   });
 
   test("runSyncOnce updates status around a real ingest", () => {

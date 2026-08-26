@@ -1403,13 +1403,15 @@ components:
       additionalProperties: true
     Config:
       type: object
-      required: [dbPath, claudeDir, codexDir, version]
+      required: [dbPath, claudeDir, codexDir, geminiDir, version]
       properties:
         dbPath:
           type: string
         claudeDir:
           type: string
         codexDir:
+          type: string
+        geminiDir:
           type: string
         version:
           type: string
