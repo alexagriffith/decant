@@ -330,7 +330,7 @@ function toolResultIsError(response: Json | undefined): boolean | null {
     return true;
   }
   const error = get(response, "error");
-  if (error != null) {
+  if (error != null && error !== false && error !== "") {
     return true;
   }
   return false;

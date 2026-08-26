@@ -1060,7 +1060,7 @@ describe("sync", () => {
       source_session_id: "gemini-synthetic",
       root_path: "/synthetic/gemini-project",
     });
-    db.close();
+    closeDb(db);
   });
 
   test("does not treat a hash-named Gemini cache directory as a project", () => {
@@ -1082,7 +1082,7 @@ describe("sync", () => {
         .query("SELECT project_id, cwd FROM session WHERE source_session_id = 'gemini-synthetic'")
         .get(),
     ).toEqual({ project_id: null, cwd: null });
-    db.close();
+    closeDb(db);
   });
 
   test("discover skips workflow journal files", () => {

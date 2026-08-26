@@ -143,6 +143,52 @@ describe("parseGeminiSession", () => {
     });
   });
 
+  test("does not mark explicit false or empty error values as failures", () => {
+    const content = [
+      JSON.stringify({ sessionId: "gemini-success", startTime: "2026-06-03T10:00:00.000Z" }),
+      JSON.stringify({
+        id: "calls",
+        timestamp: "2026-06-03T10:00:01.000Z",
+        type: "gemini",
+        model: "example-model",
+        content: [],
+        toolCalls: [
+          { id: "call-false", name: "read_file", args: {} },
+          { id: "call-empty", name: "read_file", args: {} },
+        ],
+      }),
+      JSON.stringify({
+        id: "results",
+        timestamp: "2026-06-03T10:00:02.000Z",
+        type: "user",
+        content: [
+          {
+            functionResponse: {
+              id: "call-false",
+              name: "read_file",
+              response: { error: false },
+            },
+          },
+          {
+            functionResponse: {
+              id: "call-empty",
+              name: "read_file",
+              response: { error: "" },
+            },
+          },
+        ],
+      }),
+    ].join("\n");
+
+    const parsed = parseGeminiSession("fallback", content, null);
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.session.messages[1]?.blocks).toHaveLength(2);
+    expect(parsed.session.messages[1]?.blocks.map((block) => block.isError)).toEqual([
+      false,
+      false,
+    ]);
+  });
+
   test("retains repeated tool responses without duplicating their linkage", () => {
     const content = [
       JSON.stringify({ sessionId: "gemini-repeat", startTime: "2026-06-04T10:00:00.000Z" }),
