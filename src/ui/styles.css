@@ -1291,6 +1291,49 @@ nav a[aria-current="page"] svg {
   padding: 0 10px;
 }
 
+.date-range-buttons .date-range-select {
+  width: 9rem;
+}
+
+.date-range-buttons .date-range-select select {
+  min-width: 9rem;
+  min-height: 28px;
+  height: 28px;
+  border: 0;
+  background-color: transparent;
+  color: var(--fg-primary);
+  font-size: 13px;
+  font-weight: var(--font-weight-strong);
+  padding: 0 28px 0 10px;
+}
+
+.date-range-buttons .date-range-select svg {
+  right: 9px;
+}
+
+.custom-date-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.custom-date-range label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.custom-date-range label > span {
+  color: var(--muted);
+  font-weight: var(--font-weight-strong);
+}
+
+.custom-date-range input {
+  width: 9.25rem;
+  min-height: 32px;
+  font-size: 12px;
+}
+
 .date-range-buttons button:hover {
   background: var(--bg-components-ghost-ghost-hover);
   color: var(--fg);

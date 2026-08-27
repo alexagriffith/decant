@@ -93,6 +93,17 @@ import {
   layoutContextTooltip,
 } from "./context-window-layout.ts";
 import { contextWindowDisplayMode, isFullCacheMiss } from "./context-window-state.ts";
+import {
+  ALL_DATE_RANGE,
+  applyDatePreset,
+  type DateRangeSelection,
+  dateRangeLabel,
+  dateRangeQuery,
+  RANGE_PRESETS,
+  type RangePreset,
+  shiftDateRange,
+  withDateQuery,
+} from "./date-range.ts";
 import { fullDateTime, relativeTime, sessionListDate } from "./date-time.ts";
 import { dosuBadgeAriaLabel, dosuBadgeVisualLabel, dosuEvidenceSummary } from "./dosu-badge.ts";
 import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "./dosu-cta.ts";
@@ -679,26 +690,12 @@ const SESSION_TABLE_SKELETON_KEYS = Array.from(
 );
 const EMPTY_SESSION_IDS = new Set<number>();
 type ThemeChoice = "system" | "light" | "dark";
-type RangePreset = "7d" | "30d" | "90d" | "all" | "custom";
-type DateRangeSelection = {
-  preset: RangePreset;
-  from: string | null;
-  to: string | null;
-};
-
 function versionLabel(version: string | null | undefined): string {
   if (version == null || version === "") {
     return "local checkout";
   }
   return version === "dev" || version.startsWith("v") ? version : `v${version}`;
 }
-
-const RANGE_PRESETS = [
-  { key: "7d", label: "7d", days: 7 },
-  { key: "30d", label: "30d", days: 30 },
-  { key: "90d", label: "90d", days: 90 },
-] as const;
-const ALL_DATE_RANGE: DateRangeSelection = { preset: "all", from: null, to: null };
 
 type LoadedSessionPage = {
   exhausted: boolean;
@@ -6094,6 +6091,20 @@ function DateRangeControl({
   range: DateRangeSelection;
   onChange: (range: DateRangeSelection) => void;
 }) {
+  const choosePreset = (value: RangePreset) => {
+    if (value === "all") {
+      onChange(ALL_DATE_RANGE);
+      return;
+    }
+    if (value === "custom") {
+      const seeded =
+        range.from != null && range.to != null ? range : applyDatePreset("30d", bounds);
+      onChange({ ...seeded, preset: "custom" });
+      return;
+    }
+    onChange(applyDatePreset(value, bounds));
+  };
+
   return (
     <div className="date-range-control">
       <div className="date-range-buttons">
@@ -6107,23 +6118,22 @@ function DateRangeControl({
             <Icon name="chevronLeft" />
           </button>
         ) : null}
-        <button
-          aria-pressed={range.preset === "all"}
-          onClick={() => onChange(ALL_DATE_RANGE)}
-          type="button"
-        >
-          All time
-        </button>
-        {RANGE_PRESETS.map((preset) => (
-          <button
-            aria-pressed={range.preset === preset.key}
-            key={preset.key}
-            onClick={() => onChange(applyDatePreset(preset.key, bounds))}
-            type="button"
+        <span className="date-range-select select-shell">
+          <select
+            aria-label="Time range"
+            onChange={(event) => choosePreset(event.target.value as RangePreset)}
+            value={range.preset}
           >
-            {preset.label}
-          </button>
-        ))}
+            <option value="all">All time</option>
+            {RANGE_PRESETS.map((preset) => (
+              <option key={preset.key} value={preset.key}>
+                {preset.label}
+              </option>
+            ))}
+            <option value="custom">Custom range</option>
+          </select>
+          <Icon name="chevronDown" />
+        </span>
         {range.from != null && range.to != null ? (
           <button
             aria-label="Next period"
@@ -6135,10 +6145,40 @@ function DateRangeControl({
           </button>
         ) : null}
       </div>
-      {/* The label spells out a custom range ("Jun 3 to Jun 17"). For "all" it
-       * returns "All time", which is now exactly what the selected button reads,
-       * so showing it twice just looks like a bug. */}
-      {range.preset === "all" ? null : <span>{dateRangeLabel(range)}</span>}
+      {range.preset === "custom" ? (
+        <div className="custom-date-range">
+          <label>
+            <span>From</span>
+            <input
+              aria-label="From date"
+              max={range.to ?? undefined}
+              onChange={(event) =>
+                onChange({ ...range, from: event.target.value || null, preset: "custom" })
+              }
+              type="date"
+              value={range.from ?? ""}
+            />
+          </label>
+          <span aria-hidden="true">to</span>
+          <label>
+            <span>To</span>
+            <input
+              aria-label="To date"
+              min={range.from ?? undefined}
+              onChange={(event) =>
+                onChange({ ...range, preset: "custom", to: event.target.value || null })
+              }
+              type="date"
+              value={range.to ?? ""}
+            />
+          </label>
+        </div>
+      ) : null}
+      {/* Presets show their exact dates below the control. All time and custom
+       * already communicate their state in the select and date inputs. */}
+      {range.preset === "all" || range.preset === "custom" ? null : (
+        <span>{dateRangeLabel(range)}</span>
+      )}
     </div>
   );
 }
@@ -11067,106 +11107,6 @@ function scrollTranscriptMessage(seq: number, stabilize = false, isCurrent = () 
     }
   };
   requestAnimationFrame(() => requestAnimationFrame(realign));
-}
-
-function applyDatePreset(
-  key: (typeof RANGE_PRESETS)[number]["key"],
-  bounds: DateBounds | null,
-): DateRangeSelection {
-  const preset = RANGE_PRESETS.find((item) => item.key === key);
-  const to = validIsoDate(bounds?.max) ?? todayIsoDate();
-  if (preset == null) {
-    return ALL_DATE_RANGE;
-  }
-  return {
-    preset: key,
-    from: addDays(to, -(preset.days - 1)),
-    to,
-  };
-}
-
-function shiftDateRange(range: DateRangeSelection, direction: -1 | 1): DateRangeSelection {
-  if (range.from == null || range.to == null) {
-    return range;
-  }
-  const span = Math.max(1, daysBetween(range.from, range.to) + 1);
-  return {
-    preset: "custom",
-    from: addDays(range.from, span * direction),
-    to: addDays(range.to, span * direction),
-  };
-}
-
-function dateRangeQuery(range: DateRangeSelection): string {
-  const params = new URLSearchParams();
-  if (range.from != null) {
-    params.set("from", range.from);
-  }
-  if (range.to != null) {
-    params.set("to", range.to);
-  }
-  return params.toString();
-}
-
-function withDateQuery(path: string, dateQuery: string): string {
-  if (dateQuery === "") {
-    return path;
-  }
-  return `${path}${path.includes("?") ? "&" : "?"}${dateQuery}`;
-}
-
-function dateRangeLabel(range: DateRangeSelection): string {
-  if (range.from == null && range.to == null) {
-    return "All time";
-  }
-  if (range.from == null) {
-    return `Through ${formatDateLabel(range.to ?? "")}`;
-  }
-  if (range.to == null) {
-    return `From ${formatDateLabel(range.from)}`;
-  }
-  return range.from === range.to
-    ? formatDateLabel(range.from)
-    : `${formatDateLabel(range.from)} to ${formatDateLabel(range.to)}`;
-}
-
-function addDays(isoDate: string, days: number): string {
-  const date = parseIsoDate(isoDate) ?? new Date();
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function daysBetween(from: string, to: string): number {
-  const start = parseIsoDate(from)?.getTime() ?? 0;
-  const end = parseIsoDate(to)?.getTime() ?? start;
-  return Math.round((end - start) / 86_400_000);
-}
-
-function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function validIsoDate(value: string | null | undefined): string | null {
-  if (value == null || parseIsoDate(value) == null) {
-    return null;
-  }
-  return value;
-}
-
-function parseIsoDate(value: string): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return null;
-  }
-  const date = new Date(`${value}T00:00:00.000Z`);
-  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value ? null : date;
-}
-
-function formatDateLabel(value: string): string {
-  const date = parseIsoDate(value);
-  if (date == null) {
-    return value;
-  }
-  return date.toLocaleDateString(undefined, { month: "short", day: "2-digit", year: "numeric" });
 }
 
 function errorMessage(error: unknown): string {
