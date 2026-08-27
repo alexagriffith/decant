@@ -161,6 +161,7 @@ import {
   shareCardTitle,
 } from "./share-card.ts";
 import { collectSliceResults } from "./slice-loading.ts";
+import { DASHBOARD_SOURCES, type DashboardSource, sourceScopeQuery } from "./source-scope.ts";
 import { toolCallStatus } from "./tool-call-status.ts";
 import {
   clearToolCallFilters,
@@ -814,6 +815,7 @@ function App() {
     () => resolveActiveRoute(locationPath(), navItems) === "Insights",
   );
   const [dateRangeSelection, setDateRangeSelection] = useState<DateRangeSelection>(ALL_DATE_RANGE);
+  const [sourceSelection, setSourceSelection] = useState<DashboardSource>("");
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [localSyncing, setLocalSyncing] = useState(false);
@@ -828,12 +830,14 @@ function App() {
   const liveDroppedRef = useRef(false);
   const failedSlicesRef = useRef<DataSlice[]>([]);
   const dateQuery = dateRangeQuery(dateRangeSelection);
+  const activeView = resolveActiveRoute(path, navItems);
+  const dashboardQuery =
+    activeView === "Analytics" ? sourceScopeQuery(dateQuery, sourceSelection) : dateQuery;
   const sessionProject = sessionProjectFilter(path);
   const includeArchivedSessions = sessionIncludesArchived(path);
   const sessionPage = sessionPageFromPath(path);
   const refreshTimerRef = useRef<number | null>(null);
   const loadedSlicesRef = useRef(new Map<DataSlice, string>());
-  const activeView = resolveActiveRoute(path, navItems);
   const showsSessions = activeView === "Sessions";
   const sessionPageState = useSessionPage({
     dateQuery,
@@ -899,7 +903,7 @@ function App() {
 
   useEffect(() => {
     const sliceKey = (slice: DataSlice): string =>
-      SLICE_LOADERS[slice].dateScoped ? `${dateQuery}|${reloadKey}` : `${reloadKey}`;
+      SLICE_LOADERS[slice].dateScoped ? `${dashboardQuery}|${reloadKey}` : `${reloadKey}`;
     const needed = slicesForView(activeView);
     const relevantFailures = failedSlicesRef.current.filter((slice) => needed.includes(slice));
     failedSlicesRef.current = relevantFailures;
@@ -911,7 +915,7 @@ function App() {
       return;
     }
     let cancelled = false;
-    void Promise.allSettled(missing.map((slice) => SLICE_LOADERS[slice].load(dateQuery)))
+    void Promise.allSettled(missing.map((slice) => SLICE_LOADERS[slice].load(dashboardQuery)))
       .then((results) => {
         if (cancelled) {
           return;
@@ -933,7 +937,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeView, dateQuery, reloadKey]);
+  }, [activeView, dashboardQuery, reloadKey]);
 
   useEffect(() => {
     // Incrementing this key intentionally replaces the EventSource when the
@@ -1376,6 +1380,7 @@ function App() {
                   }
                   setDateRangeSelection(next);
                 },
+                onSourceChange: setSourceSelection,
                 refresh: requestRefresh,
                 reloadKey,
                 runSync,
@@ -1383,6 +1388,7 @@ function App() {
                 recommendationsLoading,
                 sessionPageState,
                 syncing: syncInProgress,
+                source: sourceSelection,
               })
             )}
           </div>
@@ -1419,6 +1425,7 @@ function renderView(
   actions: {
     dateRange: DateRangeSelection;
     onDateRangeChange: (range: DateRangeSelection) => void;
+    onSourceChange: (source: DashboardSource) => void;
     refresh: () => void;
     reloadKey: number;
     runSync: () => void;
@@ -1426,6 +1433,7 @@ function renderView(
     recommendationsLoading: boolean;
     sessionPageState: SessionPageState;
     syncing: boolean;
+    source: DashboardSource;
   },
 ) {
   const pathname = pathOnly(path);
@@ -1465,8 +1473,10 @@ function renderView(
           data={data}
           dateRange={actions.dateRange}
           onDateRangeChange={actions.onDateRangeChange}
+          onSourceChange={actions.onSourceChange}
           onSync={actions.runSync}
           syncing={actions.syncing}
+          source={actions.source}
         />
       );
     case "Insights":
@@ -4193,15 +4203,20 @@ function AnalyticsView({
   data,
   dateRange,
   onDateRangeChange,
+  onSourceChange,
   onSync,
   syncing,
+  source,
 }: {
   data: DashboardData;
   dateRange: DateRangeSelection;
   onDateRangeChange: (range: DateRangeSelection) => void;
+  onSourceChange: (source: DashboardSource) => void;
   onSync: () => void;
   syncing: boolean;
+  source: DashboardSource;
 }) {
+  const analyticsQuery = sourceScopeQuery(dateRangeQuery(dateRange), source);
   const [dosuDismissed, setDosuDismissed] = useState(
     () => localStorage.getItem(DOSU_ANALYTICS_DISMISSAL_KEY) === "1",
   );
@@ -4245,11 +4260,28 @@ function AnalyticsView({
         <div className="page-heading-actions">
           <ReportExportButton
             excluded={ANALYTICS_REPORT_NEVER_INCLUDES}
-            href={withDateQuery("/api/reports/analytics.html", dateRangeQuery(dateRange))}
+            href={withDateQuery("/api/reports/analytics.html", analyticsQuery)}
             includes={ANALYTICS_REPORT_INCLUDES}
-            previewHref={withDateQuery("/reports/analytics", dateRangeQuery(dateRange))}
+            previewHref={withDateQuery("/reports/analytics", analyticsQuery)}
             title="Review analytics report"
           />
+          <label className="source-filter-control">
+            <span className="sr-only">Source</span>
+            <span className="select-shell">
+              <select
+                aria-label="Source"
+                onChange={(event) => onSourceChange(event.target.value as DashboardSource)}
+                value={source}
+              >
+                {DASHBOARD_SOURCES.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <Icon name="chevronDown" />
+            </span>
+          </label>
           <DateRangeControl
             bounds={data.dateBounds}
             range={dateRange}

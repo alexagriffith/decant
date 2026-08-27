@@ -72,6 +72,34 @@ function seededEnriched(): Database {
 }
 
 describe("stats rollups", () => {
+  test("filters provider and client combinations from recorded session metadata", () => {
+    const db = freshDb();
+    const rows = [
+      [1, "claude_code", "claude", null],
+      [2, "codex", "codex-app", JSON.stringify({ originator: "Codex Desktop", source: "vscode" })],
+      [3, "codex", "codex-cli", JSON.stringify({ originator: "codex-tui", source: "cli" })],
+      [4, "gemini", "gemini-cli", JSON.stringify({ type: "session" })],
+      [5, "codex", "malformed-meta", "not-json"],
+    ] as const;
+    const insert = db.prepare(
+      `INSERT INTO session(id, tool, source_session_id, raw_meta, started_at)
+       VALUES (?1, ?2, ?3, ?4, '2026-08-26T12:00:00Z')`,
+    );
+    for (const row of rows) {
+      insert.run(...row);
+    }
+    insert.finalize();
+
+    expect(totals(db, { source: "claude_code" }).sessions).toBe(1);
+    expect(totals(db, { source: "codex_app" }).sessions).toBe(1);
+    expect(totals(db, { source: "codex_cli" }).sessions).toBe(1);
+    expect(totals(db, { source: "gemini_cli" }).sessions).toBe(1);
+    expect(byDimension(db, "tool", { source: "codex_app" })).toMatchObject([
+      { key: "codex", sessions: 1 },
+    ]);
+    db.close();
+  });
+
   test("all archive rollup modules use the database-aware visibility shortcut", () => {
     for (const file of ["token-economics.ts", "recommendations.ts", "distill.ts", "query.ts"]) {
       const source = readFileSync(join(import.meta.dir, "..", "src", file), "utf8");

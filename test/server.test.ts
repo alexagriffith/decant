@@ -1012,6 +1012,31 @@ describe("server routes", () => {
     });
   });
 
+  test("analytics routes filter combined provider and client sources", async () => {
+    const config = freshConfig();
+    seed(config);
+    const db = openDb(config.dbPath);
+    db.exec(`
+      UPDATE session
+      SET raw_meta = '{"originator":"Codex Desktop","source":"vscode"}'
+      WHERE tool = 'codex';
+    `);
+    db.close();
+
+    expect(await route(config, "/api/stats/summary?source=codex_app")).toMatchObject({
+      status: 200,
+      body: { sessions: 1 },
+    });
+    expect(await route(config, "/api/analytics/activity?source=codex_app")).toMatchObject({
+      status: 200,
+      body: { by_hour: expect.any(Array), by_weekday: expect.any(Array) },
+    });
+    expect(await route(config, "/api/stats/summary?source=unknown")).toMatchObject({
+      status: 400,
+      body: { code: "invalid_request", error: "unknown source" },
+    });
+  });
+
   test("returns metadata and extended analytics routes", async () => {
     const config = freshConfig();
     seed(config);

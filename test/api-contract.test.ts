@@ -348,6 +348,7 @@ describe("local API OpenAPI contract", () => {
         "from",
         "include_archived",
         "project",
+        "source",
         "to",
         "tool",
       ]);
@@ -356,6 +357,7 @@ describe("local API OpenAPI contract", () => {
         "from",
         "include_archived",
         "project",
+        "source",
         "to",
         "tool",
       ]);
