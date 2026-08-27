@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyDatePreset,
+  dateRangePresetLabel,
   dateRangeQuery,
+  formatDateLabel,
   RANGE_PRESETS,
   shiftDateRange,
   withDateQuery,
@@ -40,6 +42,20 @@ describe("dashboard date ranges", () => {
     expect(withDateQuery("/api/stats/summary", query)).toBe(
       "/api/stats/summary?from=2026-04-03&to=2026-05-17",
     );
+  });
+
+  test("keeps the compact control label independent from exact custom dates", () => {
+    expect(dateRangePresetLabel({ preset: "all", from: null, to: null })).toBe("All time");
+    expect(dateRangePresetLabel({ preset: "custom", from: "2026-04-03", to: "2026-05-17" })).toBe(
+      "Custom range",
+    );
+    expect(dateRangePresetLabel(applyDatePreset("30d", { min: null, max: "2026-08-26" }))).toBe(
+      "Last 30 days",
+    );
+  });
+
+  test("formats ISO calendar dates without shifting them to the local timezone", () => {
+    expect(formatDateLabel("2026-08-27")).toMatch(/(^|\D)27(\D|$)/);
   });
 
   test("moves custom ranges by their inclusive span", () => {

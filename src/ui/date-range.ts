@@ -81,6 +81,16 @@ export function dateRangeLabel(range: DateRangeSelection): string {
     : `${formatDateLabel(range.from)} to ${formatDateLabel(range.to)}`;
 }
 
+export function dateRangePresetLabel(range: DateRangeSelection): string {
+  if (range.preset === "all") {
+    return "All time";
+  }
+  if (range.preset === "custom") {
+    return "Custom range";
+  }
+  return RANGE_PRESETS.find((preset) => preset.key === range.preset)?.label ?? "All time";
+}
+
 export function addDays(isoDate: string, days: number): string {
   const date = parseIsoDate(isoDate) ?? new Date();
   date.setUTCDate(date.getUTCDate() + days);
@@ -117,5 +127,10 @@ export function formatDateLabel(value: string): string {
   if (date == null) {
     return value;
   }
-  return date.toLocaleDateString(undefined, { month: "short", day: "2-digit", year: "numeric" });
+  return date.toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+    year: "numeric",
+  });
 }
