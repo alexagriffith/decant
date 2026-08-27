@@ -2,11 +2,21 @@ import { describe, expect, test } from "bun:test";
 import {
   applyDatePreset,
   dateRangeQuery,
+  RANGE_PRESETS,
   shiftDateRange,
   withDateQuery,
 } from "../src/ui/date-range.ts";
 
 describe("dashboard date ranges", () => {
+  test("offers the supported relative ranges in display order", () => {
+    expect(RANGE_PRESETS).toEqual([
+      { key: "today", label: "Today", days: 1 },
+      { key: "7d", label: "Last 7 days", days: 7 },
+      { key: "30d", label: "Last 30 days", days: 30 },
+      { key: "90d", label: "Last 90 days", days: 90 },
+    ]);
+  });
+
   test("scopes Today to the current calendar date", () => {
     const today = new Date().toISOString().slice(0, 10);
     expect(applyDatePreset("today", { min: "2026-01-01", max: "2026-08-26" })).toEqual({
