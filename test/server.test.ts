@@ -1031,6 +1031,26 @@ describe("server routes", () => {
       status: 200,
       body: { by_hour: expect.any(Array), by_weekday: expect.any(Array) },
     });
+    expect(await route(config, "/api/metadata/session-sources")).toMatchObject({
+      status: 200,
+      body: [
+        { key: "claude_code", label: "Claude Code" },
+        { key: "codex_app", label: "Codex App" },
+      ],
+    });
+    const codexSessions = await route(config, "/api/sessions?tool=codex");
+    const codexId = (codexSessions.body as { id: number }[])[0]?.id;
+    expect(codexId).toBeNumber();
+    expect(
+      await route(config, `/api/sessions/${codexId}/state`, {
+        method: "POST",
+        body: JSON.stringify({ state: "archived" }),
+      }),
+    ).toMatchObject({ status: 200, body: { state: "archived" } });
+    expect(await route(config, "/api/metadata/session-sources")).toMatchObject({
+      status: 200,
+      body: [{ key: "claude_code", label: "Claude Code" }],
+    });
     expect(await route(config, "/api/stats/summary?source=unknown")).toMatchObject({
       status: 400,
       body: { code: "invalid_request", error: "unknown source" },

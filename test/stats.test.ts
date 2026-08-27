@@ -7,6 +7,7 @@ import { openDb } from "../src/db.ts";
 import type { Operation } from "../src/enrich.ts";
 import { upsertSession } from "../src/ingest.ts";
 import { sessionUserStatePredicateForDatabase } from "../src/session-user-state.ts";
+import { availableSessionSources } from "../src/source-filter.ts";
 import { parseClaudeSession } from "../src/sources/claude.ts";
 import { parseCodexSession } from "../src/sources/codex.ts";
 import {
@@ -80,6 +81,12 @@ describe("stats rollups", () => {
       [3, "codex", "codex-cli", JSON.stringify({ originator: "codex-tui", source: "cli" })],
       [4, "gemini", "gemini-cli", JSON.stringify({ type: "session" })],
       [5, "codex", "malformed-meta", "not-json"],
+      [
+        6,
+        "codex",
+        "codex-app-conflict",
+        JSON.stringify({ originator: "Codex Desktop", source: "cli" }),
+      ],
     ] as const;
     const insert = db.prepare(
       `INSERT INTO session(id, tool, source_session_id, raw_meta, started_at)
@@ -91,11 +98,17 @@ describe("stats rollups", () => {
     insert.finalize();
 
     expect(totals(db, { source: "claude_code" }).sessions).toBe(1);
-    expect(totals(db, { source: "codex_app" }).sessions).toBe(1);
+    expect(totals(db, { source: "codex_app" }).sessions).toBe(2);
     expect(totals(db, { source: "codex_cli" }).sessions).toBe(1);
     expect(totals(db, { source: "gemini_cli" }).sessions).toBe(1);
     expect(byDimension(db, "tool", { source: "codex_app" })).toMatchObject([
-      { key: "codex", sessions: 1 },
+      { key: "codex", sessions: 2 },
+    ]);
+    expect(availableSessionSources(db)).toEqual([
+      { key: "claude_code", label: "Claude Code" },
+      { key: "codex_app", label: "Codex App" },
+      { key: "codex_cli", label: "Codex CLI" },
+      { key: "gemini_cli", label: "Gemini CLI" },
     ]);
     db.close();
   });

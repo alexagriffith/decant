@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DASHBOARD_SOURCES, sourceScopeQuery } from "../src/ui/source-scope.ts";
+import { dashboardSourceOptions, sourceScopeQuery } from "../src/ui/source-scope.ts";
 
 describe("dashboard source scope", () => {
   test("combines source and date filters in one request scope", () => {
@@ -8,13 +8,16 @@ describe("dashboard source scope", () => {
     );
   });
 
-  test("uses only source labels backed by current local session formats", () => {
-    expect(DASHBOARD_SOURCES.map((source) => source.label)).toEqual([
-      "All sources",
-      "Claude Code",
-      "Codex App",
-      "Codex CLI",
-      "Gemini CLI",
+  test("offers only sources present in the archive", () => {
+    expect(
+      dashboardSourceOptions([
+        { key: "claude_code", label: "Claude Code" },
+        { key: "codex_cli", label: "Codex CLI" },
+      ]),
+    ).toEqual([
+      { key: "", label: "All sources" },
+      { key: "claude_code", label: "Claude Code" },
+      { key: "codex_cli", label: "Codex CLI" },
     ]);
   });
 });

@@ -64,6 +64,7 @@ import {
 } from "react";
 import { createPortal, flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
+import type { AvailableSessionSource } from "../source-filter.ts";
 import { previewOmittedCount } from "../tools.ts";
 import { ApiError, getJson } from "./api.ts";
 import dosuDecantUrl from "./assets/dosu-decant.png";
@@ -161,7 +162,7 @@ import {
   shareCardTitle,
 } from "./share-card.ts";
 import { collectSliceResults } from "./slice-loading.ts";
-import { DASHBOARD_SOURCES, type DashboardSource, sourceScopeQuery } from "./source-scope.ts";
+import { type DashboardSource, dashboardSourceOptions, sourceScopeQuery } from "./source-scope.ts";
 import { toolCallStatus } from "./tool-call-status.ts";
 import {
   clearToolCallFilters,
@@ -483,6 +484,7 @@ type DashboardData = {
   modelSparklines: ModelSparklines | null;
   tokenEconomics: TokenEconomics | null;
   dateBounds: DateBounds | null;
+  sessionSources: AvailableSessionSource[];
 };
 
 const emptyData: DashboardData = {
@@ -501,6 +503,7 @@ const emptyData: DashboardData = {
   modelSparklines: null,
   tokenEconomics: null,
   dateBounds: null,
+  sessionSources: [],
 };
 
 type DataSlice = keyof DashboardData;
@@ -603,6 +606,12 @@ const SLICE_LOADERS: Record<
     dateScoped: false,
     load: async () => ({ dateBounds: await getJson<DateBounds>("/api/date-bounds") }),
   },
+  sessionSources: {
+    dateScoped: false,
+    load: async () => ({
+      sessionSources: await getJson<AvailableSessionSource[]>("/api/metadata/session-sources"),
+    }),
+  },
 };
 
 // Slices the app shell itself renders (sidebar stats, sync button, pickers).
@@ -613,6 +622,7 @@ const ROUTE_SLICES: Record<string, DataSlice[]> = {
   Projects: ["projects"],
   Search: [],
   Analytics: [
+    "sessionSources",
     "byDay",
     "byModel",
     "byProject",
@@ -873,6 +883,15 @@ function App() {
   useEffect(() => {
     document.title = documentTitleFor(path, navItems);
   }, [path]);
+
+  useEffect(() => {
+    if (
+      sourceSelection !== "" &&
+      !data.sessionSources.some((source) => source.key === sourceSelection)
+    ) {
+      setSourceSelection("");
+    }
+  }, [data.sessionSources, sourceSelection]);
 
   useEffect(
     () => () => {
@@ -4217,6 +4236,7 @@ function AnalyticsView({
   source: DashboardSource;
 }) {
   const analyticsQuery = sourceScopeQuery(dateRangeQuery(dateRange), source);
+  const sourceOptions = dashboardSourceOptions(data.sessionSources);
   const [dosuDismissed, setDosuDismissed] = useState(
     () => localStorage.getItem(DOSU_ANALYTICS_DISMISSAL_KEY) === "1",
   );
@@ -4273,7 +4293,7 @@ function AnalyticsView({
                 onChange={(event) => onSourceChange(event.target.value as DashboardSource)}
                 value={source}
               >
-                {DASHBOARD_SOURCES.map((option) => (
+                {sourceOptions.map((option) => (
                   <option key={option.key} value={option.key}>
                     {option.label}
                   </option>

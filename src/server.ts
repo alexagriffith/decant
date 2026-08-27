@@ -45,7 +45,7 @@ import {
   settingsPath,
   terminalOptions,
 } from "./settings.ts";
-import { parseSessionSource, SESSION_SOURCES } from "./source-filter.ts";
+import { availableSessionSources, parseSessionSource, SESSION_SOURCES } from "./source-filter.ts";
 import {
   activity as activityStats,
   byDimension,
@@ -667,6 +667,9 @@ export async function handleRequest(
       (url.pathname === "/api/date-bounds" || url.pathname === "/api/metadata/date-bounds")
     ) {
       return withDb(config, context, (db) => json(dateBounds(db)));
+    }
+    if (request.method === "GET" && url.pathname === "/api/metadata/session-sources") {
+      return withDb(config, context, (db) => json(availableSessionSources(db)));
     }
     if (request.method === "GET" && url.pathname === "/api/files") {
       const group = parseFileGroup(url.searchParams.get("group") ?? "path");

@@ -897,6 +897,29 @@ paths:
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
+  /api/metadata/session-sources:
+    get:
+      tags: [Statistics]
+      operationId: getMetadataSessionSources
+      summary: List session sources present in the visible archive
+      responses:
+        "200":
+          description: Available session sources
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AvailableSessionSource"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/SchemaConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
   /api/files:
     get:
       tags: [Files]
@@ -2566,6 +2589,16 @@ components:
         max:
           type: [string, "null"]
           format: date
+      additionalProperties: false
+    AvailableSessionSource:
+      type: object
+      required: [key, label]
+      properties:
+        key:
+          type: string
+          enum: [claude_code, codex_app, codex_cli, gemini_cli]
+        label:
+          type: string
       additionalProperties: false
     FileStatRow:
       type: object
