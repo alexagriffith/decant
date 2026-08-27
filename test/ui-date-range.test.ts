@@ -5,7 +5,6 @@ import {
   dateRangeQuery,
   formatDateLabel,
   RANGE_PRESETS,
-  shiftDateRange,
   withDateQuery,
 } from "../src/ui/date-range.ts";
 
@@ -56,13 +55,5 @@ describe("dashboard date ranges", () => {
 
   test("formats ISO calendar dates without shifting them to the local timezone", () => {
     expect(formatDateLabel("2026-08-27")).toMatch(/(^|\D)27(\D|$)/);
-  });
-
-  test("moves custom ranges by their inclusive span", () => {
-    expect(shiftDateRange({ preset: "custom", from: "2026-08-20", to: "2026-08-26" }, -1)).toEqual({
-      preset: "custom",
-      from: "2026-08-13",
-      to: "2026-08-19",
-    });
   });
 });

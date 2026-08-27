@@ -36,18 +36,6 @@ export function applyDatePreset(
   };
 }
 
-export function shiftDateRange(range: DateRangeSelection, direction: -1 | 1): DateRangeSelection {
-  if (range.from == null || range.to == null) {
-    return range;
-  }
-  const span = Math.max(1, daysBetween(range.from, range.to) + 1);
-  return {
-    preset: "custom",
-    from: addDays(range.from, span * direction),
-    to: addDays(range.to, span * direction),
-  };
-}
-
 export function dateRangeQuery(range: DateRangeSelection): string {
   const params = new URLSearchParams();
   if (range.from != null) {
@@ -95,12 +83,6 @@ export function addDays(isoDate: string, days: number): string {
   const date = parseIsoDate(isoDate) ?? new Date();
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
-}
-
-function daysBetween(from: string, to: string): number {
-  const start = parseIsoDate(from)?.getTime() ?? 0;
-  const end = parseIsoDate(to)?.getTime() ?? start;
-  return Math.round((end - start) / 86_400_000);
 }
 
 function todayIsoDate(): string {
