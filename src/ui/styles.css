@@ -1288,11 +1288,6 @@ nav a[aria-current="page"] svg {
   padding: 0 10px;
 }
 
-.date-range-buttons button:disabled {
-  cursor: default;
-  color: var(--faint);
-}
-
 .date-range-menu {
   position: relative;
 }
@@ -1461,11 +1456,6 @@ nav a[aria-current="page"] svg {
   background: var(--bg-components-ghost-ghost-active);
   box-shadow: var(--shadow-components-ghost-default);
   color: var(--fg-primary);
-}
-
-.date-range-buttons .icon-period-button {
-  min-width: 28px;
-  padding: 0;
 }
 
 .date-range-buttons svg {

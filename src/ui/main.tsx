@@ -102,7 +102,6 @@ import {
   dateRangeQuery,
   RANGE_PRESETS,
   type RangePreset,
-  shiftDateRange,
   withDateQuery,
 } from "./date-range.ts";
 import { fullDateTime, relativeTime, sessionListDate } from "./date-time.ts";
@@ -6121,15 +6120,6 @@ function DateRangeControl({
   return (
     <div className="date-range-control">
       <div className="date-range-buttons">
-        <button
-          aria-label="Previous period"
-          className="icon-period-button"
-          disabled={!bounded}
-          onClick={() => onChange(shiftDateRange(range, -1))}
-          type="button"
-        >
-          <Icon name="chevronLeft" />
-        </button>
         <details
           className="date-range-menu"
           onBlur={(event) => {
@@ -6221,15 +6211,6 @@ function DateRangeControl({
             </div>
           </div>
         </details>
-        <button
-          aria-label="Next period"
-          className="icon-period-button"
-          disabled={!bounded}
-          onClick={() => onChange(shiftDateRange(range, 1))}
-          type="button"
-        >
-          <Icon name="chevronRight" />
-        </button>
       </div>
     </div>
   );
