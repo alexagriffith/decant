@@ -198,6 +198,8 @@ describe("UI interaction contracts", () => {
     );
     expect(control).toContain('<Icon name="clock" />');
     expect(control).toContain('<Icon name="chevronDown" />');
+    expect(control.match(/<span>Custom range<\/span>/g)).toHaveLength(1);
+    expect(control).not.toContain('choosePreset("custom")');
     expect(control).not.toContain('name="chevronLeft"');
     expect(control).not.toContain('name="chevronRight"');
   });

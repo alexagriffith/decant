@@ -6101,16 +6101,10 @@ function DateRangeControl({
     menuRef.current.querySelector("summary")?.focus();
   };
 
-  const choosePreset = (value: RangePreset) => {
+  const choosePreset = (value: Exclude<RangePreset, "custom">) => {
     if (value === "all") {
       onChange(ALL_DATE_RANGE);
       closeMenu();
-      return;
-    }
-    if (value === "custom") {
-      const seeded =
-        range.from != null && range.to != null ? range : applyDatePreset("30d", bounds);
-      onChange({ ...seeded, preset: "custom" });
       return;
     }
     onChange(applyDatePreset(value, bounds));
@@ -6166,14 +6160,6 @@ function DateRangeControl({
                   {range.preset === preset.key ? <Icon name="check" /> : null}
                 </button>
               ))}
-              <button
-                aria-pressed={range.preset === "custom"}
-                onClick={() => choosePreset("custom")}
-                type="button"
-              >
-                <span>Custom range</span>
-                {range.preset === "custom" ? <Icon name="check" /> : null}
-              </button>
             </fieldset>
             <div className="custom-date-range">
               <div className="custom-date-range-heading">
