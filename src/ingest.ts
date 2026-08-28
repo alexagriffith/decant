@@ -247,7 +247,10 @@ export function sync(
           sidecarMeta: readClaudeSidecarMeta(file.path),
         });
       } else if (file.tool === "gemini") {
-        parsed = parseGeminiSession(stem, content, geminiProjectPath(file.path));
+        const layout = geminiSessionLayout(file.path);
+        parsed = parseGeminiSession(stem, content, geminiProjectPath(layout), {
+          parentSessionId: layout?.parentSessionId ?? null,
+        });
       } else {
         parsed = parseCodexSession(stem, content, titles);
       }
@@ -638,7 +641,9 @@ function inferSubagent(row: {
   const subagentSource = get(source, "subagent");
   const threadSpawn = get(subagentSource, "thread_spawn");
   const parentThreadId =
-    asString(get(meta, "parent_thread_id")) ?? asString(get(threadSpawn, "parent_thread_id"));
+    asString(get(meta, "parent_thread_id")) ??
+    asString(get(threadSpawn, "parent_thread_id")) ??
+    asString(get(meta, "parentSessionId"));
   const fromPath = row.source_path != null && /(?:^|[/\\])subagents(?:[/\\])/.test(row.source_path);
   const isSubagent =
     row.is_subagent !== 0 ||
@@ -1106,7 +1111,7 @@ function sourceFileForPath(path: string): SourceFile | null {
   if (isCodexRollout(name)) {
     return { tool: "codex", path, archived: hasPathSegment(path, "archived_sessions") };
   }
-  if (isGeminiSessionFile(name)) {
+  if (geminiSessionLayout(path) != null) {
     return { tool: "gemini", path, archived: false };
   }
   return { tool: "claude_code", path, archived: false };
@@ -1133,33 +1138,49 @@ function isClaudeSessionFile(name: string): boolean {
   return name.endsWith(".jsonl") && name !== "journal.jsonl";
 }
 
-/** Gemini CLI writes sessions to ~/.gemini/tmp/<project>/chats/session-<ts>-<hash>.jsonl */
+interface GeminiSessionLayout {
+  chatsDir: string;
+  /** Parent chat id when the file is a subagent transcript nested under it. */
+  parentSessionId: string | null;
+}
+
 function collectGemini(geminiDir: string, out: SourceFile[]): void {
   if (!existsSync(geminiDir)) {
     return;
   }
   for (const path of walk(geminiDir)) {
-    const name = pathBasename(path);
-    if (isGeminiSessionFile(name)) {
+    if (geminiSessionLayout(path) != null) {
       out.push({ tool: "gemini", path, archived: false });
     }
   }
 }
 
-function isGeminiSessionFile(name: string): boolean {
-  return name.startsWith("session-") && name.endsWith(".jsonl");
-}
-
-/** Derive the project directory from the session file path.
- * Path form: <geminiDir>/<project>/chats/session-*.jsonl
- * Returns the absolute path of the project workspace root if readable. */
-function geminiProjectPath(sessionPath: string): string | null {
-  const chatsDir = dirname(sessionPath);
-  if (pathBasename(chatsDir) !== "chats") {
+/** Gemini CLI writes chats to `<project>/chats/session-<ts>-<hash>.jsonl` and
+ * subagent chats to `<project>/chats/<parent-session-id>/<session-id>.jsonl`.
+ * Requiring the `chats` segment keeps `--path` and directory discovery from
+ * claiming a Claude Code file that merely starts with `session-`. */
+function geminiSessionLayout(path: string): GeminiSessionLayout | null {
+  const name = pathBasename(path);
+  if (!name.endsWith(".jsonl")) {
     return null;
   }
-  const projectDir = dirname(chatsDir);
-  const rootFile = join(projectDir, ".project_root");
+  const parent = dirname(path);
+  if (pathBasename(parent) === "chats") {
+    return name.startsWith("session-") ? { chatsDir: parent, parentSessionId: null } : null;
+  }
+  const grandparent = dirname(parent);
+  if (pathBasename(grandparent) === "chats") {
+    return { chatsDir: grandparent, parentSessionId: pathBasename(parent) };
+  }
+  return null;
+}
+
+/** Returns the absolute workspace root recorded beside the project's chats. */
+function geminiProjectPath(layout: GeminiSessionLayout | null): string | null {
+  if (layout == null) {
+    return null;
+  }
+  const rootFile = join(dirname(layout.chatsDir), ".project_root");
   try {
     const root = readFileSync(rootFile, "utf8").trim();
     if (root !== "") {

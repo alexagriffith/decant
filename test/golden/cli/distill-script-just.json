@@ -38,7 +38,7 @@
       "phase": "test",
       "is_error": false,
       "redacted": false,
-      "sessions_seen": 2,
+      "sessions_seen": 3,
       "success_rate": 1
     },
     {
@@ -86,7 +86,7 @@
       "phase": "test",
       "is_error": false,
       "redacted": false,
-      "sessions_seen": 2,
+      "sessions_seen": 3,
       "success_rate": 1
     },
     {
@@ -112,7 +112,19 @@
       "redacted": false,
       "sessions_seen": 1,
       "success_rate": 1
+    },
+    {
+      "ordinal": 0,
+      "kind": "command",
+      "raw": "cargo test --workspace",
+      "normalized": "cargo test --workspace",
+      "payload": null,
+      "phase": "test",
+      "is_error": false,
+      "redacted": false,
+      "sessions_seen": 3,
+      "success_rate": 1
     }
   ],
-  "artifact": "# Distilled by Decant 0.0.0-dev from all sessions\n# 10 session(s) (2026-05-01..2026-06-03). Commands you actually ran, ranked by frequency × success.\n# REVIEW before running. Secrets are best-effort redacted.\n\nexport PROJECT_ROOT := `git rev-parse --show-toplevel`\n"
+  "artifact": "# Distilled by Decant 0.0.0-dev from all sessions\n# 10 session(s) (2026-05-01..2026-06-03). Commands you actually ran, ranked by frequency × success.\n# REVIEW before running. Secrets are best-effort redacted.\n\nexport PROJECT_ROOT := `git rev-parse --show-toplevel`\n\ntest:\n    cargo test --workspace\n"
 }

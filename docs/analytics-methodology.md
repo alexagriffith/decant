@@ -53,6 +53,12 @@ and reasoning usage when the source exposes it. Claude reasoning can be
 estimated by subtraction when the source does not report it directly; the API
 keeps reported and estimated reasoning separate.
 
+Gemini CLI reports usage per model turn in the Gemini API's shape, which Decant
+normalizes at ingest: the reported prompt count already includes cached
+content, so input is stored net of cache reads, and thought tokens are
+reported outside the candidate count, so they are folded into output and also
+recorded as reported reasoning.
+
 Costs use the pricing table that existed when the session was ingested. They
 are estimates of standard API token rates, not a reconstruction of a ChatGPT
 subscription, Codex credits, discounts, or provider invoices. Updating

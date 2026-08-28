@@ -25,12 +25,12 @@ describe("parseGeminiSession", () => {
       title: "Inspect the synthetic example.",
       model: "example-model",
       startedAt: "2026-06-01T10:00:00.000Z",
-      endedAt: "2026-06-01T10:00:04.000Z",
+      endedAt: "2026-06-01T10:00:06.000Z",
       reasoningSource: "reported",
       totals: {
         input: 15,
-        output: 10,
-        cacheRead: 4,
+        output: 14,
+        cacheRead: 8,
         cacheCreation: 0,
         cacheCreation1h: 0,
         reasoning: 2,
@@ -38,6 +38,8 @@ describe("parseGeminiSession", () => {
     });
     expect(session.messages.map((message) => message.role)).toEqual([
       "user",
+      "assistant",
+      "tool",
       "assistant",
       "tool",
       "assistant",
@@ -304,5 +306,265 @@ describe("parseGeminiSession", () => {
       toolName: "mcp__docs__search_pages",
       toolUseId: "mcp-call-2",
     });
+  });
+
+  test("replays a re-appended message id as a replacement, not a duplicate", () => {
+    // Gemini CLI appends the same message id again when usage or tool calls
+    // arrive after the text, so the last record wins and nothing doubles.
+    const content = [
+      JSON.stringify({ sessionId: "gemini-replay", startTime: "2026-06-06T10:00:00.000Z" }),
+      JSON.stringify({
+        id: "user-1",
+        timestamp: "2026-06-06T10:00:01.000Z",
+        type: "user",
+        content: "Replay the synthetic turn.",
+      }),
+      JSON.stringify({
+        id: "assistant-1",
+        timestamp: "2026-06-06T10:00:02.000Z",
+        type: "gemini",
+        model: "example-model",
+        content: [{ text: "Working on it." }],
+      }),
+      JSON.stringify({
+        id: "assistant-1",
+        timestamp: "2026-06-06T10:00:02.000Z",
+        type: "gemini",
+        model: "example-model",
+        content: [{ text: "Working on it." }],
+        toolCalls: [{ id: "call-1", name: "read_file", args: { file_path: "/tmp/a" } }],
+      }),
+      JSON.stringify({
+        id: "assistant-1",
+        timestamp: "2026-06-06T10:00:02.000Z",
+        type: "gemini",
+        model: "example-model",
+        content: [{ text: "Working on it." }],
+        toolCalls: [{ id: "call-1", name: "read_file", args: { file_path: "/tmp/a" } }],
+        tokens: { input: 7, output: 3, cached: 1, thoughts: 2, tool: 0, total: 13 },
+      }),
+    ].join("\n");
+
+    const parsed = parseGeminiSession("fallback", content, null);
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.session.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(parsed.session.messages[1]?.blocks.map((block) => block.blockType)).toEqual([
+      "text",
+      "tool_use",
+    ]);
+    expect(parsed.session.totals).toMatchObject({
+      input: 6,
+      output: 5,
+      cacheRead: 1,
+      reasoning: 2,
+    });
+  });
+
+  test("nets cached tokens out of input and folds thoughts into output", () => {
+    // Gemini's promptTokenCount already includes cachedContentTokenCount and
+    // thoughtsTokenCount sits outside candidatesTokenCount, whereas Decant
+    // treats input as uncached and reasoning as a subset of output.
+    const content = [
+      JSON.stringify({ sessionId: "gemini-usage", startTime: "2026-06-13T10:00:00.000Z" }),
+      JSON.stringify({
+        id: "assistant-1",
+        timestamp: "2026-06-13T10:00:01.000Z",
+        type: "gemini",
+        content: [{ text: "Counted." }],
+        tokens: { input: 100, output: 30, cached: 60, thoughts: 5, tool: 0, total: 135 },
+      }),
+    ].join("\n");
+
+    const parsed = parseGeminiSession("fallback", content, null);
+    expect(parsed.session.messages[0]?.usage).toEqual({
+      input: 40,
+      output: 35,
+      cacheRead: 60,
+      cacheCreation: 0,
+      cacheCreation1h: 0,
+      reasoning: 5,
+    });
+    expect(parsed.session.totals).toMatchObject({ input: 40, output: 35, reasoning: 5 });
+  });
+
+  test("treats $set.messages as an authoritative checkpoint", () => {
+    const content = [
+      JSON.stringify({ sessionId: "gemini-checkpoint", startTime: "2026-06-07T10:00:00.000Z" }),
+      JSON.stringify({
+        id: "user-1",
+        timestamp: "2026-06-07T10:00:01.000Z",
+        type: "user",
+        content: "Original first prompt.",
+      }),
+      JSON.stringify({
+        id: "assistant-1",
+        timestamp: "2026-06-07T10:00:02.000Z",
+        type: "gemini",
+        content: [{ text: "Original reply." }],
+        tokens: { input: 4, output: 2, cached: 0, thoughts: 0 },
+      }),
+      JSON.stringify({
+        $set: {
+          lastUpdated: "2026-06-07T10:00:03.000Z",
+          messages: [
+            {
+              id: "user-2",
+              timestamp: "2026-06-07T10:00:03.000Z",
+              type: "user",
+              content: "Checkpointed prompt.",
+            },
+            {
+              id: "assistant-1",
+              timestamp: "2026-06-07T10:00:02.000Z",
+              type: "gemini",
+              content: [{ text: "Rewritten reply." }],
+              tokens: { input: 4, output: 2, cached: 0, thoughts: 0 },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        id: "assistant-2",
+        timestamp: "2026-06-07T10:00:04.000Z",
+        type: "gemini",
+        content: [{ text: "After the checkpoint." }],
+        tokens: { input: 1, output: 1, cached: 0, thoughts: 0 },
+      }),
+    ].join("\n");
+
+    const parsed = parseGeminiSession("fallback", content, null);
+    expect(parsed.issues).toEqual([]);
+    expect(
+      parsed.session.messages.map((message) => [message.sourceUuid, message.blocks[0]?.text]),
+    ).toEqual([
+      ["user-2", "Checkpointed prompt."],
+      ["assistant-1", "Rewritten reply."],
+      ["assistant-2", "After the checkpoint."],
+    ]);
+    expect(parsed.session.title).toBe("Checkpointed prompt.");
+    expect(parsed.session.totals).toMatchObject({ input: 5, output: 3 });
+  });
+
+  test("drops the rewound message and everything after it", () => {
+    const content = [
+      JSON.stringify({ sessionId: "gemini-rewind", startTime: "2026-06-08T10:00:00.000Z" }),
+      JSON.stringify({
+        id: "user-1",
+        timestamp: "2026-06-08T10:00:01.000Z",
+        type: "user",
+        content: "Keep this prompt.",
+      }),
+      JSON.stringify({
+        id: "assistant-1",
+        timestamp: "2026-06-08T10:00:02.000Z",
+        type: "gemini",
+        content: [{ text: "Kept reply." }],
+        tokens: { input: 3, output: 1, cached: 0, thoughts: 0 },
+      }),
+      JSON.stringify({
+        id: "user-2",
+        timestamp: "2026-06-08T10:00:03.000Z",
+        type: "user",
+        content: "Rewound prompt.",
+      }),
+      JSON.stringify({
+        id: "assistant-2",
+        timestamp: "2026-06-08T10:00:04.000Z",
+        type: "gemini",
+        content: [{ text: "Rewound reply." }],
+        tokens: { input: 100, output: 100, cached: 0, thoughts: 0 },
+      }),
+      JSON.stringify({ $rewindTo: "user-2" }),
+      JSON.stringify({
+        id: "user-3",
+        timestamp: "2026-06-08T10:00:05.000Z",
+        type: "user",
+        content: "Replacement prompt.",
+      }),
+    ].join("\n");
+
+    const parsed = parseGeminiSession("fallback", content, null);
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.session.messages.map((message) => message.sourceUuid)).toEqual([
+      "user-1",
+      "assistant-1",
+      "user-3",
+    ]);
+    expect(parsed.session.totals).toMatchObject({ input: 3, output: 1 });
+    expect(parsed.session.endedAt).toBe("2026-06-08T10:00:05.000Z");
+  });
+
+  test("keeps thoughts recorded as subject and description", () => {
+    const content = [
+      JSON.stringify({ sessionId: "gemini-thoughts", startTime: "2026-06-09T10:00:00.000Z" }),
+      JSON.stringify({
+        id: "assistant-1",
+        timestamp: "2026-06-09T10:00:01.000Z",
+        type: "gemini",
+        content: [{ text: "Done." }],
+        thoughts: [
+          {
+            subject: "Planning",
+            description: "Read the synthetic file first.",
+            timestamp: "2026-06-09T10:00:00.500Z",
+          },
+          { subject: "", description: "Description only.", timestamp: "2026-06-09T10:00:00.700Z" },
+        ],
+      }),
+    ].join("\n");
+
+    const parsed = parseGeminiSession("fallback", content, null);
+    const thinking = parsed.session.messages[0]?.blocks.filter(
+      (block) => block.blockType === "thinking",
+    );
+    expect(thinking?.map((block) => block.text)).toEqual([
+      "Planning\n\nRead the synthetic file first.",
+      "Description only.",
+    ]);
+  });
+
+  test("marks subagent sessions from the header kind and parent id", () => {
+    const content = [
+      JSON.stringify({
+        sessionId: "gemini-child",
+        projectHash: "synthetic-project",
+        startTime: "2026-06-10T10:00:00.000Z",
+        kind: "subagent",
+      }),
+      JSON.stringify({
+        id: "user-1",
+        timestamp: "2026-06-10T10:00:01.000Z",
+        type: "user",
+        content: "Delegated task.",
+      }),
+    ].join("\n");
+
+    const parsed = parseGeminiSession("fallback", content, null, {
+      parentSessionId: "gemini-parent",
+    });
+    expect(parsed.session).toMatchObject({
+      isSubagent: true,
+      rootSourceSessionId: "gemini-parent",
+      agentId: "gemini-child",
+    });
+
+    const headerOnly = parseGeminiSession("fallback", content, null);
+    expect(headerOnly.session).toMatchObject({ isSubagent: true, rootSourceSessionId: null });
+  });
+
+  test("uses the recorded session summary as the title", () => {
+    const content = [
+      JSON.stringify({ sessionId: "gemini-summary", startTime: "2026-06-11T10:00:00.000Z" }),
+      JSON.stringify({
+        id: "user-1",
+        timestamp: "2026-06-11T10:00:01.000Z",
+        type: "user",
+        content: "First prompt text.",
+      }),
+      JSON.stringify({ $set: { summary: "Synthetic session summary" } }),
+    ].join("\n");
+
+    const parsed = parseGeminiSession("fallback", content, null);
+    expect(parsed.session.title).toBe("Synthetic session summary");
   });
 });

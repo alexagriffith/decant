@@ -1651,7 +1651,7 @@ function SessionsView({
       <header className="page-heading inline-heading">
         <div>
           <h1>Sessions</h1>
-          <p>Every Claude Code and Codex session log on this device.</p>
+          <p>Every Claude Code, Codex, and Gemini CLI session log on this device.</p>
         </div>
         <DateRangeControl bounds={data.dateBounds} range={dateRange} onChange={onDateRangeChange} />
       </header>
@@ -3483,9 +3483,9 @@ function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing: boole
         </span>
         <h2>No sessions yet</h2>
         <p>
-          Decant reads the JSONL logs Claude Code and Codex already write and turns them into a
-          searchable session-log index with token, cost, and context-window analytics. Nothing
-          leaves this machine.
+          Decant reads the JSONL logs Claude Code, Codex, and Gemini CLI already write and turns
+          them into a searchable session-log index with token, cost, and context-window analytics.
+          Nothing leaves this machine.
         </p>
         <code>decant sync</code>
         <button
@@ -5733,6 +5733,9 @@ function ToolBadge({ tool }: { tool: string | null | undefined }) {
         Codex
       </Badge>
     );
+  }
+  if (tool === "gemini") {
+    return <Badge tone="accent">Gemini</Badge>;
   }
   return <Badge>{tool ?? "-"}</Badge>;
 }
@@ -10977,6 +10980,9 @@ function providerIdentity(tool: string): {
   }
   if (tool === "codex") {
     return { key: "openai", label: "Codex", tone: "openai", icon: "openai" };
+  }
+  if (tool === "gemini") {
+    return { key: "assistant", label: "Gemini", tone: "accent", icon: null };
   }
   return { key: "assistant", label: "Assistant", tone: "accent", icon: null };
 }

@@ -21,7 +21,7 @@
     "key": "example-model",
     "sessions": 2,
     "input_tokens": 18,
-    "output_tokens": 11,
+    "output_tokens": 15,
     "reasoning_tokens": 2,
     "est_reasoning_tokens": 0,
     "estimated_cost_usd": 0

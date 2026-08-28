@@ -119,3 +119,20 @@ describe("activity bucket classifier", () => {
     });
   });
 });
+
+describe("Gemini CLI tool names", () => {
+  test("classify shell, edit, and plan tools like their Claude and Codex peers", () => {
+    expect(toolBucket("run_shell_command", { command: "cargo test --workspace" })).toBe("code");
+    expect(toolBucket("run_shell_command", '{"command":"ls src","description":"List"}')).toBe(
+      "context",
+    );
+    expect(toolBucket("write_file")).toBe("code");
+    expect(toolBucket("replace")).toBe("code");
+    expect(toolBucket("write_todos")).toBe("planning");
+    expect(toolBucket("read_file")).toBe("context");
+    expect(isCodeEditTool("replace")).toBe(true);
+    expect(isCodeEditTool("run_shell_command", { command: "sed -i '' s/a/b/ src/x.ts" })).toBe(
+      true,
+    );
+  });
+});

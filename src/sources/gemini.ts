@@ -13,65 +13,62 @@ import { preview } from "../tools.ts";
 
 type JsonObject = { [key: string]: Json };
 
+export interface GeminiParseOptions {
+  /** Source id of the parent chat when the file lives under `chats/<parent>/`. */
+  parentSessionId?: string | null;
+}
+
+interface ReplayedRecord {
+  record: JsonObject;
+  lineNo: number;
+}
+
+interface Replay {
+  metadata: JsonObject;
+  messages: ReplayedRecord[];
+}
+
+type UnknownTypes = Map<string, { count: number; firstLine: number }>;
+
 /**
- * Gemini CLI session format (`.gemini/tmp/<project>/chats/session-<ts>-<hash>.jsonl`).
+ * Gemini CLI session format (`.gemini/tmp/<project>/chats/session-<ts>-<hash>.jsonl`;
+ * subagent chats live under `chats/<parent-session-id>/<session-id>.jsonl`).
  *
- * Line types:
- *  - Header (line 0): `{ sessionId, projectHash, startTime, lastUpdated, kind }`
- *  - Message: `{ id, timestamp, type: "user"|"gemini", content, tokens?, model?, toolCalls?, thoughts? }`
- *  - Patch: `{ $set: { messages?, lastUpdated } }` — incremental updates; skip
- *  - Tool result (user turn): content array contains `{ functionResponse: { name, response } }`
+ * The file is an event log rather than a list of independent messages, so it
+ * is replayed the way Gemini CLI's own loader replays it before normalizing:
+ *  - Metadata (line 0): `{ sessionId, projectHash, startTime, lastUpdated, kind }`
+ *  - Message: `{ id, timestamp, type: "user"|"gemini"|"info"|…, content, tokens?, model?, toolCalls?, thoughts? }`.
+ *    A repeated `id` replaces the earlier record in place; Gemini re-appends a
+ *    turn whenever usage or tool calls arrive after its text.
+ *  - `{ $set: {…} }` merges metadata, and `$set.messages` replaces every message.
+ *  - `{ $rewindTo: id }` removes that message and everything after it.
+ *  - Tool results are user records whose content holds `{ functionResponse }`.
  */
 export function parseGeminiSession(
   fallbackId: string,
   content: string,
   projectPath: string | null,
+  options: GeminiParseOptions = {},
 ): ParsedSession {
   const issues: ParsedSession["issues"] = [];
+  const unknownTypes: UnknownTypes = new Map();
+  const replayed = replay(content, issues, unknownTypes);
+  const metadata = replayed.metadata;
+
   const messages: NormalizedMessage[] = [];
-  let sourceSessionId = fallbackId;
+  const sourceSessionId = asString(metadata.sessionId) ?? fallbackId;
   let model: string | null = null;
-  let startedAt: string | null = null;
+  let startedAt: string | null = asString(metadata.startTime);
   let endedAt: string | null = null;
-  let title: string | null = null;
+  let firstUserText: string | null = null;
   let totals = emptyUsage();
   let sawReportedReasoning = false;
   let seq = 0;
   const seenToolResultIds = new Set<string>();
-  const unknownTypes = new Map<string, { count: number; firstLine: number }>();
 
-  for (const [index, line] of content.split(/\n/).entries()) {
-    if (line.trim() === "") {
-      continue;
-    }
-
-    let value: Json;
-    try {
-      value = JSON.parse(line) as Json;
-    } catch (error) {
-      issues.push({
-        code: "unparsed_line",
-        lineNo: index + 1,
-        error: error instanceof Error ? error.message : String(error),
-        rawLine: line,
-      });
-      continue;
-    }
-
-    // Skip patch records — they duplicate already-parsed message data
-    if (hasKey(value, "$set")) {
-      continue;
-    }
-
-    const typ = asString(get(value, "type"));
-    const timestamp = asString(get(value, "timestamp"));
-
-    // Header line: no `type`, but has `sessionId`
-    if (typ == null && hasKey(value, "sessionId")) {
-      sourceSessionId = asString(get(value, "sessionId")) ?? sourceSessionId;
-      startedAt ??= asString(get(value, "startTime"));
-      continue;
-    }
+  for (const { record: value, lineNo } of replayed.messages) {
+    const typ = asString(value.type);
+    const timestamp = asString(value.timestamp);
 
     if (timestamp != null) {
       startedAt ??= timestamp;
@@ -79,17 +76,17 @@ export function parseGeminiSession(
     }
 
     if (typ === "user") {
-      const blocks = parseUserContent(get(value, "content"), seenToolResultIds);
+      const blocks = parseUserContent(value.content, seenToolResultIds);
       if (blocks.length === 0) {
         continue;
       }
       const firstText = blocks.find((b) => b.blockType === "text")?.text ?? "";
-      if (title == null && firstText !== "") {
-        title = preview(firstText.trim(), 120);
+      if (firstUserText == null && firstText !== "") {
+        firstUserText = firstText;
       }
       messages.push({
         seq,
-        sourceUuid: asString(get(value, "id")),
+        sourceUuid: asString(value.id),
         parentSourceUuid: null,
         role: blocks.every((block) => block.blockType === "tool_result")
           ? "tool"
@@ -105,18 +102,18 @@ export function parseGeminiSession(
       });
       seq += 1;
     } else if (typ === "gemini") {
-      const msgModel: string | null = asString(get(value, "model")) ?? model;
+      const msgModel: string | null = asString(value.model) ?? model;
       model ??= msgModel;
-      const tokenRecord = get(value, "tokens");
+      const tokenRecord = value.tokens;
       sawReportedReasoning ||= isObject(tokenRecord) && hasKey(tokenRecord, "thoughts");
       const usage = usageFrom(tokenRecord);
       // Gemini records usage for each model turn, so session totals are the sum.
       totals = addUsage(totals, usage);
 
-      const contentBlocks = parseGeminiContent(get(value, "content"));
-      const toolCallBlocks = parseToolCalls(get(value, "toolCalls"), contentBlocks.length);
+      const contentBlocks = parseGeminiContent(value.content);
+      const toolCallBlocks = parseToolCalls(value.toolCalls, contentBlocks.length);
       const thoughtBlocks = parseThoughts(
-        get(value, "thoughts"),
+        value.thoughts,
         contentBlocks.length + toolCallBlocks.length,
       );
       const allBlocks = [...contentBlocks, ...toolCallBlocks, ...thoughtBlocks];
@@ -127,7 +124,7 @@ export function parseGeminiSession(
 
       messages.push({
         seq,
-        sourceUuid: asString(get(value, "id")),
+        sourceUuid: asString(value.id),
         parentSourceUuid: null,
         role: "assistant",
         model: msgModel,
@@ -139,13 +136,13 @@ export function parseGeminiSession(
       });
       seq += 1;
     } else if (typ === "error" || typ === "info" || typ === "warning") {
-      const text = asString(get(value, "content"));
+      const text = asString(value.content);
       if (text == null || text === "") {
         continue;
       }
       messages.push({
         seq,
-        sourceUuid: asString(get(value, "id")),
+        sourceUuid: asString(value.id),
         parentSourceUuid: null,
         role: "other",
         model: null,
@@ -157,9 +154,7 @@ export function parseGeminiSession(
       });
       seq += 1;
     } else if (typ != null) {
-      const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: index + 1 };
-      seen.count += 1;
-      unknownTypes.set(typ, seen);
+      countUnknown(unknownTypes, typ, lineNo);
     }
   }
 
@@ -172,11 +167,15 @@ export function parseGeminiSession(
     });
   }
 
+  const parentSessionId = options.parentSessionId ?? null;
+  const isSubagent = asString(metadata.kind) === "subagent" || parentSessionId != null;
+  const summary = asString(metadata.summary);
+
   const normalized: NormalizedSession = {
     tool: "gemini",
     sourceSessionId,
     projectPath,
-    title,
+    title: summary ?? (firstUserText == null ? null : preview(firstUserText.trim(), 120)),
     cwd: projectPath,
     gitBranch: null,
     model,
@@ -186,13 +185,13 @@ export function parseGeminiSession(
     startedAt,
     endedAt,
     isArchived: false,
-    isSubagent: false,
-    rootSourceSessionId: null,
+    isSubagent,
+    rootSourceSessionId: parentSessionId,
     spawnToolUseId: null,
-    agentId: null,
+    agentId: isSubagent ? sourceSessionId : null,
     agentType: null,
     spawnDepth: null,
-    rawMeta: null,
+    rawMeta: rawMetaFrom(metadata, parentSessionId),
     totals,
     estReasoningTokens: 0,
     reasoningSource: sawReportedReasoning ? "reported" : "none",
@@ -201,6 +200,124 @@ export function parseGeminiSession(
   issues.push(...linkageIssues(normalized));
 
   return { session: normalized, issues };
+}
+
+/** Replay the event log into Gemini's in-memory conversation shape. */
+function replay(
+  content: string,
+  issues: ParsedSession["issues"],
+  unknownTypes: UnknownTypes,
+): Replay {
+  let metadata: JsonObject = {};
+  const messages = new Map<string, ReplayedRecord>();
+
+  for (const [index, line] of content.split(/\n/).entries()) {
+    const lineNo = index + 1;
+    if (line.trim() === "") {
+      continue;
+    }
+
+    let value: Json;
+    try {
+      value = JSON.parse(line) as Json;
+    } catch (error) {
+      issues.push({
+        code: "unparsed_line",
+        lineNo,
+        error: error instanceof Error ? error.message : String(error),
+        rawLine: line,
+      });
+      continue;
+    }
+    if (!isObject(value)) {
+      continue;
+    }
+
+    const rewindTo = asString(value.$rewindTo);
+    if (rewindTo != null) {
+      rewind(messages, rewindTo);
+      continue;
+    }
+
+    const id = asString(value.id);
+    if (id != null) {
+      messages.set(id, { record: value, lineNo });
+      continue;
+    }
+
+    const patch = value.$set;
+    if (isObject(patch)) {
+      if (Array.isArray(patch.messages)) {
+        messages.clear();
+        setCheckpoint(messages, patch.messages, lineNo);
+      }
+      metadata = { ...metadata, ...patch };
+      continue;
+    }
+
+    if (asString(value.sessionId) != null) {
+      metadata = { ...metadata, ...value };
+      if (Array.isArray(value.messages)) {
+        setCheckpoint(messages, value.messages, lineNo);
+      }
+      continue;
+    }
+
+    const typ = asString(value.type);
+    if (typ != null) {
+      countUnknown(unknownTypes, typ, lineNo);
+    }
+  }
+
+  return { metadata, messages: [...messages.values()] };
+}
+
+function rewind(messages: Map<string, ReplayedRecord>, id: string): void {
+  // Gemini clears the whole conversation when the rewind target is unknown.
+  if (!messages.has(id)) {
+    messages.clear();
+    return;
+  }
+  let found = false;
+  for (const key of [...messages.keys()]) {
+    found ||= key === id;
+    if (found) {
+      messages.delete(key);
+    }
+  }
+}
+
+function setCheckpoint(
+  messages: Map<string, ReplayedRecord>,
+  records: Json[],
+  lineNo: number,
+): void {
+  for (const record of records) {
+    const id = asString(get(record, "id"));
+    if (id != null && isObject(record)) {
+      messages.set(id, { record, lineNo });
+    }
+  }
+}
+
+function countUnknown(unknownTypes: UnknownTypes, typ: string, lineNo: number): void {
+  const seen = unknownTypes.get(typ) ?? { count: 0, firstLine: lineNo };
+  seen.count += 1;
+  unknownTypes.set(typ, seen);
+}
+
+function rawMetaFrom(metadata: JsonObject, parentSessionId: string | null): Json {
+  const meta: JsonObject = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    // Messages are normalized separately and the scratchpad is transcript-derived.
+    if (key !== "messages" && key !== "memoryScratchpad") {
+      meta[key] = value;
+    }
+  }
+  if (parentSessionId != null) {
+    meta.parentSessionId = parentSessionId;
+  }
+  return Object.keys(meta).length === 0 ? null : meta;
 }
 
 function parseUserContent(
@@ -343,7 +460,7 @@ function parseThoughts(thoughts: Json | undefined, startOrdinal: number): Normal
   const blocks: NormalizedBlock[] = [];
   let ordinal = startOrdinal;
   for (const thought of thoughts) {
-    const text = asString(get(thought, "text")) ?? asString(thought);
+    const text = thoughtText(thought);
     if (text != null && text !== "") {
       blocks.push({
         ordinal: ordinal++,
@@ -358,6 +475,16 @@ function parseThoughts(thoughts: Json | undefined, startOrdinal: number): Normal
     }
   }
   return blocks;
+}
+
+/** Gemini records thought summaries as `{ subject, description }` pairs. */
+function thoughtText(thought: Json): string | null {
+  const subject = asString(get(thought, "subject"))?.trim() ?? "";
+  const description = asString(get(thought, "description"))?.trim() ?? "";
+  if (subject !== "" || description !== "") {
+    return [subject, description].filter((part) => part !== "").join("\n\n");
+  }
+  return asString(get(thought, "text")) ?? asString(thought);
 }
 
 function textBlock(ordinal: number, text: string): NormalizedBlock {
@@ -390,13 +517,19 @@ function usageFrom(tokens: Json | undefined): TokenUsage {
   if (!isObject(tokens)) {
     return emptyUsage();
   }
+  // Gemini's `input` (promptTokenCount) already contains `cached`
+  // (cachedContentTokenCount), and `thoughts` (thoughtsTokenCount) is billed as
+  // output but reported outside `output` (candidatesTokenCount). Decant prices
+  // input and cache reads separately and treats reasoning as a subset of output.
+  const cached = getInteger(tokens, "cached");
+  const thoughts = getInteger(tokens, "thoughts");
   return {
-    input: getInteger(tokens, "input"),
-    output: getInteger(tokens, "output"),
-    cacheRead: getInteger(tokens, "cached"),
+    input: Math.max(0, getInteger(tokens, "input") - cached),
+    output: getInteger(tokens, "output") + thoughts,
+    cacheRead: cached,
     cacheCreation: 0,
     cacheCreation1h: 0,
-    reasoning: getInteger(tokens, "thoughts"),
+    reasoning: thoughts,
   };
 }
 

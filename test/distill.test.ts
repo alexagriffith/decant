@@ -415,3 +415,14 @@ describe("distill timeline and renderers", () => {
     expect(commentSafe("a\rb\u2028c\u2029d\u0085e")).toBe("a\\u000db\\u2028c\\u2029d\\u0085e");
   });
 });
+
+describe("decodeCommand", () => {
+  test("reads the Gemini run_shell_command input", () => {
+    expect(
+      decodeCommand(
+        "run_shell_command",
+        JSON.stringify({ command: "cargo test --workspace", description: "Run the tests" }),
+      ),
+    ).toBe("cargo test --workspace");
+  });
+});

@@ -17,9 +17,13 @@ By default Decant discovers:
 - Claude Code sessions under `~/.claude/projects`;
 - Codex sessions under `~/.codex/sessions` and source-archived sessions under
   `~/.codex/archived_sessions`;
-- Gemini CLI sessions under `~/.gemini/tmp/<project>/chats`. Decant reads the
-  adjacent `.project_root` sidecar for the workspace path and leaves the
-  project unset when that sidecar is absent or empty.
+- Gemini CLI sessions under `~/.gemini/tmp/<project>/chats`, including
+  subagent transcripts nested under `chats/<parent-session-id>/`, which link
+  to their parent session. Decant reads the adjacent `.project_root` sidecar
+  for the workspace path and leaves the project unset when that sidecar is
+  absent or empty. Gemini session files are event logs: Decant replays
+  checkpoint and rewind records the way Gemini CLI does, so a rewound turn or
+  a re-recorded message is stored once.
 
 `decant sync` inserts new sessions and replaces changed ones transactionally.
 Unchanged files are skipped by metadata and content checks. Watch mode combines

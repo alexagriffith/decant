@@ -1085,6 +1085,106 @@ describe("sync", () => {
     closeDb(db);
   });
 
+  test("discovers Gemini subagent chats nested under their parent session", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      geminiDir: join(dir, "gemini"),
+    };
+    const chats = join(config.geminiDir ?? "", "project", "chats");
+    write(join(chats, "session-parent.jsonl"), "");
+    write(join(chats, "parent-id", "child-id.jsonl"), "");
+    write(join(chats, "parent-id", "notes.txt"), "");
+    write(join(config.geminiDir ?? "", "project", "logs.json"), "");
+
+    expect(
+      discover(config).map((file) => ({
+        tool: file.tool,
+        name: file.path.slice(chats.length + 1),
+      })),
+    ).toEqual([
+      { tool: "gemini", name: join("parent-id", "child-id.jsonl") },
+      { tool: "gemini", name: "session-parent.jsonl" },
+    ]);
+  });
+
+  test("links Gemini subagent chats to their parent session", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      geminiDir: join(dir, "gemini"),
+    };
+    const projectDir = join(config.geminiDir ?? "", "synthetic-project");
+    const chats = join(projectDir, "chats");
+    write(join(projectDir, ".project_root"), "/synthetic/gemini-project\n");
+    write(
+      join(chats, "session-parent.jsonl"),
+      [
+        JSON.stringify({
+          sessionId: "parent-1",
+          projectHash: "synthetic-project",
+          startTime: "2026-06-12T10:00:00.000Z",
+          kind: "main",
+        }),
+        JSON.stringify({
+          id: "user-1",
+          timestamp: "2026-06-12T10:00:01.000Z",
+          type: "user",
+          content: "Delegate the synthetic task.",
+        }),
+      ].join("\n"),
+    );
+    write(
+      join(chats, "parent-1", "child-1.jsonl"),
+      [
+        JSON.stringify({
+          sessionId: "child-1",
+          projectHash: "synthetic-project",
+          startTime: "2026-06-12T10:00:02.000Z",
+          kind: "subagent",
+        }),
+        JSON.stringify({
+          id: "user-1",
+          timestamp: "2026-06-12T10:00:03.000Z",
+          type: "user",
+          content: "Delegated synthetic task.",
+        }),
+      ].join("\n"),
+    );
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2, issues: 0, failed: 0 });
+    expect(
+      db
+        .query(
+          `SELECT s.source_session_id, s.is_subagent, p.root_path,
+                  (SELECT parent.source_session_id
+                   FROM session parent
+                   WHERE parent.id = s.parent_session_id) AS parent_source
+           FROM session s
+           LEFT JOIN project p ON p.id = s.project_id
+           ORDER BY s.source_session_id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        source_session_id: "child-1",
+        is_subagent: 1,
+        root_path: "/synthetic/gemini-project",
+        parent_source: "parent-1",
+      },
+      {
+        source_session_id: "parent-1",
+        is_subagent: 0,
+        root_path: "/synthetic/gemini-project",
+        parent_source: null,
+      },
+    ]);
+    closeDb(db);
+  });
+
   test("discover skips workflow journal files", () => {
     const dir = freshCase();
     const claudeDir = join(dir, "claude");
