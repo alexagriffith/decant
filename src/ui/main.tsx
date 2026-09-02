@@ -135,6 +135,7 @@ import { searchSnippetParts, visuallyOrderedSearchHits } from "./search-results.
 import {
   archiveActionFor,
   DELETE_SESSION_EXPLANATION,
+  DELETE_SESSION_EYEBROW,
   type SessionStateUpdate,
   sessionStateRequest,
 } from "./session-state.ts";
@@ -8296,7 +8297,7 @@ function DeleteSessionDialog({
       >
         <header>
           <div>
-            <span className="section-eyebrow">Permanent action</span>
+            <span className="section-eyebrow">{DELETE_SESSION_EYEBROW}</span>
             <h2 id={titleId}>Delete session?</h2>
           </div>
           <button
