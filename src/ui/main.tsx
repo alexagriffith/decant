@@ -110,6 +110,7 @@ import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "./dosu-cta.ts";
 import { dosuLink } from "./dosu-links.ts";
 import { dosuToolDisplayName, isDosuToolName } from "./dosu-tool.ts";
 import { effortDisplayLabel, effortTooltip } from "./effort.ts";
+import { errorRateDisplay } from "./error-rate.ts";
 import { nearestUsableIndex } from "./focus-rescue.ts";
 import { isFramed } from "./frame-guard.ts";
 import {
@@ -146,6 +147,7 @@ import { searchSnippetParts, visuallyOrderedSearchHits } from "./search-results.
 import {
   archiveActionFor,
   DELETE_SESSION_EXPLANATION,
+  DELETE_SESSION_EYEBROW,
   type SessionStateUpdate,
   sessionStateRequest,
 } from "./session-state.ts";
@@ -1652,24 +1654,9 @@ function SessionsView({
       </header>
 
       <div className="stat-grid sessions-stat-grid">
-        <StatCard
-          icon="sessions"
-          label="Sessions"
-          tone="accent"
-          value={formatInt(cardSummary.sessions)}
-        />
-        <StatCard
-          icon="messages"
-          label="Messages"
-          tone="info"
-          value={formatInt(cardSummary.messages)}
-        />
-        <StatCard
-          icon="money"
-          label="Est. cost"
-          tone="success"
-          value={money(cardSummary.estimated_cost_usd)}
-        />
+        <StatCard icon="sessions" label="Sessions" value={formatInt(cardSummary.sessions)} />
+        <StatCard icon="messages" label="Messages" value={formatInt(cardSummary.messages)} />
+        <StatCard icon="money" label="Est. cost" value={money(cardSummary.estimated_cost_usd)} />
       </div>
 
       <section aria-busy={pageLoading} className="panel sessions-panel">
@@ -1878,16 +1865,10 @@ function ProjectsView({
         <StatCard
           icon="folder"
           label="Projects"
-          tone="accent"
           value={formatInt(projects.filter((project) => !project.is_worktree).length)}
         />
-        <StatCard icon="folder" label="Worktrees" tone="info" value={formatInt(worktrees.length)} />
-        <StatCard
-          icon="tools"
-          label="Activity sources"
-          tone="success"
-          value={formatInt(activitySources.size)}
-        />
+        <StatCard icon="folder" label="Worktrees" value={formatInt(worktrees.length)} />
+        <StatCard icon="tools" label="Activity sources" value={formatInt(activitySources.size)} />
       </div>
 
       <section className="panel">
@@ -4256,40 +4237,22 @@ function AnalyticsView({
       </header>
 
       <div className="stat-grid analytics-stat-grid">
-        <StatCard
-          icon="sessions"
-          label="Sessions"
-          tone="accent"
-          value={formatInt(data.summary?.sessions ?? 0)}
-        />
-        <StatCard
-          icon="messages"
-          label="Messages"
-          tone="info"
-          value={formatInt(data.summary?.messages ?? 0)}
-        />
-        <StatCard
-          icon="bolt"
-          label="Tool calls"
-          tone="warning"
-          value={formatInt(data.summary?.tool_calls ?? 0)}
-        />
+        <StatCard icon="sessions" label="Sessions" value={formatInt(data.summary?.sessions ?? 0)} />
+        <StatCard icon="messages" label="Messages" value={formatInt(data.summary?.messages ?? 0)} />
+        <StatCard icon="bolt" label="Tool calls" value={formatInt(data.summary?.tool_calls ?? 0)} />
         <StatCard
           icon="download"
           label="Input tokens"
-          tone="neutral"
           value={compact(data.summary?.input_tokens ?? 0)}
         />
         <StatCard
           icon="upload"
           label="Output tokens"
-          tone="neutral"
           value={compact(data.summary?.output_tokens ?? 0)}
         />
         <StatCard
           icon="money"
           label="Est. cost"
-          tone="success"
           value={money(data.summary?.estimated_cost_usd ?? 0)}
         />
       </div>
@@ -5700,23 +5663,28 @@ type IconName =
   | "x";
 
 function StatCard({
+  alert = false,
   icon,
   label,
-  tone,
   value,
 }: {
+  /** Renders the value and icon in the danger colour. Redundant emphasis on a
+   * number that already states the problem, so colour never carries meaning
+   * alone. Deliberately narrow: stat icons are muted by design (see the
+   * `.stat-card .stat-icon` note in styles.css), so this is a semantic state,
+   * not a reopening of decorative tones. */
+  alert?: boolean;
   icon: IconName;
   label: string;
-  tone: BadgeTone;
   value: string;
 }) {
   return (
-    <div className="stat-card">
+    <div className="stat-card" data-alert={alert ? "true" : undefined}>
       <div>
         <span>{label}</span>
         <strong>{value}</strong>
       </div>
-      <span className={`stat-icon tone-${tone}`}>
+      <span className="stat-icon">
         <Icon name={icon} />
       </span>
     </div>
@@ -7439,6 +7407,7 @@ function ToolsView({
   };
   const clearedCallFilters = clearToolCallFilters(locationFilters);
   const clearedFiltersHref = toolFiltersHref(clearedCallFilters);
+  const errorRate = errorRateDisplay(aggregate.totalCalls, aggregate.errorRate);
 
   return (
     <div className="view-stack">
@@ -7460,29 +7429,18 @@ function ToolsView({
       </header>
 
       <section aria-label="Tool call summary" className="stat-grid tool-stat-grid">
-        <StatCard
-          icon="tools"
-          label="Total calls"
-          tone="accent"
-          value={formatInt(aggregate.totalCalls)}
-        />
-        <StatCard
-          icon="info"
-          label="Error rate"
-          tone={aggregate.errorRate > 0 ? "danger" : "success"}
-          value={aggregate.totalCalls === 0 ? "—" : `${aggregate.errorRate.toFixed(1)}%`}
-        />
+        <StatCard icon="tools" label="Total calls" value={formatInt(aggregate.totalCalls)} />
+        <StatCard alert={errorRate.alert} icon="info" label="Error rate" value={errorRate.label} />
         <StatCard
           icon="clock"
           label="Median / p95 elapsed"
-          tone="info"
           value={
             aggregate.p50 == null || aggregate.p95 == null
               ? "—"
               : `${durationPrecise(aggregate.p50)} / ${durationPrecise(aggregate.p95)}`
           }
         />
-        <StatCard icon="bolt" label="Top tool" tone="warning" value={aggregate.topTool ?? "—"} />
+        <StatCard icon="bolt" label="Top tool" value={aggregate.topTool ?? "—"} />
       </section>
 
       <section className="panel">
@@ -8355,7 +8313,7 @@ function DeleteSessionDialog({
       >
         <header>
           <div>
-            <span className="section-eyebrow">Permanent action</span>
+            <span className="section-eyebrow">{DELETE_SESSION_EYEBROW}</span>
             <h2 id={titleId}>Delete session?</h2>
           </div>
           <button
