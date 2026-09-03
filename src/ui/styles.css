@@ -1594,8 +1594,11 @@ nav a[aria-current="page"] svg {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+/* Six cards, so every column count below divides six exactly. auto-fit would
+ * pick whatever fits -- five columns between 980px and 1151px -- and strand the
+ * sixth card alone against an empty row. */
 .analytics-stat-grid {
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .stat-card {
@@ -1642,6 +1645,20 @@ nav a[aria-current="page"] svg {
  * needing to sit after it in the file. */
 .stat-card .stat-icon {
   color: var(--muted);
+}
+
+/* One semantic state is allowed through that muting: a non-zero error rate.
+ * The `.stat-grid` prefix is load-bearing, not decoration -- without it the
+ * `strong` rule ties with `.tool-stat-grid .stat-card strong` below, which sits
+ * later and would win. That rule sets no colour today, but it governs the one
+ * grid this alert actually appears in, so a colour added there later would
+ * silently mute the value and leave a red icon beside it.
+ * The value already states the problem, so the colour is redundant emphasis
+ * rather than the only carrier of meaning -- it survives forced-colors mode,
+ * where the hue is dropped and "3.2%" still reads differently from "0.0%". */
+.stat-grid .stat-card[data-alert] .stat-icon,
+.stat-grid .stat-card[data-alert] strong {
+  color: var(--danger-text);
 }
 
 /* ===========================================================================
@@ -5686,6 +5703,17 @@ pre {
 /* ===========================================================================
  * Responsive. Breakpoint order is asserted by test/ui-responsive-styles.test.ts
  * =========================================================================== */
+/* The sidebar is visible above 1200px and collapses at or below it, so the
+ * content area jumps ~300px at that boundary. Six columns only keep every label
+ * on one line at a viewport of 1328px or wider -- measured, not derived: at
+ * 1327px "Output tokens" wraps and every card grows from 83px to 102px. Drop to
+ * three below that rather than ship a band where the row renders taller. */
+@media (max-width: 1327px) {
+  .analytics-stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 1200px) {
   .mobile-only {
     display: inline-grid;
@@ -5738,9 +5766,12 @@ pre {
 @media (max-width: 980px) {
   .sessions-stat-grid,
   .projects-stat-grid,
-  .analytics-stat-grid,
   .split {
     grid-template-columns: 1fr;
+  }
+
+  .analytics-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .signal-row-summary {
