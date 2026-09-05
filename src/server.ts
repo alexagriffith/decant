@@ -214,6 +214,12 @@ export async function handleRequest(
   const dateFilter = dateFilterFromSearch(url.searchParams);
   const sourceValue = url.searchParams.get("source");
   const source = parseSessionSource(sourceValue);
+  // Every analytics-scoped route shares one guard: a present-but-unknown
+  // source value must reject the request before any archive read happens.
+  const unknownSource =
+    sourceValue != null && source == null
+      ? errorResponse("invalid_request", "unknown source", { allowed: SESSION_SOURCES }, 400)
+      : null;
   try {
     if (request.method === "GET" && url.pathname === "/favicon.ico") {
       return embeddedAsset(faviconPath, "image/x-icon");
@@ -528,13 +534,8 @@ export async function handleRequest(
       });
     }
     if (request.method === "GET" && url.pathname === "/api/stats/summary") {
-      if (sourceValue != null && source == null) {
-        return errorResponse(
-          "invalid_request",
-          "unknown source",
-          { allowed: SESSION_SOURCES },
-          400,
-        );
+      if (unknownSource != null) {
+        return unknownSource;
       }
       return withDb(config, context, (db) =>
         json(
@@ -549,13 +550,8 @@ export async function handleRequest(
       );
     }
     if (request.method === "GET" && url.pathname === "/api/stats/by-dimension") {
-      if (sourceValue != null && source == null) {
-        return errorResponse(
-          "invalid_request",
-          "unknown source",
-          { allowed: SESSION_SOURCES },
-          400,
-        );
+      if (unknownSource != null) {
+        return unknownSource;
       }
       const dimension = parseDimension(url.searchParams.get("dim") ?? "");
       if (dimension == null) {
@@ -579,35 +575,20 @@ export async function handleRequest(
       );
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/activity") {
-      if (sourceValue != null && source == null) {
-        return errorResponse(
-          "invalid_request",
-          "unknown source",
-          { allowed: SESSION_SOURCES },
-          400,
-        );
+      if (unknownSource != null) {
+        return unknownSource;
       }
       return withDb(config, context, (db) => json(activityStats(db, { ...dateFilter, source })));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/model-sparklines") {
-      if (sourceValue != null && source == null) {
-        return errorResponse(
-          "invalid_request",
-          "unknown source",
-          { allowed: SESSION_SOURCES },
-          400,
-        );
+      if (unknownSource != null) {
+        return unknownSource;
       }
       return withDb(config, context, (db) => json(modelSparklines(db, { ...dateFilter, source })));
     }
     if (request.method === "GET" && url.pathname === "/api/analytics/token-economics") {
-      if (sourceValue != null && source == null) {
-        return errorResponse(
-          "invalid_request",
-          "unknown source",
-          { allowed: SESSION_SOURCES },
-          400,
-        );
+      if (unknownSource != null) {
+        return unknownSource;
       }
       if (context.economics != null && source == null) {
         return json(await context.economics.get(dateFilter));
@@ -625,13 +606,8 @@ export async function handleRequest(
       );
     }
     if (request.method === "GET" && url.pathname === "/api/reports/analytics.html") {
-      if (sourceValue != null && source == null) {
-        return errorResponse(
-          "invalid_request",
-          "unknown source",
-          { allowed: SESSION_SOURCES },
-          400,
-        );
+      if (unknownSource != null) {
+        return unknownSource;
       }
       return withDb(config, context, (db) =>
         reportHtmlResponse(
