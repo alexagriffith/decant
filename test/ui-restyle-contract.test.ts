@@ -148,4 +148,21 @@ describe("restyle contract", () => {
     // which the sweep above cannot see because it names no font-family.
     expect(styles).toMatch(/--text-serif-xl-regular:\s*400 /);
   });
+
+  test("badges truncate with an ellipsis instead of clipping raw text", () => {
+    // Fixed-percentage table columns can squeeze badge content. Model ids like
+    // claude-opus-4-7 used to render past the badge boundary with no overflow
+    // guard, so the text vanished mid-character with no way to see the rest.
+    const badge = /^\s*\.badge\s*\{([^}]*)\}/m.exec(styles)?.[1] ?? "";
+    expect(badge).toContain("overflow: hidden");
+    expect(badge).toContain("text-overflow: ellipsis");
+    expect(badge).toContain("white-space: nowrap");
+
+    // The model column used to carry a fixed percentage that squeezed badges.
+    // Fixed pixel widths stop the badge and title columns from compressing
+    // into mid-character cut-offs, and the tooltip carries the full name.
+    const modelCol = /\.col-session-model\s*\{([^}]*)\}/.exec(styles)?.[1] ?? "";
+    expect(modelCol).toMatch(/width:\s*1\d\dpx/);
+    expect(modelCol).not.toMatch(/width:\s*\d+%/);
+  });
 });

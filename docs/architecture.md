@@ -8,7 +8,7 @@ service, bearer token, or second application process.
 ## Data flow
 
 ```text
-~/.claude + ~/.codex
+~/.claude + ~/.codex + ~/.gemini
         |
         v
 discover -> parse -> normalize -> enrich -> ingest

@@ -20,13 +20,16 @@ function freshConfig(): Config {
   const root = join(workDir, `case-${caseCounter}`);
   const claudeDir = join(root, "claude");
   const codexDir = join(root, "codex");
+  const geminiDir = join(root, "gemini");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
   mkdirSync(join(codexDir, "archived_sessions"), { recursive: true });
+  mkdirSync(geminiDir, { recursive: true });
   return {
     dbPath: join(root, "archive.db"),
     claudeDir,
     codexDir,
+    geminiDir,
   };
 }
 

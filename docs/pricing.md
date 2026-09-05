@@ -10,6 +10,7 @@ The seed table was last verified on September 2, 2026 against:
 - [OpenAI model deprecations](https://developers.openai.com/api/docs/deprecations)
 - [OpenAI GPT-3.5 Turbo launch pricing](https://openai.com/index/introducing-chatgpt-and-whisper-apis/)
 - [OpenAI GPT-3.5 Turbo June 2023 price update](https://openai.com/index/function-calling-and-other-api-updates/)
+- [Gemini Developer API pricing](https://ai.google.dev/gemini-api/docs/pricing) (checked September 5, 2026)
 
 All dollar amounts below are USD per million tokens. A dash means that the
 provider does not publish a first-party API token price for that model slug.
@@ -38,16 +39,34 @@ provider does not publish a first-party API token price for that model slug.
 | GPT-5.1-Codex-mini | $0.25 | $0.025 | no additional fee | $2.00 |
 | codex-mini-latest | $1.50 | $0.375 | no additional fee | $6.00 |
 | codex-auto-review, GPT-5.3-Codex-Spark, GPT-5-Codex-mini, GPT-5.4-cyber | — | — | — | — |
+| Gemini 3.8 Flash | $1.50 | $0.15 | $1.50-equiv | $9.00 |
+| Gemini 3.5 Flash | $1.50 | $0.15 | $1.50-equiv | $9.00 |
+| Gemini 3.5 Flash-Lite | $0.30 | $0.03 | $0.30-equiv | $2.50 |
+| Gemini 3.7 Flash, 3.6 Flash | $0.75 | $0.075 | $0.75-equiv | $3.75 |
+| Gemini 3 Flash Preview | $0.50 | $0.05 | $0.50-equiv | $3.00 |
+| Gemini 3.1 Pro Preview, 3 Pro Preview | $2.00 | $0.20 | $2.00-equiv | $12.00 |
+| Gemini 3.1 Flash-Lite | $0.25 | $0.025 | $0.25-equiv | $1.50 |
+| Gemini 2.5 Pro | $1.25 | $0.125 | $1.25-equiv | $10.00 |
+| Gemini 2.5 Flash | $0.30 | $0.03 | $0.30-equiv | $2.50 |
+| Gemini 2.5 Flash-Lite | $0.10 | $0.01 | $0.10-equiv | $0.40 |
+| Gemini image, TTS, live, transcribe, native-audio, computer-use variants | — | — | — | — |
 
 Claude's two cache-write figures are the 5-minute and 1-hour rates. OpenAI
 cache writes before GPT-5.6 have no additional fee; GPT-5.6 reports and bills
-cache writes at 1.25 times the uncached-input rate.
+cache writes at 1.25 times the uncached-input rate. Gemini bills cache storage
+by the token-hour, so Decant maps the equivalent write charge to approximately
+the input rate for typical session-length holds.
 
 Anthropic made Claude Sonnet 5's $2.00 input and $10.00 output rates standard
 on September 1, 2026, so the previously announced increase did not take
 effect. Claude Fable 5.1 and Mythos 5.1 keep Fable 5's input, cache-write, and
 output rates but reduce cache reads from $1.00 to $0.25. OpenAI describes the
 current GPT-5.6 Sol rate as promotional through at least November 21, 2026.
+Google's Gemini 3.7 Flash and 3.6 Flash listed above carry a promotional rate
+through December 31, 2026; they rise to $1.50 input / $0.15 cached / $7.50
+output on January 1, 2027. Google no longer lists the Gemini 2.0 line on the
+pricing page, and Gemini versions without a published rate stay unpriced
+rather than inheriting a neighbor's rate.
 
 `codex-auto-review` is a hidden routing slug, not a public billable model ID.
 OpenAI does not document which underlying model or rate applies. Decant leaves

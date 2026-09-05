@@ -310,4 +310,39 @@ describe("isPriceable", () => {
     expect(isPriceable("<synthetic>")).toBe(false);
     expect(isPriceable("exa-research-pro")).toBe(false);
   });
+
+  test("prices Gemini flash-lite variants at their own published rates", () => {
+    const pricing = defaultPricing();
+    const u = { ...emptyUsage(), input: 1_000_000, output: 1_000_000 };
+    // Published: 3.5 at $0.30/$2.50, 3.1 at $0.25/$1.50, 2.5 at $0.10/$0.40.
+    expect(estimateCost("gemini-3.5-flash-lite", u, pricing)).toBeCloseTo(2.8, 6);
+    expect(estimateCost("gemini-3.1-flash-lite", u, pricing)).toBeCloseTo(1.75, 6);
+    expect(estimateCost("gemini-2.5-flash-lite", u, pricing)).toBeCloseTo(0.5, 6);
+    expect(estimateCost("gemini-3.1-flash-lite-preview", u, pricing)).toBeCloseTo(1.75, 6);
+  });
+
+  test("leaves Gemini versions without a published rate unpriced", () => {
+    const pricing = defaultPricing();
+    const u = { ...emptyUsage(), input: 1_000_000, output: 1_000_000 };
+    for (const model of [
+      "gemini-2.0-flash",
+      "gemini-2.0-flash-lite",
+      "gemini-3.2-flash",
+      "gemini-flash-latest",
+      "gemini-4-pro",
+    ]) {
+      expect(estimateCost(model, u, pricing)).toBe(0);
+      expect(isPriceable(model)).toBe(false);
+    }
+  });
+
+  test("keeps the published Gemini flash and pro rates reachable", () => {
+    const pricing = defaultPricing();
+    const u = { ...emptyUsage(), input: 1_000_000, output: 1_000_000 };
+    expect(estimateCost("gemini-3.5-flash", u, pricing)).toBeCloseTo(10.5, 6);
+    expect(estimateCost("gemini-2.5-flash", u, pricing)).toBeCloseTo(2.8, 6);
+    expect(estimateCost("gemini-2.5-pro", u, pricing)).toBeCloseTo(11.25, 6);
+    expect(estimateCost("gemini-3.1-pro-preview", u, pricing)).toBeCloseTo(14.0, 6);
+    expect(estimateCost("gemini-3-pro-preview", u, pricing)).toBeCloseTo(14.0, 6);
+  });
 });

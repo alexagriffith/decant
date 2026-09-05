@@ -15,5 +15,21 @@
       "claude_code",
       "codex"
     ]
+  },
+  {
+    "path": "/synthetic/gemini-project",
+    "name": "gemini-project",
+    "sessions": 2,
+    "estimated_cost_usd": 0,
+    "last_seen_at": "2026-06-03T10:00:03.000Z",
+    "is_worktree": false,
+    "root_path": "/synthetic/gemini-project",
+    "worktree_label": null,
+    "worktree_tool": null,
+    "root_source": "self",
+    "worktree_count": 0,
+    "session_tools": [
+      "gemini"
+    ]
   }
 ]

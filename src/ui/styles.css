@@ -357,6 +357,7 @@
   --accent-soft: rgba(238, 103, 209, 0.12);
   --claude: #d97757;
   --claude-strong: #c6613f;
+  --gemini: #4285f4;
   --success: #65a30d;
   --warning: #d97706;
   --danger: var(--fg-status-destructive);
@@ -371,6 +372,7 @@
   --danger-text: color-mix(in oklab, var(--danger) 85%, var(--fg));
   --info-text: color-mix(in oklab, var(--info) 60%, var(--fg));
   --claude-text: color-mix(in oklab, var(--claude) 65%, var(--fg));
+  --gemini-text: color-mix(in oklab, var(--gemini) 60%, var(--fg));
   --btn-ink: var(--bg-components-primary-primary);
   --btn-ink-hover: var(--bg-components-primary-primary-hover);
   --shade-rgb: 20, 20, 20;
@@ -1994,45 +1996,52 @@ table {
   overflow-anchor: none;
 }
 
+/* The data-table layout is fixed, so column widths come from measured content
+ * instead of fixed percentages. Text columns take the slack, badges and
+ * numbers keep their natural width, and percent widths stop squeezing badges
+ * into clipped mid-character states like "la-hig" and "claude-opus-4-…".
+ * Widths come from rendered scrollWidth audits plus cell padding; widen with
+ * the audit, not by eye. */
 .sessions-table .col-session-tool {
-  width: 9%;
+  width: 152px;
 }
 
 .sessions-table .col-session-title {
-  width: 22%;
+  width: auto;
 }
 
 .sessions-table .col-session-project {
-  width: 12%;
+  width: 160px;
 }
 
 .sessions-table .col-session-model {
-  width: 12%;
+  width: 184px;
+  min-width: 0;
 }
 
 .sessions-table .col-session-effort {
-  width: 7%;
+  width: 128px;
 }
 
 .sessions-table .col-session-context,
 .sessions-table .col-session-compactions {
-  width: 7%;
+  width: 84px;
 }
 
 .sessions-table .col-session-subagents {
-  width: 8%;
+  width: 124px;
 }
 
 .sessions-table .col-session-count {
-  width: 5%;
+  width: 64px;
 }
 
 .sessions-table .col-session-cost {
-  width: 6%;
+  width: 84px;
 }
 
 .sessions-table .col-session-started {
-  width: 10%;
+  width: 104px;
 }
 
 .active-filter-row {
@@ -2369,7 +2378,11 @@ td a:hover {
   gap: 8px;
 }
 
-.session-title-line > a {
+/* The title link shares the line with fixed-width badges; the archived and
+ * Dosu provenance badges are also anchors. Without flex-grow it absorbed
+ * every shrinkage and collapsed to a few pixels next to a full-width badge. */
+.session-title-line > a:first-child {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -2802,6 +2815,9 @@ select {
   display: inline-flex;
   align-items: center;
   gap: var(--space-4);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--bg-components-badge-default);
@@ -2866,6 +2882,10 @@ select {
   color: var(--fg);
 }
 
+.tone-gemini {
+  color: var(--gemini-text);
+}
+
 .badge.tone-accent,
 .signal-icon.tone-accent {
   background: var(--bg-components-badge-fuchsia);
@@ -2919,8 +2939,16 @@ select {
   background: var(--elevated);
 }
 
+.badge.tone-gemini {
+  background: color-mix(in oklab, var(--gemini) 12%, transparent);
+}
+
 .bar span.tone-openai {
   color: var(--muted);
+}
+
+.bar span.tone-gemini {
+  color: var(--gemini-text);
 }
 
 .notice {
@@ -3753,6 +3781,10 @@ mark {
 
 .sparkline.tone-openai {
   color: var(--muted);
+}
+
+.sparkline.tone-gemini {
+  color: var(--gemini-text);
 }
 
 .sparkline polyline {
@@ -5001,6 +5033,10 @@ mark {
 
 .provider-openai {
   --turn-rail: color-mix(in oklab, var(--fg) 38%, var(--line));
+}
+
+.provider-gemini {
+  --turn-rail: color-mix(in oklab, var(--gemini) 62%, var(--line));
 }
 
 .turn-meta {

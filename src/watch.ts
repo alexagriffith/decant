@@ -150,6 +150,7 @@ export function watchDirs(config: Config): string[] {
     config.claudeDir,
     join(config.codexDir, "sessions"),
     join(config.codexDir, "archived_sessions"),
+    ...(config.geminiDir != null ? [config.geminiDir] : []),
   ].filter((dir) => {
     try {
       return existsSync(dir) && statSync(dir).isDirectory();

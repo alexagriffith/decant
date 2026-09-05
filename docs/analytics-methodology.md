@@ -53,6 +53,12 @@ and reasoning usage when the source exposes it. Claude reasoning can be
 estimated by subtraction when the source does not report it directly; the API
 keeps reported and estimated reasoning separate.
 
+Gemini CLI reports usage per model turn in the Gemini API's shape, which Decant
+normalizes at ingest: the reported prompt count already includes cached
+content, so input is stored net of cache reads, and thought tokens are
+reported outside the candidate count, so they are folded into output and also
+recorded as reported reasoning.
+
 Costs use the pricing table that existed when the session was ingested. They
 are estimates of standard API token rates, not a reconstruction of a ChatGPT
 subscription, Codex credits, discounts, or provider invoices. Updating
@@ -135,8 +141,8 @@ For one model call, occupancy is:
 
 It is the prompt resident in the window for that call, not cumulative token
 consumption. Peak occupancy is the largest observed call. Codex logs can carry
-an explicit model window; Claude window size is inferred from the model family
-when the source does not record it, and the API marks inferred values.
+an explicit model window. Claude and Gemini infer the window from the model
+when the source does not record one, and the API marks inferred values.
 
 Compactions come from provider boundary records. Pre- and post-compaction token
 counts are preserved when the source supplies enough information; missing

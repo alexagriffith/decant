@@ -39,7 +39,7 @@ function openFreshDb(dir: string): Database {
   return openDb(join(dir, "archive.db"));
 }
 
-function fixture(tool: "claude" | "codex", name: string): string {
+function fixture(tool: "claude" | "codex" | "gemini", name: string): string {
   return readFileSync(join(fixtureRoot, tool, name), "utf8");
 }
 
@@ -51,8 +51,10 @@ function write(path: string, content: string): void {
 function stageFixtures(dir: string): IngestConfig {
   const claudeDir = join(dir, "sources", "claude");
   const codexDir = join(dir, "sources", "codex");
+  const geminiDir = join(dir, "sources", "gemini");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
+  mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
 
   for (const name of ["distill.jsonl", "enriched.jsonl", "mcp.jsonl", "sample.jsonl"]) {
     copyFileSync(join(fixtureRoot, "claude", name), join(claudeDir, name));
@@ -60,8 +62,18 @@ function stageFixtures(dir: string): IngestConfig {
   for (const name of ["distill.jsonl", "enriched.jsonl", "mcp.jsonl", "sample.jsonl"]) {
     copyFileSync(join(fixtureRoot, "codex", name), join(codexDir, "sessions", `rollout-${name}`));
   }
+  for (const name of ["mcp.jsonl", "sample.jsonl"]) {
+    copyFileSync(
+      join(fixtureRoot, "gemini", name),
+      join(geminiDir, "synthetic-project", "chats", `session-${name}`),
+    );
+  }
+  writeFileSync(
+    join(geminiDir, "synthetic-project", ".project_root"),
+    "/synthetic/gemini-project\n",
+  );
 
-  return { claudeDir, codexDir };
+  return { claudeDir, codexDir, geminiDir };
 }
 
 async function golden<T>(relPath: string): Promise<T> {
@@ -958,17 +970,20 @@ describe("sync", () => {
     db.close();
   });
 
-  test("discovers Claude files plus Codex rollout files only", () => {
+  test("discovers Claude, Codex, and Gemini session files only", () => {
     const dir = freshCase();
     const config: IngestConfig = {
       claudeDir: join(dir, "claude"),
       codexDir: join(dir, "codex"),
+      geminiDir: join(dir, "gemini"),
     };
     write(join(config.claudeDir, "project", "a.jsonl"), "");
     write(join(config.claudeDir, "project", "notes.txt"), "");
     write(join(config.codexDir, "sessions", "rollout-a.jsonl"), "");
     write(join(config.codexDir, "sessions", "a.jsonl"), "");
     write(join(config.codexDir, "archived_sessions", "rollout-b.jsonl"), "");
+    write(join(config.geminiDir ?? "", "project", "chats", "session-a.jsonl"), "");
+    write(join(config.geminiDir ?? "", "project", "chats", "notes.jsonl"), "");
 
     expect(
       discover(config).map((file) => ({
@@ -980,6 +995,7 @@ describe("sync", () => {
       { tool: "claude_code", name: "a.jsonl", archived: false },
       { tool: "codex", name: "rollout-a.jsonl", archived: false },
       { tool: "codex", name: "rollout-b.jsonl", archived: true },
+      { tool: "gemini", name: "session-a.jsonl", archived: false },
     ]);
   });
 
@@ -996,6 +1012,7 @@ describe("sync", () => {
     write(join(dir, "selected", "codex", "sessions", "rollout-one.jsonl"), "");
     write(join(dir, "selected", "codex", "archived_sessions", "rollout-old.jsonl"), "");
     write(join(dir, "selected", "codex", "session_index.jsonl"), "");
+    write(join(dir, "selected", "gemini", "chats", "session-one.jsonl"), "");
     write(join(dir, "selected", "notes.txt"), "");
 
     expect(
@@ -1008,7 +1025,164 @@ describe("sync", () => {
       { tool: "claude_code", name: "one.jsonl", archived: false },
       { tool: "codex", name: "rollout-old.jsonl", archived: true },
       { tool: "codex", name: "rollout-one.jsonl", archived: false },
+      { tool: "gemini", name: "session-one.jsonl", archived: false },
     ]);
+  });
+
+  test("ingests Gemini sessions with the project root sidecar", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      geminiDir: join(dir, "gemini"),
+    };
+    const projectDir = join(config.geminiDir ?? "", "synthetic-project");
+    write(join(projectDir, ".project_root"), "/synthetic/gemini-project\n");
+    write(join(projectDir, "chats", "session-sample.jsonl"), fixture("gemini", "sample.jsonl"));
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({
+      scanned: 1,
+      ingested: 1,
+      issues: 0,
+      failed: 0,
+    });
+    expect(
+      db
+        .query(
+          `SELECT s.tool, s.source_session_id, p.root_path
+           FROM session s
+           LEFT JOIN project p ON p.id = s.project_id`,
+        )
+        .get(),
+    ).toEqual({
+      tool: "gemini",
+      source_session_id: "gemini-synthetic",
+      root_path: "/synthetic/gemini-project",
+    });
+    closeDb(db);
+  });
+
+  test("does not treat a hash-named Gemini cache directory as a project", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      geminiDir: join(dir, "gemini"),
+    };
+    write(
+      join(config.geminiDir ?? "", "synthetic-hash", "chats", "session-sample.jsonl"),
+      fixture("gemini", "sample.jsonl"),
+    );
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ scanned: 1, ingested: 1, issues: 0 });
+    expect(
+      db
+        .query("SELECT project_id, cwd FROM session WHERE source_session_id = 'gemini-synthetic'")
+        .get(),
+    ).toEqual({ project_id: null, cwd: null });
+    closeDb(db);
+  });
+
+  test("discovers Gemini subagent chats nested under their parent session", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      geminiDir: join(dir, "gemini"),
+    };
+    const chats = join(config.geminiDir ?? "", "project", "chats");
+    write(join(chats, "session-parent.jsonl"), "");
+    write(join(chats, "parent-id", "child-id.jsonl"), "");
+    write(join(chats, "parent-id", "notes.txt"), "");
+    write(join(config.geminiDir ?? "", "project", "logs.json"), "");
+
+    expect(
+      discover(config).map((file) => ({
+        tool: file.tool,
+        name: file.path.slice(chats.length + 1),
+      })),
+    ).toEqual([
+      { tool: "gemini", name: join("parent-id", "child-id.jsonl") },
+      { tool: "gemini", name: "session-parent.jsonl" },
+    ]);
+  });
+
+  test("links Gemini subagent chats to their parent session", () => {
+    const dir = freshCase();
+    const config: IngestConfig = {
+      claudeDir: join(dir, "claude"),
+      codexDir: join(dir, "codex"),
+      geminiDir: join(dir, "gemini"),
+    };
+    const projectDir = join(config.geminiDir ?? "", "synthetic-project");
+    const chats = join(projectDir, "chats");
+    write(join(projectDir, ".project_root"), "/synthetic/gemini-project\n");
+    write(
+      join(chats, "session-parent.jsonl"),
+      [
+        JSON.stringify({
+          sessionId: "parent-1",
+          projectHash: "synthetic-project",
+          startTime: "2026-06-12T10:00:00.000Z",
+          kind: "main",
+        }),
+        JSON.stringify({
+          id: "user-1",
+          timestamp: "2026-06-12T10:00:01.000Z",
+          type: "user",
+          content: "Delegate the synthetic task.",
+        }),
+      ].join("\n"),
+    );
+    write(
+      join(chats, "parent-1", "child-1.jsonl"),
+      [
+        JSON.stringify({
+          sessionId: "child-1",
+          projectHash: "synthetic-project",
+          startTime: "2026-06-12T10:00:02.000Z",
+          kind: "subagent",
+        }),
+        JSON.stringify({
+          id: "user-1",
+          timestamp: "2026-06-12T10:00:03.000Z",
+          type: "user",
+          content: "Delegated synthetic task.",
+        }),
+      ].join("\n"),
+    );
+    const db = openFreshDb(dir);
+
+    expect(sync(db, config)).toMatchObject({ scanned: 2, ingested: 2, issues: 0, failed: 0 });
+    expect(
+      db
+        .query(
+          `SELECT s.source_session_id, s.is_subagent, p.root_path,
+                  (SELECT parent.source_session_id
+                   FROM session parent
+                   WHERE parent.id = s.parent_session_id) AS parent_source
+           FROM session s
+           LEFT JOIN project p ON p.id = s.project_id
+           ORDER BY s.source_session_id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        source_session_id: "child-1",
+        is_subagent: 1,
+        root_path: "/synthetic/gemini-project",
+        parent_source: "parent-1",
+      },
+      {
+        source_session_id: "parent-1",
+        is_subagent: 0,
+        root_path: "/synthetic/gemini-project",
+        parent_source: null,
+      },
+    ]);
+    closeDb(db);
   });
 
   test("discover skips workflow journal files", () => {
@@ -1707,7 +1881,7 @@ describe("sync", () => {
     const db = openFreshDb(dir);
 
     const report = sync(db, config);
-    expect(report).toMatchObject({ scanned: 8, ingested: 8, skipped: 0, issues: 0, failed: 0 });
+    expect(report).toMatchObject({ scanned: 10, ingested: 10, skipped: 0, issues: 0, failed: 0 });
 
     for (const [name, sql] of Object.entries(ROW_QUERIES)) {
       expect(canonicalizeRows(rows(db, sql), dir), name).toEqual(await golden(`rows/${name}.json`));
@@ -1729,7 +1903,7 @@ describe("sync", () => {
       WHERE key = (SELECT key FROM recommendation WHERE kind = 'signal' AND key != 'signal:historical' LIMIT 1)
     `);
     const noOpReport = sync(db, config);
-    expect(noOpReport).toMatchObject({ scanned: 8, ingested: 0, skipped: 8, failed: 0 });
+    expect(noOpReport).toMatchObject({ scanned: 10, ingested: 0, skipped: 10, failed: 0 });
     expect(
       db
         .query(
@@ -1748,7 +1922,7 @@ describe("sync", () => {
     ).toEqual({ impact_label: null, impact_label_checked: 1 });
     db.exec("UPDATE recommendation SET score = 12345 WHERE key = 'catalog:agents-md'");
     const secondNoOpReport = sync(db, config);
-    expect(secondNoOpReport).toMatchObject({ scanned: 8, ingested: 0, skipped: 8, failed: 0 });
+    expect(secondNoOpReport).toMatchObject({ scanned: 10, ingested: 0, skipped: 10, failed: 0 });
     expect(
       db.query("SELECT score FROM recommendation WHERE key = 'catalog:agents-md'").get(),
     ).toEqual({ score: 12345 });

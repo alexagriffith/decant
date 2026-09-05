@@ -38,6 +38,19 @@ function openAiPrice(
   };
 }
 
+// Gemini bills cache storage by the token-hour instead of a flat write, so for
+// a typical session the write-plus-hold cost lands near the input rate per
+// token. The docs list both prices; Decant maps cache writes to the input rate.
+function geminiPrice(inputPerMtok: number, cacheReadPerMtok: number, outputPerMtok: number): Price {
+  return {
+    inputPerMtok,
+    outputPerMtok,
+    cacheReadPerMtok,
+    cacheWritePerMtok: inputPerMtok,
+    cacheWrite1hPerMtok: inputPerMtok,
+  };
+}
+
 export function defaultPricing(): Map<string, Price> {
   // Standard first-party API text-token rates per 1M tokens. Claude cache writes
   // carry both a 5-minute (1.25x input) and a 1-hour (2x input) rate; the split
@@ -106,6 +119,20 @@ export function defaultPricing(): Map<string, Price> {
     ["gpt-3.5-turbo-16k-0613", openAiPrice(3.0, null, 4.0)],
     ["davinci-002", openAiPrice(2.0, null, 2.0)],
     ["babbage-002", openAiPrice(0.4, null, 0.4)],
+    // Gemini text rates (standard paid tier, per 1M tokens, ≤200k prompt).
+    // 3.7-flash and 3.6-flash carry a promo price through 2026-12-31.
+    ["gemini-3.8-flash", geminiPrice(1.5, 0.15, 9.0)],
+    ["gemini-3.7-flash", geminiPrice(0.75, 0.075, 3.75)],
+    ["gemini-3.6-flash", geminiPrice(0.75, 0.075, 3.75)],
+    ["gemini-3.5-flash", geminiPrice(1.5, 0.15, 9.0)],
+    ["gemini-3.5-flash-lite", geminiPrice(0.3, 0.03, 2.5)],
+    ["gemini-3.1-flash-lite", geminiPrice(0.25, 0.025, 1.5)],
+    ["gemini-3-flash-preview", geminiPrice(0.5, 0.05, 3.0)],
+    ["gemini-3.1-pro", geminiPrice(2.0, 0.2, 12.0)],
+    ["gemini-3-pro-preview", geminiPrice(2.0, 0.2, 12.0)],
+    ["gemini-2.5-pro", geminiPrice(1.25, 0.125, 10.0)],
+    ["gemini-2.5-flash-lite", geminiPrice(0.1, 0.01, 0.4)],
+    ["gemini-2.5-flash", geminiPrice(0.3, 0.03, 2.5)],
   ]);
 }
 
@@ -238,6 +265,67 @@ function canonicalModel(raw: string): string | null {
     if (model.startsWith(key)) {
       return key;
     }
+  }
+
+  if (model.includes("gemini")) {
+    // Image, TTS, live, transcribe, native-audio, and computer-use models price
+    // by output unit (pixels, seconds, queries) rather than by tokens, so they
+    // have no comparable text-token rate. Leaving them unpriced matches the
+    // "no guessed prices" rule used for Codex's unpublished slugs.
+    if (
+      model.includes("image") ||
+      model.includes("tts") ||
+      model.includes("live") ||
+      model.includes("transcribe") ||
+      model.includes("native-audio") ||
+      model.includes("computer-use")
+    ) {
+      return null;
+    }
+    if (model.includes("flash-lite")) {
+      if (model.includes("3.5")) {
+        return "gemini-3.5-flash-lite";
+      }
+      if (model.includes("3.1")) {
+        return "gemini-3.1-flash-lite";
+      }
+      if (model.includes("2.5")) {
+        return "gemini-2.5-flash-lite";
+      }
+      return null;
+    }
+    if (model.includes("pro")) {
+      if (model.includes("3.1")) {
+        return "gemini-3.1-pro";
+      }
+      if (model.includes("3-pro")) {
+        return "gemini-3-pro-preview";
+      }
+      if (model.includes("2.5")) {
+        return "gemini-2.5-pro";
+      }
+      return null;
+    }
+    if (model.includes("3.8")) {
+      return "gemini-3.8-flash";
+    }
+    if (model.includes("3.7")) {
+      return "gemini-3.7-flash";
+    }
+    if (model.includes("3.6")) {
+      return "gemini-3.6-flash";
+    }
+    if (model.includes("3.5")) {
+      return "gemini-3.5-flash";
+    }
+    if (model.includes("3-flash")) {
+      return "gemini-3-flash-preview";
+    }
+    if (model.includes("2.5")) {
+      return "gemini-2.5-flash";
+    }
+    // The delisted 2.0 line and unrecognized versions have no published rate.
+    return null;
   }
 
   return null;

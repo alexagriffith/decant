@@ -119,7 +119,7 @@ export function decodeCommand(toolName: string, input: string | null | undefined
   }
   const object = value as Record<string, unknown>;
   const key =
-    toolName === "Bash"
+    toolName === "Bash" || toolName === "run_shell_command"
       ? "command"
       : toolName === "exec_command" || toolName === "shell" || toolName === "local_shell"
         ? "cmd"

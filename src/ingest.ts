@@ -11,7 +11,7 @@ import {
   readSync,
   statSync,
 } from "node:fs";
-import { extname, join, basename as pathBasename } from "node:path";
+import { dirname, extname, join, basename as pathBasename } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { outcome, workType } from "./classify.ts";
 import { materializeContextWindow, materializeMissingContextWindows } from "./context-window.ts";
@@ -33,6 +33,7 @@ import { regenerate as regenerateRecommendations } from "./recommendations.ts";
 import { inheritDeletedSessionTombstone } from "./session-user-state.ts";
 import { parseClaudeSession } from "./sources/claude.ts";
 import { parseCodexSession } from "./sources/codex.ts";
+import { parseGeminiSession } from "./sources/gemini.ts";
 import {
   materializeMissingSessionEconomics,
   materializeSessionEconomics,
@@ -43,6 +44,7 @@ import { resolveWorktreeRoots } from "./worktree.ts";
 export interface IngestConfig {
   claudeDir: string;
   codexDir: string;
+  geminiDir?: string;
   sourcePaths?: string[];
 }
 
@@ -136,6 +138,9 @@ export function discover(config: IngestConfig): SourceFile[] {
   collect(config.claudeDir, "claude_code", false, isClaudeSessionFile, out);
   collect(join(config.codexDir, "sessions"), "codex", false, isCodexRollout, out);
   collect(join(config.codexDir, "archived_sessions"), "codex", true, isCodexRollout, out);
+  if (config.geminiDir != null) {
+    collectGemini(config.geminiDir, out);
+  }
   return out;
 }
 
@@ -235,13 +240,20 @@ export function sync(
       }
 
       const stem = fileStem(file.path);
-      const parsed =
-        file.tool === "claude_code"
-          ? parseClaudeSession(stem, content, {
-              sourcePath: file.path,
-              sidecarMeta: readClaudeSidecarMeta(file.path),
-            })
-          : parseCodexSession(stem, content, titles);
+      let parsed: ParsedSession;
+      if (file.tool === "claude_code") {
+        parsed = parseClaudeSession(stem, content, {
+          sourcePath: file.path,
+          sidecarMeta: readClaudeSidecarMeta(file.path),
+        });
+      } else if (file.tool === "gemini") {
+        const layout = geminiSessionLayout(file.path);
+        parsed = parseGeminiSession(stem, content, geminiProjectPath(layout), {
+          parentSessionId: layout?.parentSessionId ?? null,
+        });
+      } else {
+        parsed = parseCodexSession(stem, content, titles);
+      }
       parsed.session.isArchived = file.archived;
 
       const prepared: Prepared = {
@@ -377,7 +389,7 @@ export function resolveSubagentParents(db: Database): void {
                ORDER BY m.seq
                LIMIT 1) AS first_raw
        FROM session s
-       WHERE s.tool IN ('claude_code', 'codex')`,
+       WHERE s.tool IN ('claude_code', 'codex', 'gemini')`,
   );
 
   const sessionBySource = new Map<string, number>();
@@ -629,7 +641,9 @@ function inferSubagent(row: {
   const subagentSource = get(source, "subagent");
   const threadSpawn = get(subagentSource, "thread_spawn");
   const parentThreadId =
-    asString(get(meta, "parent_thread_id")) ?? asString(get(threadSpawn, "parent_thread_id"));
+    asString(get(meta, "parent_thread_id")) ??
+    asString(get(threadSpawn, "parent_thread_id")) ??
+    asString(get(meta, "parentSessionId"));
   const fromPath = row.source_path != null && /(?:^|[/\\])subagents(?:[/\\])/.test(row.source_path);
   const isSubagent =
     row.is_subagent !== 0 ||
@@ -1097,6 +1111,9 @@ function sourceFileForPath(path: string): SourceFile | null {
   if (isCodexRollout(name)) {
     return { tool: "codex", path, archived: hasPathSegment(path, "archived_sessions") };
   }
+  if (geminiSessionLayout(path) != null) {
+    return { tool: "gemini", path, archived: false };
+  }
   return { tool: "claude_code", path, archived: false };
 }
 
@@ -1119,6 +1136,60 @@ function dedupeSourceFiles(files: SourceFile[]): SourceFile[] {
  * <uuid>.jsonl mains and agent-*.jsonl subagents, which must keep flowing. */
 function isClaudeSessionFile(name: string): boolean {
   return name.endsWith(".jsonl") && name !== "journal.jsonl";
+}
+
+interface GeminiSessionLayout {
+  chatsDir: string;
+  /** Parent chat id when the file is a subagent transcript nested under it. */
+  parentSessionId: string | null;
+}
+
+function collectGemini(geminiDir: string, out: SourceFile[]): void {
+  if (!existsSync(geminiDir)) {
+    return;
+  }
+  for (const path of walk(geminiDir)) {
+    if (geminiSessionLayout(path) != null) {
+      out.push({ tool: "gemini", path, archived: false });
+    }
+  }
+}
+
+/** Gemini CLI writes chats to `<project>/chats/session-<ts>-<hash>.jsonl` and
+ * subagent chats to `<project>/chats/<parent-session-id>/<session-id>.jsonl`.
+ * Requiring the `chats` segment keeps `--path` and directory discovery from
+ * claiming a Claude Code file that merely starts with `session-`. */
+function geminiSessionLayout(path: string): GeminiSessionLayout | null {
+  const name = pathBasename(path);
+  if (!name.endsWith(".jsonl")) {
+    return null;
+  }
+  const parent = dirname(path);
+  if (pathBasename(parent) === "chats") {
+    return name.startsWith("session-") ? { chatsDir: parent, parentSessionId: null } : null;
+  }
+  const grandparent = dirname(parent);
+  if (pathBasename(grandparent) === "chats") {
+    return { chatsDir: grandparent, parentSessionId: pathBasename(parent) };
+  }
+  return null;
+}
+
+/** Returns the absolute workspace root recorded beside the project's chats. */
+function geminiProjectPath(layout: GeminiSessionLayout | null): string | null {
+  if (layout == null) {
+    return null;
+  }
+  const rootFile = join(dirname(layout.chatsDir), ".project_root");
+  try {
+    const root = readFileSync(rootFile, "utf8").trim();
+    if (root !== "") {
+      return root;
+    }
+  } catch {
+    // The hash-named cache directory is not a usable project identity.
+  }
+  return null;
 }
 
 function isCodexRollout(name: string): boolean {
