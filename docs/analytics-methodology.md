@@ -29,8 +29,8 @@ scripted runs, match neither bucket; they remain visible under "All sources".
 The filter describes the producing client only and never infers an account
 identity, email address, or organization.
 
-Like date filtering, a selected source describes which sessions are in scope,
-not a different metric. `GET /api/metadata/session-sources` lists the source
+A selected source narrows which sessions are in scope; the metric definitions
+do not change. `GET /api/metadata/session-sources` lists the source
 values represented by visible sessions so the picker can omit empty ones, and
 the analytics report names the selected source. Source-filtered reports omit
 archive-wide insights because signals use archive-wide evidence.

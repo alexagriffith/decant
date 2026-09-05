@@ -32,7 +32,7 @@ the session preview intentionally omits transcript content.
 
 Analytics statistics and reports accept a combined `source` filter. The
 current values are `claude_code`, `codex_app`, `codex_cli`, and `gemini_cli`.
-Codex app and CLI are distinguished from the source session's recorded
+The `codex_app`/`codex_cli` split reads the source session's recorded
 `originator`/`source` metadata; the filter does not infer an account identity.
 `GET /api/metadata/session-sources` returns only source values represented by
 visible sessions in the local archive; the Analytics picker uses that list.

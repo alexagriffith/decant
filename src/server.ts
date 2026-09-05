@@ -214,8 +214,8 @@ export async function handleRequest(
   const dateFilter = dateFilterFromSearch(url.searchParams);
   const sourceValue = url.searchParams.get("source");
   const source = parseSessionSource(sourceValue);
-  // Every analytics-scoped route shares one guard: a present-but-unknown
-  // source value must reject the request before any archive read happens.
+  // Analytics routes share this guard so an unknown source value is rejected
+  // before any archive read.
   const unknownSource =
     sourceValue != null && source == null
       ? errorResponse("invalid_request", "unknown source", { allowed: SESSION_SOURCES }, 400)
