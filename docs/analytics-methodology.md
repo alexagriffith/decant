@@ -53,6 +53,12 @@ and reasoning usage when the source exposes it. Claude reasoning can be
 estimated by subtraction when the source does not report it directly; the API
 keeps reported and estimated reasoning separate.
 
+Gemini CLI reports usage per model turn in the Gemini API's shape, which Decant
+normalizes at ingest: the reported prompt count already includes cached
+content, so input is stored net of cache reads, and thought tokens are
+reported outside the candidate count, so they are folded into output and also
+recorded as reported reasoning.
+
 Costs use the pricing table that existed when the session was ingested. They
 are estimates of standard API token rates, not a reconstruction of a ChatGPT
 subscription, Codex credits, discounts, or provider invoices. Updating
@@ -81,6 +87,24 @@ size when it is not. Tool-result bytes contribute to context-window volume.
 Bucket costs are proportional allocations of the session's estimated input and
 output cost, so they reconcile to the total but should not be read as separate
 provider charges.
+
+### Search counting
+
+This defines the search count behind the "discovery is expensive"
+recommendation signal (`signal:search-heavy`). It is separate from activity
+buckets and does not change how shell commands are bucketed above. A search is
+a `Grep` or `Glob` tool call, or a shell statement whose leading command is a
+search binary such as `rg`, `grep`, or `find`. Compound commands are split on
+`;`, `&&`, `||`, and newlines. For example, `cd src && rg handler` counts.
+Pipelines are not split. A command such as `ps aux | grep node` filters output
+rather than searching a repository, so it does not count.
+
+Search binaries count only when they are the leading command. Searches wrapped
+by `sudo` or `xargs`, such as `sudo grep x` and `xargs grep foo`, do not count.
+Codex also records some shell activity inside a JavaScript `exec` program, and
+those inner commands do not count yet. The statement splitter does not parse
+shell quoting, so text such as `echo "a; grep b"` can add a false search. These
+cases can make the reported shell and Codex search volume too low or too high.
 
 ## Orientation and implementation
 
@@ -117,8 +141,8 @@ For one model call, occupancy is:
 
 It is the prompt resident in the window for that call, not cumulative token
 consumption. Peak occupancy is the largest observed call. Codex logs can carry
-an explicit model window; Claude window size is inferred from the model family
-when the source does not record it, and the API marks inferred values.
+an explicit model window. Claude and Gemini infer the window from the model
+when the source does not record one, and the API marks inferred values.
 
 Compactions come from provider boundary records. Pre- and post-compaction token
 counts are preserved when the source supplies enough information; missing

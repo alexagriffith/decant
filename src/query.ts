@@ -31,6 +31,8 @@ export interface SessionSummary {
   model: string | null;
   reasoning_effort: string | null;
   reasoning_effort_levels: string[];
+  total_reasoning_tokens: number;
+  reasoning_source: string | null;
   started_at: string | null;
   ended_at: string | null;
   message_count: number;
@@ -103,6 +105,7 @@ function sessionSummarySelect(subagentVisibility: string): string {
   SELECT s.id, s.tool, s.source_session_id, s.title, p.path AS project_path,
          s.model, s.reasoning_effort,
          s.reasoning_effort_levels AS reasoning_effort_levels_json,
+         s.total_reasoning_tokens, s.reasoning_source,
          s.started_at, s.ended_at, s.message_count,
          s.total_input_tokens, s.total_output_tokens, s.estimated_cost_usd,
          ${directSessionUserStateExpression("s")} AS user_state,

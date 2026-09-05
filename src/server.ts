@@ -238,6 +238,7 @@ export async function handleRequest(
         dbPath: config.dbPath,
         claudeDir: config.claudeDir,
         codexDir: config.codexDir,
+        geminiDir: config.geminiDir,
         version: DECANT_VERSION,
       });
     }
@@ -1934,7 +1935,7 @@ function indexHtml(): string {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Local-first analytics for Claude Code and Codex sessions. Search transcripts, inspect cost and context, and turn repeated work into durable agent knowledge."
+      content="Local-first analytics for Claude Code, Codex, and Gemini CLI sessions. Search transcripts, inspect cost and context, and turn repeated work into durable agent knowledge."
     />
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48 256x256" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />

@@ -38,7 +38,9 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
         continue;
       }
       if (session.tool === "claude_code") {
-        claudeRef(messageIdx, message, block, session.cwd, refs);
+        keyedRef(CLAUDE_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
+      } else if (session.tool === "gemini") {
+        keyedRef(GEMINI_FILE_TOOLS, messageIdx, message, block, session.cwd, refs);
       } else {
         codexRefs(messageIdx, message, block, session.cwd, refs);
       }
@@ -47,23 +49,30 @@ export function fileRefs(session: NormalizedSession): FileRef[] {
   return refs;
 }
 
-function claudeRef(
+type FileToolTable = Record<string, { key: string; operation: Operation }>;
+
+const CLAUDE_FILE_TOOLS: FileToolTable = {
+  Read: { key: "file_path", operation: "read" },
+  Edit: { key: "file_path", operation: "edit" },
+  Write: { key: "file_path", operation: "write" },
+  NotebookEdit: { key: "notebook_path", operation: "edit" },
+};
+
+const GEMINI_FILE_TOOLS: FileToolTable = {
+  read_file: { key: "file_path", operation: "read" },
+  replace: { key: "file_path", operation: "edit" },
+  write_file: { key: "file_path", operation: "write" },
+};
+
+function keyedRef(
+  table: FileToolTable,
   messageIdx: number,
   message: NormalizedMessage,
   block: NormalizedBlock,
   cwd: string | null,
   refs: FileRef[],
 ): void {
-  const pair =
-    block.toolName === "Read"
-      ? ({ key: "file_path", operation: "read" } as const)
-      : block.toolName === "Edit"
-        ? ({ key: "file_path", operation: "edit" } as const)
-        : block.toolName === "Write"
-          ? ({ key: "file_path", operation: "write" } as const)
-          : block.toolName === "NotebookEdit"
-            ? ({ key: "notebook_path", operation: "edit" } as const)
-            : null;
+  const pair = block.toolName == null ? undefined : table[block.toolName];
   if (pair == null || !isObject(block.toolInput)) {
     return;
   }

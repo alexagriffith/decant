@@ -482,12 +482,15 @@ describe("local API OpenAPI contract", () => {
 function fixtureConfig(root: string): Config {
   const claudeDir = join(root, "claude");
   const codexDir = join(root, "codex");
+  const geminiDir = join(root, "gemini");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(codexDir, { recursive: true });
+  mkdirSync(geminiDir, { recursive: true });
   return {
     dbPath: join(root, "archive.db"),
     claudeDir,
     codexDir,
+    geminiDir,
   };
 }
 

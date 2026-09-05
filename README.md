@@ -6,13 +6,24 @@
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/dosu-ai/decant/badge)](https://scorecard.dev/viewer/?uri=github.com/dosu-ai/decant)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Decant turns the Claude Code and Codex session logs on your machine into
-tangible insights. See where tokens, cost, and agent time go, inspect context
-usage, find the files and tools agents touch, and search complete transcripts
-from a CLI or local web UI.
+Decant turns the Claude Code, Codex, and Gemini CLI session logs on your machine
+into tangible insights. See where tokens, cost, and agent time go, inspect
+context usage, find the files and tools agents touch, and search complete
+transcripts from a CLI or local web UI.
 
-Decant is local-first. It makes no outbound network calls at runtime,
-and your transcripts never leave your machine.
+Decant is local-first. It makes no outbound network calls at runtime, and your
+transcripts never leave your machine.
+
+It does keep a copy of them. To make sessions searchable, Decant writes prompts,
+tool inputs, tool output, and canonicalized raw records for retained transcript
+messages into an **unencrypted** SQLite archive at `~/.decant/decant.db`, with a
+full-text index over the prompt and tool-argument text. Whatever your agents read
+is in there too — source code, file contents, local paths, and any credentials
+pasted into a session. Decant creates the archive owner-only (`0600`). If your
+organization has a retention policy for agent transcripts, this archive is
+subject to it. See
+[What the archive stores](docs/data-lifecycle.md#what-the-archive-stores) to
+inspect, delete, or remove it.
 
 Built by
 [Dosu](https://dosu.dev?utm_source=decant&utm_medium=github&utm_campaign=attribution&utm_content=readme),
@@ -29,12 +40,12 @@ Run Decant with `npx` with no Bun install or global package required.
 npx @dosu/decant@latest
 ```
 
-This starts the local UI at <http://127.0.0.1:3000>, indexes the Claude Code and
-Codex logs on your machine, and watches for changes.
+This starts the local UI at <http://127.0.0.1:3000>, indexes the Claude Code,
+Codex, and Gemini CLI logs on your machine, and watches for changes.
 
 ## What you get
 
-- One SQLite archive for Claude Code and Codex sessions.
+- One SQLite archive for Claude Code, Codex, and Gemini CLI sessions.
 - Full-text search across messages, tool calls, and transcripts.
 - Token, [estimated cost](docs/pricing.md), context, activity, tool, MCP, and
   file analytics.
@@ -80,6 +91,7 @@ docker run --rm \
   -v decant-data:/var/lib/decant \
   -v "$HOME/.claude/projects:/sources/claude:ro" \
   -v "$HOME/.codex:/sources/codex:ro" \
+  -v "$HOME/.gemini/tmp:/sources/gemini:ro" \
   ghcr.io/dosu-ai/decant:latest
 ```
 
@@ -87,6 +99,10 @@ Keep the `127.0.0.1:` prefix. Publishing `-p 3000:3000` exposes the
 unauthenticated archive API on every host interface. Custom container networks
 may need the trusted-peer setting documented under
 [Docker distribution](docs/distribution.md#docker).
+
+The source mounts are read-only, but `decant-data` is a **named volume**: the
+archive outlives every container, and neither `--rm` nor `docker rm` removes it.
+Use `docker volume rm decant-data` when you want it gone.
 
 ## CLI
 
@@ -102,11 +118,19 @@ decant files --group ext       # file hotspots
 decant tool stats              # tool usage
 decant mcp stats               # MCP server usage
 decant export 1 > session.md   # export a session
+decant db info                 # what the archive holds and where
+decant session rm 1 --yes      # delete a session and its descendants
+decant db vacuum               # release the freed pages after a delete
 ```
 
 Run `decant --help` or `decant <command> --help` for all commands and flags.
 Read commands support `--json`; global flags include `--db`, `--format`,
 `--quiet`, `--no-color`, and `--no-sync`.
+
+Decant reads `~/.claude/projects`, `~/.codex`, and `~/.gemini/tmp` by default.
+Override them with `DECANT_CLAUDE_DIR`, `DECANT_CODEX_DIR`, and
+`DECANT_GEMINI_DIR`, or with the corresponding `--claude-dir`, `--codex-dir`,
+and `--gemini-dir` flags on `sync`, `watch`, and `serve`.
 
 To index selected files or a temporary source tree:
 

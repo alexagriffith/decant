@@ -16,9 +16,11 @@ function freshConfig(): Config {
   const root = join(workDir, `case-${dbCounter}`);
   const claudeDir = join(root, "claude");
   const codexDir = join(root, "codex");
+  const geminiDir = join(root, "gemini");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
-  return { dbPath: join(root, "archive.db"), claudeDir, codexDir };
+  mkdirSync(geminiDir, { recursive: true });
+  return { dbPath: join(root, "archive.db"), claudeDir, codexDir, geminiDir };
 }
 
 function seed(config: Config): void {

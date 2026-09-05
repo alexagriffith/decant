@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripGoldenVolatility } from "../scripts/golden-normalize.ts";
@@ -18,11 +18,17 @@ function fixtureFiles(tool: string): string[] {
     .sort();
 }
 
-function stageFixtures(caseDir: string): { claudeDir: string; codexDir: string } {
+function stageFixtures(caseDir: string): {
+  claudeDir: string;
+  codexDir: string;
+  geminiDir: string;
+} {
   const claudeDir = join(caseDir, "sources", "claude");
   const codexDir = join(caseDir, "sources", "codex");
+  const geminiDir = join(caseDir, "sources", "gemini");
   mkdirSync(claudeDir, { recursive: true });
   mkdirSync(join(codexDir, "sessions"), { recursive: true });
+  mkdirSync(join(geminiDir, "synthetic-project", "chats"), { recursive: true });
   for (const file of fixtureFiles("claude")) {
     copyFileSync(join(import.meta.dir, "..", "fixtures", "claude", file), join(claudeDir, file));
   }
@@ -32,7 +38,17 @@ function stageFixtures(caseDir: string): { claudeDir: string; codexDir: string }
       join(codexDir, "sessions", `rollout-${file}`),
     );
   }
-  return { claudeDir, codexDir };
+  for (const file of fixtureFiles("gemini")) {
+    copyFileSync(
+      join(import.meta.dir, "..", "fixtures", "gemini", file),
+      join(geminiDir, "synthetic-project", "chats", `session-${file}`),
+    );
+  }
+  writeFileSync(
+    join(geminiDir, "synthetic-project", ".project_root"),
+    "/synthetic/gemini-project\n",
+  );
+  return { claudeDir, codexDir, geminiDir };
 }
 
 function normalizeCliGolden(name: string, value: unknown): unknown {
@@ -88,7 +104,7 @@ describe("CLI golden parity", () => {
 
   test("read commands match frozen JSON snapshots", async () => {
     const caseDir = join(workDir, "case");
-    const { claudeDir, codexDir } = stageFixtures(caseDir);
+    const { claudeDir, codexDir, geminiDir } = stageFixtures(caseDir);
     const dbPath = join(caseDir, "archive.db");
     const sync = await runCli([
       "--db",
@@ -99,6 +115,8 @@ describe("CLI golden parity", () => {
       claudeDir,
       "--codex-dir",
       codexDir,
+      "--gemini-dir",
+      geminiDir,
     ]);
     expect(sync).toMatchObject({ code: 0, stderr: "" });
 

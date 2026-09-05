@@ -1445,13 +1445,15 @@ components:
       additionalProperties: true
     Config:
       type: object
-      required: [dbPath, claudeDir, codexDir, version]
+      required: [dbPath, claudeDir, codexDir, geminiDir, version]
       properties:
         dbPath:
           type: string
         claudeDir:
           type: string
         codexDir:
+          type: string
+        geminiDir:
           type: string
         version:
           type: string
@@ -1769,6 +1771,8 @@ components:
         - model
         - reasoning_effort
         - reasoning_effort_levels
+        - total_reasoning_tokens
+        - reasoning_source
         - started_at
         - ended_at
         - message_count
@@ -1813,6 +1817,16 @@ components:
           type: array
           items:
             type: string
+        total_reasoning_tokens:
+          type: integer
+          minimum: 0
+          description: >-
+            Reasoning (thinking) tokens for the session, reported where the
+            source provides them and otherwise estimated by subtraction.
+        reasoning_source:
+          type: [string, "null"]
+          enum: [reported, inferred, none, null]
+          description: Provenance of total_reasoning_tokens.
         started_at:
           type: [string, "null"]
         ended_at:

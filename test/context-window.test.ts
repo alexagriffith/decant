@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   contextWindowForSession,
   inferClaudeContextWindowTokens,
+  inferGeminiContextWindowTokens,
   materializeMissingContextWindows,
 } from "../src/context-window.ts";
 import { openDb } from "../src/db.ts";
@@ -637,6 +638,37 @@ describe("contextWindowForSession (codex)", () => {
     expect(timeline?.window_tokens).toBeNull();
     expect(timeline?.window_inferred).toBe(false);
     expect(timeline?.peak_pct).toBeNull();
+    db.close();
+  });
+
+  test("infers Gemini windows from the recorded model, not from the log", () => {
+    expect(inferGeminiContextWindowTokens("gemini-3.5-flash")).toBe(1_000_000);
+    expect(inferGeminiContextWindowTokens("gemini-2.5-pro")).toBe(1_000_000);
+    expect(inferGeminiContextWindowTokens("gemini-3-pro-preview")).toBe(1_000_000);
+    expect(inferGeminiContextWindowTokens(null)).toBe(1_000_000);
+    expect(inferGeminiContextWindowTokens("gemini-2.5-flash-lite")).toBe(128_000);
+    expect(inferGeminiContextWindowTokens("gemini-3.1-flash-lite-preview")).toBe(128_000);
+    expect(inferGeminiContextWindowTokens("gemini-2.5-flash-image")).toBe(128_000);
+  });
+
+  test("gives Gemini sessions a percentage without any explicit log value", () => {
+    const db = freshDb();
+    db.exec(`
+      INSERT INTO session(id, tool, source_session_id, started_at, is_subagent, model)
+      VALUES (1, 'gemini', 'gemini-window', '2026-07-01T00:00:00Z', 0, 'gemini-3.5-flash');
+      INSERT INTO message(id, session_id, seq, role, timestamp,
+                          input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, raw)
+      VALUES (1, 1, 0, 'user', '2026-07-01T00:00:00Z', NULL, NULL, NULL, NULL, '{}'),
+             (2, 1, 1, 'assistant', '2026-07-01T00:01:00Z',
+              20729, 2855, 0, 0, '{}');
+    `);
+
+    const timeline = contextWindowForSession(db, 1);
+    expect(timeline?.tool).toBe("gemini");
+    expect(timeline?.peak_tokens).toBe(20_729);
+    expect(timeline?.window_tokens).toBe(1_000_000);
+    expect(timeline?.window_inferred).toBe(true);
+    expect(timeline?.peak_pct).toBeCloseTo(20_729 / 1_000_000, 6);
     db.close();
   });
 });

@@ -100,6 +100,7 @@ import { DOSU_ANALYTICS_DISMISSAL_KEY, shouldShowDosuCta } from "./dosu-cta.ts";
 import { dosuLink } from "./dosu-links.ts";
 import { dosuToolDisplayName, isDosuToolName } from "./dosu-tool.ts";
 import { effortDisplayLabel, effortTooltip } from "./effort.ts";
+import { errorRateDisplay } from "./error-rate.ts";
 import { nearestUsableIndex } from "./focus-rescue.ts";
 import { isFramed } from "./frame-guard.ts";
 import {
@@ -136,6 +137,7 @@ import { searchSnippetParts, visuallyOrderedSearchHits } from "./search-results.
 import {
   archiveActionFor,
   DELETE_SESSION_EXPLANATION,
+  DELETE_SESSION_EYEBROW,
   type SessionStateUpdate,
   sessionStateRequest,
 } from "./session-state.ts";
@@ -225,6 +227,8 @@ type SessionSummary = {
   model: string | null;
   reasoning_effort: string | null;
   reasoning_effort_levels: string[];
+  total_reasoning_tokens: number;
+  reasoning_source: string | null;
   started_at: string | null;
   message_count: number;
   total_input_tokens: number;
@@ -681,6 +685,8 @@ const OPENAI_ICON_PATH =
   "M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z";
 const ANTHROPIC_ICON_PATH =
   "M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z";
+const GEMINI_ICON_PATH =
+  "M12 2a.75.75 0 0 1 .67.42l1.93 3.86 3.86 1.93a.75.75 0 0 1 0 1.34l-3.86 1.93-1.93 3.86a.75.75 0 0 1-1.34 0l-1.93-3.86-3.86-1.93a.75.75 0 0 1 0-1.34l3.86-1.93 1.93-3.86a.75.75 0 0 1 .67-.42Zm7.5 12a.75.75 0 0 1 .67.42l1.05 2.1 2.1 1.05a.75.75 0 0 1 0 1.34l-2.1 1.05-1.05 2.1a.75.75 0 0 1-1.34 0l-1.05-2.1-2.1-1.05a.75.75 0 0 1 0-1.34l2.1-1.05 1.05-2.1a.75.75 0 0 1 .67-.42Z";
 
 const SESSION_PAGE_SIZE = 50;
 const SESSION_DETAIL_MESSAGE_PAGE_SIZE = 160;
@@ -1678,30 +1684,15 @@ function SessionsView({
       <header className="page-heading inline-heading">
         <div>
           <h1>Sessions</h1>
-          <p>Every Claude Code and Codex session log on this device.</p>
+          <p>Every Claude Code, Codex, and Gemini CLI session log on this device.</p>
         </div>
         <DateRangeControl bounds={data.dateBounds} range={dateRange} onChange={onDateRangeChange} />
       </header>
 
       <div className="stat-grid sessions-stat-grid">
-        <StatCard
-          icon="sessions"
-          label="Sessions"
-          tone="accent"
-          value={formatInt(cardSummary.sessions)}
-        />
-        <StatCard
-          icon="messages"
-          label="Messages"
-          tone="info"
-          value={formatInt(cardSummary.messages)}
-        />
-        <StatCard
-          icon="money"
-          label="Est. cost"
-          tone="success"
-          value={money(cardSummary.estimated_cost_usd)}
-        />
+        <StatCard icon="sessions" label="Sessions" value={formatInt(cardSummary.sessions)} />
+        <StatCard icon="messages" label="Messages" value={formatInt(cardSummary.messages)} />
+        <StatCard icon="money" label="Est. cost" value={money(cardSummary.estimated_cost_usd)} />
       </div>
 
       <section aria-busy={pageLoading} className="panel sessions-panel">
@@ -1765,7 +1756,7 @@ function SessionsView({
                 <th>Model</th>
                 <th>Effort</th>
                 <th className="numeric">Peak ctx</th>
-                <th className="numeric">Compactions</th>
+                <th className="numeric">Comp.</th>
                 <th className="numeric">Subagents</th>
                 <th className="numeric">Msgs</th>
                 <th className="numeric">Cost</th>
@@ -1910,16 +1901,10 @@ function ProjectsView({
         <StatCard
           icon="folder"
           label="Projects"
-          tone="accent"
           value={formatInt(projects.filter((project) => !project.is_worktree).length)}
         />
-        <StatCard icon="folder" label="Worktrees" tone="info" value={formatInt(worktrees.length)} />
-        <StatCard
-          icon="tools"
-          label="Activity sources"
-          tone="success"
-          value={formatInt(activitySources.size)}
-        />
+        <StatCard icon="folder" label="Worktrees" value={formatInt(worktrees.length)} />
+        <StatCard icon="tools" label="Activity sources" value={formatInt(activitySources.size)} />
       </div>
 
       <section className="panel">
@@ -2191,7 +2176,9 @@ const SessionTableRow = memo(function SessionTableRow({
       <td className="truncate-cell">
         <span className="session-title-stack" style={indentStyle}>
           <span className="session-title-line">
-            <a href={`/sessions/${session.id}`}>{title}</a>
+            <a href={`/sessions/${session.id}`} title={title}>
+              {title}
+            </a>
             {session.is_user_archived ? <Badge tone="neutral">Archived</Badge> : null}
             <DosuProvenanceBadge session={session} />
           </span>
@@ -2202,14 +2189,21 @@ const SessionTableRow = memo(function SessionTableRow({
         {session.project_path == null ? (
           <span className="faint">-</span>
         ) : (
-          <a href={projectSessionsHref(session.project_path)}>{basename(session.project_path)}</a>
+          <a href={projectSessionsHref(session.project_path)} title={session.project_path}>
+            {basename(session.project_path)}
+          </a>
         )}
       </td>
       <td>
         <ModelBadge model={session.model} />
       </td>
       <td>
-        <EffortBadge effort={session.reasoning_effort} levels={session.reasoning_effort_levels} />
+        <ReasoningBadge
+          effort={session.reasoning_effort}
+          levels={session.reasoning_effort_levels}
+          totalReasoningTokens={session.total_reasoning_tokens}
+          reasoningSource={session.reasoning_source}
+        />
       </td>
       <td className="numeric">
         <SessionContextPeak session={session} />
@@ -3531,9 +3525,9 @@ function FirstRunPanel({ onSync, syncing }: { onSync: () => void; syncing: boole
         </span>
         <h2>No sessions yet</h2>
         <p>
-          Decant reads the JSONL logs Claude Code and Codex already write and turns them into a
-          searchable session-log index with token, cost, and context-window analytics. Nothing
-          leaves this machine.
+          Decant reads the JSONL logs Claude Code, Codex, and Gemini CLI already write and turns
+          them into a searchable session-log index with token, cost, and context-window analytics.
+          Nothing leaves this machine.
         </p>
         <code>decant sync</code>
         <button
@@ -4311,40 +4305,22 @@ function AnalyticsView({
       </header>
 
       <div className="stat-grid analytics-stat-grid">
-        <StatCard
-          icon="sessions"
-          label="Sessions"
-          tone="accent"
-          value={formatInt(data.summary?.sessions ?? 0)}
-        />
-        <StatCard
-          icon="messages"
-          label="Messages"
-          tone="info"
-          value={formatInt(data.summary?.messages ?? 0)}
-        />
-        <StatCard
-          icon="bolt"
-          label="Tool calls"
-          tone="warning"
-          value={formatInt(data.summary?.tool_calls ?? 0)}
-        />
+        <StatCard icon="sessions" label="Sessions" value={formatInt(data.summary?.sessions ?? 0)} />
+        <StatCard icon="messages" label="Messages" value={formatInt(data.summary?.messages ?? 0)} />
+        <StatCard icon="bolt" label="Tool calls" value={formatInt(data.summary?.tool_calls ?? 0)} />
         <StatCard
           icon="download"
           label="Input tokens"
-          tone="neutral"
           value={compact(data.summary?.input_tokens ?? 0)}
         />
         <StatCard
           icon="upload"
           label="Output tokens"
-          tone="neutral"
           value={compact(data.summary?.output_tokens ?? 0)}
         />
         <StatCard
           icon="money"
           label="Est. cost"
-          tone="success"
           value={money(data.summary?.estimated_cost_usd ?? 0)}
         />
       </div>
@@ -5706,9 +5682,10 @@ type BadgeTone =
   | "danger"
   | "info"
   | "claude"
-  | "openai";
+  | "openai"
+  | "gemini";
 
-type BrandIconName = "anthropic" | "claude" | "openai";
+type BrandIconName = "anthropic" | "claude" | "openai" | "gemini";
 
 type IconName =
   | "archive"
@@ -5755,23 +5732,28 @@ type IconName =
   | "x";
 
 function StatCard({
+  alert = false,
   icon,
   label,
-  tone,
   value,
 }: {
+  /** Renders the value and icon in the danger colour. Redundant emphasis on a
+   * number that already states the problem, so colour never carries meaning
+   * alone. Deliberately narrow: stat icons are muted by design (see the
+   * `.stat-card .stat-icon` note in styles.css), so this is a semantic state,
+   * not a reopening of decorative tones. */
+  alert?: boolean;
   icon: IconName;
   label: string;
-  tone: BadgeTone;
   value: string;
 }) {
   return (
-    <div className="stat-card">
+    <div className="stat-card" data-alert={alert ? "true" : undefined}>
       <div>
         <span>{label}</span>
         <strong>{value}</strong>
       </div>
-      <span className={`stat-icon tone-${tone}`}>
+      <span className="stat-icon">
         <Icon name={icon} />
       </span>
     </div>
@@ -5818,6 +5800,14 @@ function ToolBadge({ tool }: { tool: string | null | undefined }) {
       </Badge>
     );
   }
+  if (tool === "gemini") {
+    return (
+      <Badge tone="gemini">
+        <BrandMark name="gemini" />
+        Gemini
+      </Badge>
+    );
+  }
   return <Badge>{tool ?? "-"}</Badge>;
 }
 
@@ -5829,7 +5819,7 @@ function ModelBadge({ model }: { model: string | null | undefined }) {
   const tone = brandTone(label);
   const icon = modelBrandIcon(label, tone);
   return (
-    <Badge mono tone={tone}>
+    <Badge mono title={model?.trim() ?? label} tone={tone}>
       {icon == null ? null : <BrandMark name={icon} />}
       {label}
     </Badge>
@@ -5855,10 +5845,52 @@ function EffortBadge({
     );
   }
   return (
-    <Badge mono title={effortTooltip(effort, levels)} tone={label === "mixed" ? "warning" : "info"}>
+    <Badge
+      mono
+      title={effortTooltip(effort, levels) ?? effortDisplayLabel(effort)}
+      tone={label === "mixed" ? "warning" : "info"}
+    >
       {displayLabel}
     </Badge>
   );
+}
+
+function ThinkingBadge({ tokens, source }: { tokens: number; source: string | null }) {
+  const observed =
+    source === "inferred"
+      ? `Reasoning estimated from output: ~${formatInt(tokens)} tokens`
+      : `Extended thinking observed: ${formatInt(tokens)} reported reasoning tokens`;
+  return (
+    <Badge
+      mono
+      title={`${observed}. This source does not record a discrete effort level.`}
+      tone="info"
+    >
+      thinking on
+    </Badge>
+  );
+}
+
+/** The Effort cell shows the recorded level when the source logs one. When
+ * the source logs reasoning tokens but no level, as Gemini does, it shows the
+ * derived thinking state instead of an empty dash. */
+function ReasoningBadge({
+  effort,
+  levels,
+  totalReasoningTokens,
+  reasoningSource,
+  labeled = false,
+}: {
+  effort: string | null | undefined;
+  levels: string[];
+  totalReasoningTokens: number;
+  reasoningSource: string | null;
+  labeled?: boolean;
+}) {
+  if ((effort ?? "").trim() === "" && totalReasoningTokens > 0) {
+    return <ThinkingBadge tokens={totalReasoningTokens} source={reasoningSource} />;
+  }
+  return <EffortBadge effort={effort} labeled={labeled} levels={levels} />;
 }
 
 function displayModelLabel(model: string | null | undefined): string | null {
@@ -6571,6 +6603,8 @@ function brandIconPath(name: BrandIconName): string {
       return CLAUDE_ICON_PATH;
     case "openai":
       return OPENAI_ICON_PATH;
+    case "gemini":
+      return GEMINI_ICON_PATH;
   }
 }
 
@@ -6638,6 +6672,9 @@ function modelBrandIcon(model: string, tone: BadgeTone): BrandIconName | null {
       ? "anthropic"
       : "claude";
   }
+  if (tone === "gemini") {
+    return "gemini";
+  }
   return null;
 }
 
@@ -6660,6 +6697,9 @@ function brandTone(model: string | null | undefined): BadgeTone {
     normalized.startsWith("o3")
   ) {
     return "openai";
+  }
+  if (normalized.includes("gemini") || normalized.includes("gemma")) {
+    return "gemini";
   }
   return "neutral";
 }
@@ -7432,6 +7472,7 @@ function ToolsView({
   };
   const clearedCallFilters = clearToolCallFilters(locationFilters);
   const clearedFiltersHref = toolFiltersHref(clearedCallFilters);
+  const errorRate = errorRateDisplay(aggregate.totalCalls, aggregate.errorRate);
 
   return (
     <div className="view-stack">
@@ -7453,29 +7494,18 @@ function ToolsView({
       </header>
 
       <section aria-label="Tool call summary" className="stat-grid tool-stat-grid">
-        <StatCard
-          icon="tools"
-          label="Total calls"
-          tone="accent"
-          value={formatInt(aggregate.totalCalls)}
-        />
-        <StatCard
-          icon="info"
-          label="Error rate"
-          tone={aggregate.errorRate > 0 ? "danger" : "success"}
-          value={aggregate.totalCalls === 0 ? "—" : `${aggregate.errorRate.toFixed(1)}%`}
-        />
+        <StatCard icon="tools" label="Total calls" value={formatInt(aggregate.totalCalls)} />
+        <StatCard alert={errorRate.alert} icon="info" label="Error rate" value={errorRate.label} />
         <StatCard
           icon="clock"
           label="Median / p95 elapsed"
-          tone="info"
           value={
             aggregate.p50 == null || aggregate.p95 == null
               ? "—"
               : `${durationPrecise(aggregate.p50)} / ${durationPrecise(aggregate.p95)}`
           }
         />
-        <StatCard icon="bolt" label="Top tool" tone="warning" value={aggregate.topTool ?? "—"} />
+        <StatCard icon="bolt" label="Top tool" value={aggregate.topTool ?? "—"} />
       </section>
 
       <section className="panel">
@@ -8237,8 +8267,8 @@ function SettingsView({
           <div>
             <h2>About Decant</h2>
             <p>
-              Local-first analytics for Claude Code and Codex sessions. Decant is an open source
-              tool from Dosu.
+              Local-first analytics for Claude Code, Codex, and Gemini CLI sessions. Decant is an
+              open source tool from Dosu.
             </p>
           </div>
           <img alt="" src={dosuDecantUrl} />
@@ -8348,7 +8378,7 @@ function DeleteSessionDialog({
       >
         <header>
           <div>
-            <span className="section-eyebrow">Permanent action</span>
+            <span className="section-eyebrow">{DELETE_SESSION_EYEBROW}</span>
             <h2 id={titleId}>Delete session?</h2>
           </div>
           <button
@@ -9060,10 +9090,12 @@ function SessionDetailView({
             <ToolBadge tool={detail.summary.tool} />
             <ModelBadge model={detail.summary.model} />
             <DosuProvenanceBadge session={detail.summary} />
-            <EffortBadge
+            <ReasoningBadge
               effort={detail.summary.reasoning_effort}
-              labeled
               levels={detail.summary.reasoning_effort_levels}
+              totalReasoningTokens={detail.summary.total_reasoning_tokens}
+              reasoningSource={detail.summary.reasoning_source}
+              labeled
             />
             {detail.summary.ingest_issue_count > 0 ? (
               <button
@@ -9732,11 +9764,13 @@ function ContextWindowUnavailable({ timeline }: { timeline: ContextWindowTimelin
         <Icon name="info" />
         <div>
           <strong>
-            {hasUsage ? "Window capacity wasn’t recorded" : "Per-call usage wasn’t recorded"}
+            {hasUsage
+              ? "Window capacity not recorded or inferred"
+              : "Per-call usage wasn’t recorded"}
           </strong>
           <p>
             {hasUsage
-              ? "The transcript includes token usage, but this source did not record the model’s total context capacity, so a trustworthy percentage is unavailable."
+              ? "The transcript includes token usage, but Decant has no explicit context-window value and no model-based capacity for this source, so a trustworthy percentage is unavailable."
               : "This source session does not include the per-call token readings needed to reconstruct context usage."}
           </p>
         </div>
@@ -11061,7 +11095,7 @@ function messageSpecialKind(
 }
 
 function providerIdentity(tool: string): {
-  key: "assistant" | "claude" | "openai";
+  key: "assistant" | "claude" | "openai" | "gemini";
   label: string;
   tone: BadgeTone;
   icon: BrandIconName | null;
@@ -11071,6 +11105,9 @@ function providerIdentity(tool: string): {
   }
   if (tool === "codex") {
     return { key: "openai", label: "Codex", tone: "openai", icon: "openai" };
+  }
+  if (tool === "gemini") {
+    return { key: "gemini", label: "Gemini", tone: "gemini", icon: "gemini" };
   }
   return { key: "assistant", label: "Assistant", tone: "accent", icon: null };
 }
