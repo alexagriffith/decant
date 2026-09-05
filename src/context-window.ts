@@ -30,8 +30,8 @@ export function inferClaudeContextWindowTokens(model: string | null, maxSeen: nu
     : DEFAULT_WINDOW_TOKENS;
 }
 
-/** Infer a Gemini window size the same way we do for Claude: model ID on the
- * response carries the capacity, with a safe 1M default for the 2.5/3.x line. */
+/** Infer a Gemini window from the model id, the way we do for Claude. The
+ * 2.5/3.x line publishes 1M; flash-lite and image variants get 128k. */
 export function inferGeminiContextWindowTokens(model: string | null): number {
   const normalized = (model ?? "").toLowerCase();
   if (normalized.includes("flash-lite") || normalized.includes("image")) {
@@ -69,8 +69,8 @@ export interface ContextWindowTimeline {
   tool: string;
   /** Null when the session has no usable usage data (e.g. Codex until Phase 2). */
   window_tokens: number | null;
-  /** True whenever window_tokens comes from the model's published capacity
-   *  rather than an explicit log value (Claude, Gemini); Codex's is explicit. */
+  /** True when window_tokens comes from the model's published capacity rather
+   *  than the log. Claude and Gemini infer it; Codex logs an explicit window. */
   window_inferred: boolean;
   peak_tokens: number;
   peak_pct: number | null;

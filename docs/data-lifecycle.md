@@ -21,7 +21,7 @@ By default Decant discovers:
   subagent transcripts nested under `chats/<parent-session-id>/`, which link
   to their parent session. Decant reads the adjacent `.project_root` sidecar
   for the workspace path and leaves the project unset when that sidecar is
-  absent or empty. Gemini session files are event logs: Decant replays
+  absent or empty. Gemini session files are event logs. Decant replays
   checkpoint and rewind records the way Gemini CLI does, so a rewound turn or
   a re-recorded message is stored once.
 

@@ -1996,12 +1996,12 @@ table {
   overflow-anchor: none;
 }
 
-/* The data-table layout is fixed, so distribute space by measured content
- * rather than fixed percentages: the two text columns that can wrap take the
- * slack, badges and numbers keep their natural width and stop compressing each
- * other into clipped, mid-character states like "la-hig" and "claude-opus-4-…".
- * Widths come from rendered scrollWidth audits (badge + cell padding); widen
- * with the audit, not by eye. */
+/* The data-table layout is fixed, so column widths come from measured content
+ * instead of fixed percentages. Text columns take the slack, badges and
+ * numbers keep their natural width, and percent widths stop squeezing badges
+ * into clipped mid-character states like "la-hig" and "claude-opus-4-…".
+ * Widths come from rendered scrollWidth audits plus cell padding; widen with
+ * the audit, not by eye. */
 .sessions-table .col-session-tool {
   width: 152px;
 }
@@ -2378,9 +2378,9 @@ td a:hover {
   gap: 8px;
 }
 
-/* The title link shares the line with fixed-width badges (archived, Dosu
- * provenance, also anchors). Without flex-grow it absorbed every shrinkage
- * and collapsed to a few pixels next to a full-width badge. */
+/* The title link shares the line with fixed-width badges; the archived and
+ * Dosu provenance badges are also anchors. Without flex-grow it absorbed
+ * every shrinkage and collapsed to a few pixels next to a full-width badge. */
 .session-title-line > a:first-child {
   flex: 1 1 auto;
   min-width: 0;

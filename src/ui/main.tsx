@@ -5819,9 +5819,9 @@ function ThinkingBadge({ tokens, source }: { tokens: number; source: string | nu
   );
 }
 
-/** The Effort cell shows the recorded discrete level when the source logs one;
- * when it does not but reasoning tokens are observed (Gemini's extended
- * thinking), it shows the derived thinking state instead of an empty dash. */
+/** The Effort cell shows the recorded level when the source logs one. When
+ * the source logs reasoning tokens but no level, as Gemini does, it shows the
+ * derived thinking state instead of an empty dash. */
 function ReasoningBadge({
   effort,
   levels,

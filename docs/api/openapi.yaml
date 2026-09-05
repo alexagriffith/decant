@@ -1779,8 +1779,8 @@ components:
           type: integer
           minimum: 0
           description: >-
-            Reasoning (thinking) tokens for the session: reported by the
-            source where available, otherwise estimated by subtraction.
+            Reasoning (thinking) tokens for the session, reported where the
+            source provides them and otherwise estimated by subtraction.
         reasoning_source:
           type: [string, "null"]
           enum: [reported, inferred, none, null]
