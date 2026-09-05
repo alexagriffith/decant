@@ -38,9 +38,9 @@ function openAiPrice(
   };
 }
 
-// Gemini bills cache storage by the token-hour rather than a flat write, so the
-// per-token equivalent of writing and (typical session-length) holding cache is
-// approximately the input rate. The docs list both prices; Decant maps write≈input.
+// Gemini bills cache storage by the token-hour instead of a flat write, so for
+// a typical session the write-plus-hold cost lands near the input rate per
+// token. The docs list both prices; Decant maps cache writes to the input rate.
 function geminiPrice(inputPerMtok: number, cacheReadPerMtok: number, outputPerMtok: number): Price {
   return {
     inputPerMtok,
@@ -125,6 +125,8 @@ export function defaultPricing(): Map<string, Price> {
     ["gemini-3.7-flash", geminiPrice(0.75, 0.075, 3.75)],
     ["gemini-3.6-flash", geminiPrice(0.75, 0.075, 3.75)],
     ["gemini-3.5-flash", geminiPrice(1.5, 0.15, 9.0)],
+    ["gemini-3.5-flash-lite", geminiPrice(0.3, 0.03, 2.5)],
+    ["gemini-3.1-flash-lite", geminiPrice(0.25, 0.025, 1.5)],
     ["gemini-3-flash-preview", geminiPrice(0.5, 0.05, 3.0)],
     ["gemini-3.1-pro", geminiPrice(2.0, 0.2, 12.0)],
     ["gemini-3-pro-preview", geminiPrice(2.0, 0.2, 12.0)],
@@ -266,9 +268,6 @@ function canonicalModel(raw: string): string | null {
   }
 
   if (model.includes("gemini")) {
-    if (model.includes("flash-lite")) {
-      return "gemini-2.5-flash-lite";
-    }
     // Image, TTS, live, transcribe, native-audio, and computer-use models price
     // by output unit (pixels, seconds, queries) rather than by tokens, so they
     // have no comparable text-token rate. Leaving them unpriced matches the
@@ -283,6 +282,18 @@ function canonicalModel(raw: string): string | null {
     ) {
       return null;
     }
+    if (model.includes("flash-lite")) {
+      if (model.includes("3.5")) {
+        return "gemini-3.5-flash-lite";
+      }
+      if (model.includes("3.1")) {
+        return "gemini-3.1-flash-lite";
+      }
+      if (model.includes("2.5")) {
+        return "gemini-2.5-flash-lite";
+      }
+      return null;
+    }
     if (model.includes("pro")) {
       if (model.includes("3.1")) {
         return "gemini-3.1-pro";
@@ -290,7 +301,10 @@ function canonicalModel(raw: string): string | null {
       if (model.includes("3-pro")) {
         return "gemini-3-pro-preview";
       }
-      return "gemini-2.5-pro";
+      if (model.includes("2.5")) {
+        return "gemini-2.5-pro";
+      }
+      return null;
     }
     if (model.includes("3.8")) {
       return "gemini-3.8-flash";
@@ -307,7 +321,11 @@ function canonicalModel(raw: string): string | null {
     if (model.includes("3-flash")) {
       return "gemini-3-flash-preview";
     }
-    return "gemini-2.5-flash";
+    if (model.includes("2.5")) {
+      return "gemini-2.5-flash";
+    }
+    // The delisted 2.0 line and unrecognized versions have no published rate.
+    return null;
   }
 
   return null;
