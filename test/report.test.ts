@@ -141,6 +141,8 @@ const session: SessionReportData = {
     model: "claude-opus-4-6",
     reasoning_effort: "high",
     reasoning_effort_levels: ["high"],
+    total_reasoning_tokens: 120,
+    reasoning_source: "inferred",
     started_at: "2026-07-28T10:00:00Z",
     ended_at: "2026-07-28T10:05:00Z",
     message_count: 6,
