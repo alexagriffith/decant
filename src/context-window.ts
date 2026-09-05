@@ -12,6 +12,10 @@ const ONE_MILLION_CLAUDE_FAMILIES = [
   /(?:^|-)mythos-(?:5|preview)(?:-|$)/,
 ];
 
+/** Gemini CLI long-context defaults; flash-lite and image variants stay at 128k. */
+const GEMINI_LONG_CONTEXT_TOKENS = 1_000_000;
+const GEMINI_SMALL_CONTEXT_TOKENS = 128_000;
+
 /** Infer the missing window size from model limits and observed usage. */
 export function inferClaudeContextWindowTokens(model: string | null, maxSeen: number): number {
   if (maxSeen > DEFAULT_WINDOW_TOKENS) {
@@ -24,6 +28,16 @@ export function inferClaudeContextWindowTokens(model: string | null, maxSeen: nu
   return ONE_MILLION_CLAUDE_FAMILIES.some((pattern) => pattern.test(normalized))
     ? EXTENDED_WINDOW_TOKENS
     : DEFAULT_WINDOW_TOKENS;
+}
+
+/** Infer a Gemini window size the same way we do for Claude: model ID on the
+ * response carries the capacity, with a safe 1M default for the 2.5/3.x line. */
+export function inferGeminiContextWindowTokens(model: string | null): number {
+  const normalized = (model ?? "").toLowerCase();
+  if (normalized.includes("flash-lite") || normalized.includes("image")) {
+    return GEMINI_SMALL_CONTEXT_TOKENS;
+  }
+  return GEMINI_LONG_CONTEXT_TOKENS;
 }
 
 export interface ContextWindowPoint {
@@ -55,7 +69,8 @@ export interface ContextWindowTimeline {
   tool: string;
   /** Null when the session has no usable usage data (e.g. Codex until Phase 2). */
   window_tokens: number | null;
-  /** True whenever window_tokens comes from Claude's model limit rather than the log. */
+  /** True whenever window_tokens comes from the model's published capacity
+   *  rather than an explicit log value (Claude, Gemini); Codex's is explicit. */
   window_inferred: boolean;
   peak_tokens: number;
   peak_pct: number | null;
@@ -294,9 +309,13 @@ export function contextWindowForSession(
     maxSeen = Math.max(maxSeen, compaction.pre_tokens ?? 0);
   }
   const inferredWindow =
-    session.tool !== "claude_code" || maxSeen <= 0
+    maxSeen <= 0
       ? null
-      : inferClaudeContextWindowTokens(session.model, maxSeen);
+      : session.tool === "claude_code"
+        ? inferClaudeContextWindowTokens(session.model, maxSeen)
+        : session.tool === "gemini"
+          ? inferGeminiContextWindowTokens(session.model)
+          : null;
   const window = explicitWindow ?? inferredWindow;
   const displayTurnCount = Math.max(turn, points.length > 0 ? 1 : 0);
 

@@ -141,8 +141,9 @@ For one model call, occupancy is:
 
 It is the prompt resident in the window for that call, not cumulative token
 consumption. Peak occupancy is the largest observed call. Codex logs can carry
-an explicit model window; Claude window size is inferred from the model family
-when the source does not record it, and the API marks inferred values.
+an explicit model window; Claude and Gemini window sizes are inferred from the
+model family when the source does not record them, and the API marks inferred
+values.
 
 Compactions come from provider boundary records. Pre- and post-compaction token
 counts are preserved when the source supplies enough information; missing
